@@ -1,0 +1,7 @@
+﻿BOM - RRS-AS-100
+Item,Part Number,Name,Material,Specification,Quantity,Unit,Mass
+1,RRS-TB-001,แผ่นข้างตู้ ซ้าย,SS400,t3.2,1,แผ่น,10.85
+2,RRS-TB-002,แผ่นข้างตู้ ขวา,SS400,t3.2,1,แผ่น,10.85
+3,RRS-TB-010,โครงประตู,STKR400,50x50x2.3,4,เส้น,3.36
+4,RRS-TB-020,บานพับสแตนเลส,SUS304,120 mm,2,ตัว,0.4
+5,STD-M10-30,สลักเกลียว M10x30,SS400,M10,8,ตัว,0.03

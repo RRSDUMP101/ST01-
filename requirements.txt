@@ -1,0 +1,7 @@
+PySide6-Essentials>=6.6
+ezdxf>=1.4
+openpyxl>=3.1
+xlrd>=2.0
+gspread>=6.0
+google-auth>=2.20
+google-auth-oauthlib>=1.0

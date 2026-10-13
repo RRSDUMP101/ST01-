@@ -68,8 +68,11 @@ class GoogleSheetsPage(QWidget):
         self.ws_check = QLineEdit(s.get("google/ws_check", "MaterialCheck"))
         self.ws_xref = QLineEdit(s.get("google/ws_xref", "CodeXref"))
         self.ws_models = QLineEdit(s.get("google/ws_models", "Models"))
+        self.ws_production = QLineEdit(s.get("google/ws_production", "Production"))
+        self.ws_movements = QLineEdit(s.get("google/ws_movements", "Movements"))
         for label, edit in (("Part List", self.ws_parts), ("สต็อก", self.ws_stock), ("ผลตรวจ", self.ws_check),
-                            ("เทียบรหัส", self.ws_xref), ("แบบกระบะ", self.ws_models)):
+                            ("เทียบรหัส", self.ws_xref), ("แบบกระบะ", self.ws_models), ("งานผลิต", self.ws_production),
+                            ("เคลื่อนไหว", self.ws_movements)):
             tabs.addWidget(QLabel(label))
             tabs.addWidget(edit)
         form.addRow("ชื่อแท็บ", tabs)
@@ -96,6 +99,9 @@ class GoogleSheetsPage(QWidget):
             ("ตารางเทียบรหัส", "รหัส Express/แบบ ↔ รหัสนับสต็อก", self.pull_xref, self.push_xref),
             ("แบบกระบะ", "Part List มาตรฐานทุกแบบ (แบบ | ลำดับ | รหัส | รายการ | ขนาด | จำนวนที่ใช้)",
              self.pull_models, self.push_models),
+            ("สถานะการผลิต", "ทุกงานที่ยังไม่ปิด: ชิ้นส่วน ต้องผลิต ตัด/พับ/เชื่อม… สถานะ – ให้ฝ่ายผลิตเปิดดูได้",
+             None, self.push_production),
+            ("ประวัติการเคลื่อนไหว", "ใบเบิก/รับ ทุกบรรทัด (บัตรสินค้า) พร้อมยอดคงเหลือหลังเคลื่อนไหว", None, self.push_movements),
         ]
         for r, (title, desc, pull, push) in enumerate(rows):
             grid.addWidget(QLabel(f"<b>{title}</b>"), r, 0)
@@ -123,7 +129,8 @@ class GoogleSheetsPage(QWidget):
         for edit, key in ((self.cred, "google/credentials"), (self.url, "google/sheet_url"),
                           (self.ws_parts, "google/ws_parts"), (self.ws_stock, "google/ws_stock"),
                           (self.ws_check, "google/ws_check"), (self.ws_xref, "google/ws_xref"),
-                          (self.ws_models, "google/ws_models")):
+                          (self.ws_models, "google/ws_models"), (self.ws_production, "google/ws_production"),
+                          (self.ws_movements, "google/ws_movements")):
             edit.editingFinished.connect(lambda e=edit, k=key: self._save(k, e.text()))
         self.cred.editingFinished.connect(self._update_account)
         self._client: SheetsClient | None = None
@@ -240,6 +247,18 @@ class GoogleSheetsPage(QWidget):
 
     def push_models(self) -> None:
         self._push(self.ws_models.text(), models_to_rows(self.state.models), f"ส่งแบบกระบะ {len(self.state.models)} แบบแล้ว")
+
+    def push_production(self) -> None:
+        from ...core.production import CLOSED, STATUS_HEADERS, status_rows
+
+        jobs = [j for j in self.state.jobs if j.status not in CLOSED]
+        self._push(self.ws_production.text(), [STATUS_HEADERS] + status_rows(jobs), f"ส่งสถานะการผลิต {len(jobs)} งานแล้ว")
+
+    def push_movements(self) -> None:
+        from ...core.movements import HISTORY_HEADERS, history_rows
+
+        moves = self.state.ledger.movements
+        self._push(self.ws_movements.text(), [HISTORY_HEADERS] + history_rows(moves), f"ส่งประวัติ {len(moves)} บรรทัดแล้ว")
 
     def _push(self, worksheet: str, rows: list[list], message: str) -> None:
         self._call(self.client().write_rows, lambda url: self.state.notify(f"{message} → {worksheet}"),

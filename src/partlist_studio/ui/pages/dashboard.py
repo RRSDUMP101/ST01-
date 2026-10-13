@@ -17,10 +17,11 @@ INFO_FIELDS = [
 ]
 
 FLOW = [
-    ("1", "นำเข้าแบบ 2D", "DWG/DXF จาก ZWCAD → อ่าน Title Block, BOM, รูปคลี่"),
-    ("2", "ตรวจ Part List", "แก้ไขวัสดุ จำนวน กระบวนการ ผูกรหัสสโตร์"),
-    ("3", "ตรวจวัตถุดิบ", "เทียบสต็อกสโตร์ × จำนวนคัน → รายการขาด"),
-    ("4", "ส่งต่อ", "Google Sheet / Excel / ใบขอซื้อ (ร่าง) / ตาราง DXF กลับ ZWCAD"),
+    ("1", "แบบ / Part List", "DWG/DXF จาก ZWCAD หรือแบบกระบะ → เลือกรุ่นย่อย ได้รหัส Express"),
+    ("2", "ตรวจวัตถุดิบ + แผนตัด", "เทียบสต็อก × จำนวนคัน · จำนวนแผ่นจริงจากรูปคลี่"),
+    ("3", "เปิดงานผลิต (SO)", "ติดตาม รอตัด → รอพับ → รอเชื่อม → เสร็จ รายชิ้น"),
+    ("4", "เบิก / รับ สต็อก", "PD วัตถุดิบ · PD ชิ้นส่วน · FR รับชิ้นงานเสร็จ → คีย์ Express"),
+    ("5", "สั่งซื้อ / ส่งต่อ", "Min/Max เตือนสั่งซื้อ · Google Sheet · Excel"),
 ]
 
 
@@ -99,8 +100,14 @@ class DashboardPage(QWidget):
         status_card.body.addWidget(self.issue_label)
         side.addWidget(status_card)
 
-        flow_card = Card("ขั้นตอนงาน: แบบ → Part List → สโตร์ → ผลิต")
-        targets = ["drawings", "parts", "stock", "sheets"]
+        work_card = Card("งานผลิต & สโตร์")
+        self.work_label = QLabel()
+        self.work_label.setWordWrap(True)
+        work_card.body.addWidget(self.work_label)
+        side.addWidget(work_card)
+
+        flow_card = Card("ขั้นตอนงาน: แบบ → สโตร์ → ผลิต → เบิก/รับ")
+        targets = ["models", "nesting", "production", "movements", "stock"]
         for (num, title, desc), target in zip(FLOW, targets):
             line = QHBoxLayout()
             badge = QLabel(num)
@@ -124,7 +131,35 @@ class DashboardPage(QWidget):
 
         state.partlist_changed.connect(self.refresh)
         state.requirements_changed.connect(self.refresh)
+        state.jobs_changed.connect(self.refresh_work)
+        state.ledger_changed.connect(self.refresh_work)
+        state.stock_changed.connect(self.refresh_work)
         self.refresh()
+        self.refresh_work()
+
+    def refresh_work(self) -> None:
+        from ...core.production import CLOSED, JOB_DONE
+        from ...core.replenish import RS_ORDER, compute
+
+        st = self.state
+        open_jobs = [j for j in st.jobs if j.status not in CLOSED]
+        overdue = [j for j in open_jobs if j.overdue]
+        waiting: dict[str, int] = {}
+        for j in open_jobs:
+            for p in j.parts:
+                for step in p.waiting():
+                    waiting[step] = waiting.get(step, 0) + 1
+        drafts = [d for d in st.ledger.docs if d.status == "ร่าง"]
+        no_express = [d for d in st.ledger.docs if d.status == "บันทึกแล้ว" and not d.express_no]
+        lines = compute(st.stock, st.settings.replenish, st.ledger.daily_out(), models=st.models) if st.stock.items else []
+        order = sum(1 for x in lines if x.status == RS_ORDER)
+        bits = [f"งานเปิดอยู่ <b>{len(open_jobs)}</b>" + (f" · <span style='color:#D64545'>เลยกำหนดส่ง {len(overdue)}</span>"
+                                                          if overdue else ""),
+                "รอผลิต: " + (" · ".join(f"รอ{k} {v}" for k, v in waiting.items()) or "-"),
+                f"ผลิตเสร็จรอปิดงาน {sum(1 for j in open_jobs if j.status == JOB_DONE)}",
+                f"เอกสารร่าง {len(drafts)} · บันทึกแล้วยังไม่ใส่เลขที่ Express {len(no_express)}",
+                f"<span style='color:{'#D64545' if order else theme.MUTED}'>ต่ำกว่า Min ต้องสั่งซื้อ {order} รายการ</span>"]
+        self.work_label.setText("<br>".join(bits))
 
     def _info_edited(self, key: str, value: str) -> None:
         info = self.state.partlist.info

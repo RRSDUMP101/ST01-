@@ -19,6 +19,7 @@ from ..actions import TABLE_FILTER
 from ..state import AppState
 from ..table_models import RequirementModel, StockTableModel
 from ..widgets import PageHeader, StatusChipRow, button
+from .replenish import ReplenishTab
 
 
 def _table(model) -> QTableView:
@@ -142,6 +143,8 @@ class StockPage(QWidget):
             row.addWidget(b)
         cl.addLayout(row)
         self.tabs.addTab(check_tab, "ตรวจวัตถุดิบ / Parts")
+        self.replenish = ReplenishTab(state, actions)
+        self.tabs.addTab(self.replenish, "Min / Max & เตือนสั่งซื้อ")
 
         state.stock_changed.connect(self._stock_replaced)
         state.partlist_changed.connect(self._sync_build)

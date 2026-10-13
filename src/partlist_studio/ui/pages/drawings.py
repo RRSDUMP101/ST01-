@@ -29,6 +29,8 @@ class DrawingsPage(QWidget):
                             "เพื่อสร้าง Part List ให้สโตร์และฝ่ายผลิตใช้ข้อมูลชุดเดียวกัน")
         b = header.add_action(button("นำเข้าแบบ DWG/DXF", "primary"))
         b.clicked.connect(lambda: actions.import_drawings())
+        rev = header.add_action(button("เทียบ Rev.", tooltip="เทียบแบบ/Part List 2 Rev.: เพิ่ม ตัด จำนวน ขนาด วัสดุ รูปคลี่"))
+        rev.clicked.connect(lambda: self.actions.window.compare_revisions())
         b = header.add_action(button("ส่งออกทะเบียนแบบ"))
         b.clicked.connect(actions.export_drawing_register)
         lay.addWidget(header)

@@ -779,6 +779,7 @@ def drawing_to_candidates(data: DrawingData, densities: dict[str, float] | None 
             )
             if thickness:
                 part.weight = plate_weight(prof.net_area, thickness, density_for(material, densities))
+            part.outline = profile_outline(data, prof)
             candidates.append(CandidatePart(part, "profile", profile_index=i))
     elif not data.bom and (tb.get("name") or tb.get("part_no")):
         candidates.append(CandidatePart(Part(
@@ -792,6 +793,13 @@ def drawing_to_candidates(data: DrawingData, densities: dict[str, float] | None 
                 Part(name=name, drawing_no=drawing_no, qty=count, process="ซื้อสำเร็จ", unit="ตัว"),
                 "block", selected=False))
     return candidates
+
+
+def profile_outline(data: DrawingData, prof: Profile) -> list[list[tuple[float, float]]]:
+    """Outer loop + holes moved to the origin of the bounding box (mm, 0.1 mm) - kept on the part for nesting."""
+    x0, y0, _x1, _y1 = prof.bbox
+    loops = [prof.points] + [data.profiles[h].points for h in prof.holes]
+    return [[(round(x - x0, 1), round(y - y0, 1)) for x, y in loop] for loop in loops]
 
 
 def _fmt(value: float) -> str:

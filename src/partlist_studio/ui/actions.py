@@ -31,6 +31,9 @@ class Actions:
     def _remember(self, path: str) -> None:
         self.state.settings.set("last_dir", str(Path(path).parent))
 
+    def go(self, page: str) -> None:
+        self.window.go(page)
+
     def error(self, title: str, text: str) -> None:
         QMessageBox.warning(self.window, title, text)
 

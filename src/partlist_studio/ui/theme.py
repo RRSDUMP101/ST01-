@@ -24,6 +24,40 @@ STATUS_COLORS = {
     "รอสั่งซื้อ": "#E08A1E",
     "ต่ำกว่า Min": "#E08A1E",
     "ไม่พบในสต็อก": "#7B5BD6",
+    # production (รอ… = waiting for that step)
+    "เสร็จ": "#2E9D5B",
+    "ใช้จากสต็อก": "#3A8DDE",
+    "รอตัด": "#8A96A8",
+    "รอพับ": "#C9A227",
+    "รอเหยียบปิด": "#C98A27",
+    "รอเชื่อม": "#E08A1E",
+    "รอกลึง": "#7B5BD6",
+    "รอทำสี": "#3AA6B9",
+    "รอรับเข้า": "#8A96A8",
+    "เปิดงาน": "#8A96A8",
+    "กำลังผลิต": "#E08A1E",
+    "ผลิตเสร็จ": "#2E9D5B",
+    "ส่งมอบแล้ว": "#1F4E79",
+    "ยกเลิก": "#B0B8C4",
+    # reorder
+    "ต่ำกว่า Min – สั่งซื้อ": "#D64545",
+    "ใกล้ Min": "#E08A1E",
+    "เกิน Max": "#3A8DDE",
+    "ไม่มีข้อมูลการใช้": "#B0B8C4",
+    # Express codes / code rules / revisions / documents
+    "รหัสตรง": "#2E9D5B",
+    "จับคู่อัตโนมัติ": "#2E9D5B",
+    "ควรตรวจ": "#E08A1E",
+    "ไม่พบใน Express": "#D64545",
+    "ผิดรูปแบบ": "#D64545",
+    "แจ้งเตือน": "#8A96A8",
+    "เพิ่มใหม่": "#2E9D5B",
+    "ตัดออก": "#D64545",
+    "จำนวนเปลี่ยน": "#E08A1E",
+    "แก้ไข": "#3A8DDE",
+    "เหมือนเดิม": "#B0B8C4",
+    "ร่าง": "#8A96A8",
+    "บันทึกแล้ว": "#2E9D5B",
 }
 
 ERROR_BG = QColor("#FDECEC")
@@ -31,6 +65,8 @@ WARN_BG = QColor("#FFF6E5")
 
 
 def status_color(status: str) -> QColor:
+    if status not in STATUS_COLORS and status.startswith("รอ"):  # 'รอพับ 5 · รอเชื่อม 2'
+        status = status.split(" ")[0]
     return QColor(STATUS_COLORS.get(status, MUTED))
 
 

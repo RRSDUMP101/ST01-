@@ -311,6 +311,14 @@ def parse_steel_sheet(rows: list[list], source: str = "") -> SteelLedger:
         unit = "แผ่น" if "แผ่น" in name else "เส้น"
         item = StockItem(name=name, unit=unit, on_hand=balance,
                          remark=f"ยกมา {b_f:g} · รับ {rec:g} · จ่าย {out:g}")
+        if issue_from is not None:  # issued per day = the real usage (Min/Max)
+            daily = {d: to_number(cells[issue_from + k]) for k, d in enumerate(dates)
+                     if d and issue_from + k < len(cells) and to_number(cells[issue_from + k])}
+            if daily:
+                item.extra["issues"] = daily
+            real = [d for d in dates if d[:4].isdigit()]
+            if real:
+                item.extra["issue_period"] = [min(real), max(real)]
         item.infer_from_name()
         items.append(item)
     return SteelLedger(StockList(items=items, source=source), dates)

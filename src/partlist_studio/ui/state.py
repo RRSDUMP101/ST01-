@@ -11,10 +11,14 @@ from ..core import stock as stock_mod
 from ..core.company_files import ModelBOM
 from ..core.dwg_io import DEFAULT_DENSITIES, DrawingData, find_converter
 from ..core.models import PartList
+from ..core.movements import Ledger, StockDoc
+from ..core.production import Job, RawUse
+from ..core.replenish import ReplenishParams
 from ..core.stock import RequirementLine, StockItem, StockList, _key
 from ..core.xref import CodeXref
 
 MANUAL_SOURCE = "เพิ่มเอง"
+MOVED_SOURCE = "รับเข้าในโปรแกรม"  # items first received by a document (FR/RR) that no source had
 
 
 class Settings:
@@ -43,6 +47,22 @@ class Settings:
     def converter(self):
         return find_converter(self.get("dwg/converter_path"))
 
+    @property
+    def replenish(self) -> ReplenishParams:
+        p = ReplenishParams()
+        try:
+            data = json.loads(self.get("stock/replenish", "") or "{}")
+        except ValueError:
+            data = {}
+        for k, v in data.items():
+            if hasattr(p, k):
+                setattr(p, k, float(v) if k != "history_days" else int(v))
+        return p
+
+    @replenish.setter
+    def replenish(self, p: ReplenishParams) -> None:
+        self.set("stock/replenish", json.dumps(p.__dict__))
+
 
 class AppState(QObject):
     partlist_changed = Signal()  # rows or job info changed
@@ -51,6 +71,8 @@ class AppState(QObject):
     requirements_changed = Signal()
     models_changed = Signal()
     xref_changed = Signal()
+    jobs_changed = Signal()
+    ledger_changed = Signal()
     message = Signal(str)
 
     def __init__(self, data_dir: str | Path | None = None):
@@ -62,6 +84,9 @@ class AppState(QObject):
         self.active_sources: list[str] = []
         self.models: list[ModelBOM] = []
         self.xref = CodeXref()
+        self.ledger = Ledger()
+        self.jobs: list[Job] = []
+        self.raw_uses: list[RawUse] = []
         self.requirements: list[RequirementLine] = []
         self.drawing_cache: dict[str, DrawingData] = {}
         self.path: str = ""
@@ -97,6 +122,10 @@ class AppState(QObject):
         self.active_sources = [n for n in data.get("active_sources", []) if n in self.stock_sources]
         self.models = [ModelBOM.from_dict(m) for m in data.get("models", [])]
         self.xref = CodeXref.from_dict(data.get("xref", {}))
+        self.ledger = Ledger.from_dict(data.get("ledger", {}))
+        self.jobs = [Job.from_dict(j) for j in data.get("jobs", [])]
+        self.raw_uses = [RawUse(**{k: v for k, v in r.items() if k in RawUse.__dataclass_fields__})
+                         for r in data.get("raw_uses", [])]
         self._merge_stock()
 
     def save_library(self) -> None:
@@ -105,6 +134,9 @@ class AppState(QObject):
             "active_sources": self.active_sources,
             "models": [m.to_dict() for m in self.models],
             "xref": self.xref.to_dict(),
+            "ledger": self.ledger.to_dict(),
+            "jobs": [j.to_dict() for j in self.jobs],
+            "raw_uses": [r.__dict__ for r in self.raw_uses],
         }
         (self.data_dir() / "library.json").write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
 
@@ -170,6 +202,39 @@ class AppState(QObject):
         self.save_library()
         self.xref_changed.emit()
         self.stock_changed.emit()
+
+    # ---- Express item list, documents, jobs ------------------------------------------------------
+    def express_stock(self) -> StockList | None:
+        """The Express item list (STMASR0200 / 4.สินค้า export) with the most RRS codes."""
+        express = [s for n, s in self.stock_sources.items() if n.startswith("Express")]
+        if not express:
+            return None
+        return max(express, key=lambda s: sum(1 for i in s.items if i.code.upper().startswith("RRS")))
+
+    def post_doc(self, doc: StockDoc) -> list[str]:
+        """Save a stock document: balances change and the movements are recorded."""
+        new_items = self.stock_sources.setdefault(MOVED_SOURCE, StockList(source=MOVED_SOURCE))
+        if doc not in self.ledger.docs:
+            if not doc.doc_no:
+                doc.doc_no = self.ledger.next_no(doc.doc_type, doc.date)
+            self.ledger.docs.append(doc)
+        warnings = self.ledger.post(doc, self.stock, new_items)
+        if new_items.items and MOVED_SOURCE not in self.active_sources:
+            self.active_sources.append(MOVED_SOURCE)
+        if not new_items.items:
+            self.stock_sources.pop(MOVED_SOURCE, None)
+        self.rebuild_stock()
+        self.ledger_changed.emit()
+        return warnings
+
+    def cancel_doc(self, doc: StockDoc) -> None:
+        self.ledger.cancel(doc, self.stock)
+        self.rebuild_stock()
+        self.ledger_changed.emit()
+
+    def save_jobs(self) -> None:
+        self.save_library()
+        self.jobs_changed.emit()
 
     def mark_dirty(self) -> None:
         self.dirty = True

@@ -90,17 +90,19 @@ def test_drawing_dialog_selection(app):
     assert len(selected["RRS-AS-100_tailgate_assembly.dxf"]) == 4  # 5 BOM rows, first unticked
 
 
-def test_models_and_sources_flow(window, app, tmp_path):
+def test_models_and_sources_flow(window, app, tmp_path, monkeypatch):
     from partlist_studio.core.company_files import ModelBOM, ModelRow
     from partlist_studio.core.stock import StockItem, StockList
+    from partlist_studio.ui import work_dialogs
 
     state = window.state
     state.set_models([ModelBOM("แบบ A", "แบบทดสอบ", [ModelRow("1", "RRS-A-1", ["RRS-A-1"], "เฟรม", "", "1+1", 2)])])
     page = window.pages["models"]
     assert page.list.count() == 1 and page.table.rowCount() == 1
-    page.sets.setValue(2)
-    page._use(replace=True)
-    assert [(p.part_no, p.qty) for p in state.partlist.parts] == [("RRS-A-1", 4)]
+    monkeypatch.setattr(work_dialogs.VariantDialog, "exec", lambda self: (self.sets.setValue(2), 1)[1])
+    page._use()
+    assert [(p.part_no, p.qty) for p in state.partlist.parts] == [("RRS-A-1", 2)]  # per bed
+    assert state.partlist.info.build_qty == 2
     state.add_stock_source("นับสต๊อค", StockList(items=[StockItem(code="RRS-A-1", on_hand=10, unit="ชิ้น")]))
     state.add_stock_source("สำรอง", StockList(items=[StockItem(code="RRS-A-1", on_hand=1)]), activate=False)
     assert state.stock.items[0].on_hand == 10
@@ -143,3 +145,57 @@ def test_express_codes_for_models(window, app, tmp_path, monkeypatch):
     monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.Yes)
     page.apply_express_codes()
     assert [r.code for r in state.models[0].rows] == ["RRS-A-102-L-80", "RRS-A-102-R-80"]
+
+
+def test_production_documents_nesting_minmax(window, app, monkeypatch):
+    from PySide6.QtWidgets import QInputDialog, QMessageBox
+
+    from partlist_studio.core import dwg_io
+    from partlist_studio.core.stock import StockItem, StockList
+    from partlist_studio.ui.work_dialogs import CompareDialog, NewCodeDialog
+
+    state = window.state
+    data = dwg_io.read_drawing(SAMPLES / "RRS-TB-001_side_panel.dxf")
+    state.partlist.parts = [c.part for c in dwg_io.drawing_to_candidates(data)]
+    state.partlist.info.build_qty = 2
+    state.add_stock_source("สต็อก", StockList(items=[
+        StockItem(code="RRS-TB-001", name="แผ่นข้างตู้ ซ้าย", unit="ชิ้น", on_hand=1),
+        StockItem(code="01-B00 -0004", name="เหล็กแผ่นดำ 3.2 มม.4x8ฟุต 1219x2440", unit="แผ่น", spec="t3.2",
+                  material="SS400", on_hand=5)]))
+    monkeypatch.setattr(QInputDialog, "getText", lambda *a, **k: ("SO-T1", True))
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.Yes)
+    monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: None)
+    prod = window.pages["production"]
+    prod.new_from_partlist()
+    job = state.jobs[0]
+    assert job.job_no == "SO-T1" and prod.parts.rowCount() == len(job.parts)
+    prod.parts.selectRow(0)
+    prod.finish()
+    assert job.parts[0].status == "เสร็จ"
+    prod.make_documents()
+    moves = window.pages["movements"]
+    assert window.stack.currentWidget() is moves and moves.docs.rowCount() >= 1
+    fr = next(d for d in state.ledger.docs if d.doc_type == "FR")
+    moves._show_doc(fr)
+    moves.post_doc()
+    assert fr.status == "บันทึกแล้ว" and job.parts[0].received == job.parts[0].to_make
+    assert moves.history.rowCount() == len(fr.lines)
+
+    nest = window.pages["nesting"]
+    nest.run()
+    assert nest.groups and nest.table.rowCount() >= 1
+    stock_page = window.pages["stock"]
+    stock_page.replenish.run()
+    assert stock_page.replenish.table.rowCount() == len(state.stock.items)
+
+    dialog = CompareDialog(state, window.actions, window)
+    dialog.sources[0][0].setCurrentIndex(1)  # Part List ปัจจุบัน vs itself
+    dialog.run()
+    assert dialog.changes and all(c.kind == "เหมือนเดิม" for c in dialog.changes)
+    code = NewCodeDialog(state, "ฝาข้างใหม่(ซ้าย)", window)
+    assert code.result.code.startswith("RRS-A-") and code.result.code.endswith("-L")
+
+    from partlist_studio.ui.state import AppState
+
+    again = AppState(data_dir=state.data_dir())
+    assert again.jobs[0].job_no == "SO-T1" and again.ledger.docs[0].doc_no == state.ledger.docs[0].doc_no

@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QFileDialog, QGridLayout, QHBo
 
 from ...core.express import (SYNC_SAME, check_part_codes, code_family, compare_stock, export_new_items, export_pd_draft,
                              new_items, read_express_file)
+from ...core import code_rules
 from ...core.express_codes import ST_AUTO, ST_EXACT, resolve_models, resolved_to_model, summary
 from ...core.item_form import build_item_form
 from ...core.partlist_express import build_partlist_express
@@ -20,6 +21,7 @@ from ...core.xref import XREF_HEADERS, CodeXref, XrefEntry, suggest_links
 from .. import theme
 from ..state import AppState
 from ..widgets import Card, PageHeader, button, run_async
+from ..work_dialogs import NewCodeDialog
 
 _COUNT_CODE = re.compile(r"^\d{2}-\d{4}-\d{4}$")
 
@@ -137,6 +139,17 @@ class ExpressPage(QWidget):
                            ("เทียบสต็อก Express ↔ Google Sheet", self.compare_with_sheet),
                            ("ส่งสต็อก Express ขึ้น Google Sheet", self.push_to_sheet)):
             b = button(text)
+            b.clicked.connect(slot)
+            row.addWidget(b)
+        row.addStretch(1)
+        check.body.addLayout(row)
+        row = QHBoxLayout()
+        for text, slot, tip in (
+                ("ตรวจรูปแบบรหัส Express", self.audit_codes,
+                 "รหัสซ้ำ, ตัวพิมพ์เล็ก, RRA, ข้าง/ขนาดในชื่อไม่ตรงรหัส, เลขชิ้นส่วนใช้กับคนละชิ้น, คู่ซ้าย/ขวาเขียนต่างกัน"),
+                ("ตั้งรหัสใหม่…", self.new_code, "สร้างรหัสตามกฎเดียวกับ Express และตรวจว่าไม่ซ้ำ"),
+                ("ส่งออกรายงานรหัส…", self.export_audit, "")):
+            b = button(text, tooltip=tip)
             b.clicked.connect(slot)
             row.addWidget(b)
         row.addStretch(1)
@@ -263,12 +276,36 @@ class ExpressPage(QWidget):
     # ---- Express codes for the models, Sheet forms ---------------------------
     def _express_master(self) -> StockList | None:
         """The Express item list (STMASR0200 or 4.สินค้า export) with the most RRS codes."""
-        express = [s for n, s in self.state.stock_sources.items() if n.startswith("Express")]
-        if not express:
+        express = self.state.express_stock()
+        if express is None:
             self.actions.error("ยังไม่มีข้อมูล Express",
                                "นำเข้า รายงานรายละเอียดสินค้า (STMASR0200.txt) หรือไฟล์ 4.สินค้า จาก Express ก่อน")
-            return None
-        return max(express, key=lambda s: sum(1 for i in s.items if i.code.upper().startswith("RRS")))
+        return express
+
+    def audit_codes(self) -> None:
+        express = self._express_master()
+        if express is None:
+            return
+        self.audit = code_rules.audit_codes(express)
+        self._fill_result([(i.code, i.name, i.level, i.problem + (f" → {i.suggestion}" if i.suggestion else ""))
+                           for i in self.audit])
+        counts = {}
+        for i in self.audit:
+            counts[i.level] = counts.get(i.level, 0) + 1
+        self.state.notify("ตรวจรูปแบบรหัส: " + " · ".join(f"{k} {v}" for k, v in counts.items()))
+
+    def export_audit(self) -> None:
+        if not getattr(self, "audit", None):
+            self.audit_codes()
+        if not getattr(self, "audit", None):
+            return
+        path = self.actions.save_path("รายงานรหัส Express", "รายงานรหัส Express ผิดรูปแบบ.xlsx", "Excel (*.xlsx);;CSV (*.csv)")
+        if path:
+            code_rules.export_audit(self.audit, path, self._express_master().source)
+            self.state.notify(f"บันทึก {Path(path).name} แล้ว")
+
+    def new_code(self) -> None:
+        NewCodeDialog(self.state, parent=self).exec()
 
     def _counted_stock(self) -> StockList:
         """The stock-count file (codes 01-0001-0001 ...)."""
@@ -353,7 +390,9 @@ class ExpressPage(QWidget):
         for r, values in enumerate(rows):
             for c, text in enumerate(values):
                 item = QTableWidgetItem(text)
-                if c == 2:
+                if c == 2 and text in theme.STATUS_COLORS:
+                    item.setForeground(theme.status_color(text))
+                elif c == 2:
                     ok = text in (SYNC_SAME, "ตรงกัน")
                     item.setForeground(theme.status_color("พร้อม" if ok else "ขาด" if "ไม่" in text else "รอสั่งซื้อ"))
                 self.result.setItem(r, c, item)

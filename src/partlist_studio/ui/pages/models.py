@@ -5,15 +5,17 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import QSize, Qt
-from PySide6.QtWidgets import (QAbstractItemView, QSpinBox, QFileDialog, QHBoxLayout, QHeaderView, QInputDialog,
+from PySide6.QtWidgets import (QAbstractItemView, QFileDialog, QHBoxLayout, QHeaderView, QInputDialog,
                                QLabel, QListWidget, QListWidgetItem, QMenu, QMessageBox, QSplitter, QTableWidget,
                                QTableWidgetItem, QVBoxLayout, QWidget)
 
 from ...core.company_files import export_models, models_from_partlist, read_company_workbook
+from ...core.production import job_from_parts
 from ...core.stock import find_by_code
 from ..state import AppState
 from ..table_models import thumbnail
 from ..widgets import PageHeader, button, run_async
+from ..work_dialogs import VariantDialog
 
 COLS = ["ภาพ", "ลำดับ", "รหัส", "รายการ", "ขนาด", "จำนวนที่ใช้", "ยอดคงเหลือ", "หมายเหตุ"]
 
@@ -78,20 +80,15 @@ class ModelsPage(QWidget):
             self.table.setColumnWidth(i, w)
         rl.addWidget(self.table, 1)
         use = QHBoxLayout()
-        use.addWidget(QLabel("จำนวนชุดต่อคัน"))
-        self.sets = QSpinBox()
-        self.sets.setRange(1, 99)
-        self.sets.setValue(1)
-        self.sets.setSuffix(" ชุด")
-        self.sets.setButtonSymbols(QSpinBox.NoButtons)
-        self.sets.setFixedWidth(80)
-        use.addWidget(self.sets)
+        hint = QLabel("เลือกรุ่นรถ / ความสูงคอก / ความยาวกระบะ แล้วได้รหัส Express ของทุกแถวทันที")
+        hint.setObjectName("Hint")
+        use.addWidget(hint)
         use.addStretch(1)
-        add = button("เพิ่มเข้า Part List ของงาน")
-        add.clicked.connect(lambda: self._use(replace=False))
-        new = button("สร้าง Part List ใหม่จากแบบนี้", "primary")
-        new.clicked.connect(lambda: self._use(replace=True))
-        use.addWidget(add)
+        job = button("สร้างงานผลิต (SO) จากแบบนี้…")
+        job.clicked.connect(self._new_job)
+        new = button("สร้าง Part List จากแบบนี้…", "primary")
+        new.clicked.connect(self._use)
+        use.addWidget(job)
         use.addWidget(new)
         rl.addLayout(use)
         split.addWidget(right)
@@ -171,24 +168,53 @@ class ModelsPage(QWidget):
 
         run_async(read_company_workbook, done, lambda e: self.actions.error("อ่านไฟล์ไม่ได้", e), path, image_dir)
 
-    def _use(self, replace: bool) -> None:
+    def _use(self) -> None:
+        """Part List from the model: variant dialog -> Express codes -> × beds."""
         model = self._model()
         if model is None:
             return
-        parts = model.to_parts(self.sets.value())
+        dialog = VariantDialog(self.state, model, parent=self)
+        if not dialog.exec():
+            return
+        sets = dialog.sets.value()
+        parts = dialog.parts()  # quantities per bed; the number of beds is the job's build_qty
         pl = self.state.partlist
-        if replace:
+        if not dialog.add_to_current:
             if pl.parts and QMessageBox.question(self, "สร้าง Part List ใหม่",
                                                  f"แทนที่ Part List เดิม {len(pl.parts)} รายการ?") != QMessageBox.Yes:
                 return
             pl.parts = parts
-            if not pl.info.job_type:
-                pl.info.job_type = model.name
+            pl.info.job_type = " ".join(x for x in (model.name, dialog.variant_text) if x)
+            pl.info.build_qty = sets
+            if dialog.variant_text:
+                pl.info.vehicle_model = pl.info.vehicle_model or dialog.variant_text
         else:
             pl.parts.extend(parts)
         pl.renumber()
         self.state.mark_dirty()
-        self.state.notify(f"เพิ่ม {len(parts)} รายการจากแบบ {model.name}")
+        self.state.notify(f"เพิ่ม {len(parts)} รายการจากแบบ {model.name} (จำนวนผลิต {pl.info.build_qty} คัน)"
+                          + (f" ({dialog.variant_text})" if dialog.variant_text else ""))
+
+    def _new_job(self) -> None:
+        model = self._model()
+        if model is None:
+            return
+        dialog = VariantDialog(self.state, model, for_job=True, parent=self)
+        if not dialog.exec():
+            return
+        job_no = dialog.job_no.text().strip() or f"JOB-{len(self.state.jobs) + 1:03d}"
+        if any(j.job_no == job_no for j in self.state.jobs):
+            self.actions.error("เลขที่งานซ้ำ", f"มีงาน {job_no} แล้ว")
+            return
+        job = job_from_parts(job_no, dialog.parts(), dialog.sets.value(), self.state.stock,
+                             dialog.use_stock.isChecked(), self.state.jobs, model=model.name, title=model.title,
+                             customer=dialog.customer.text().strip(), variant=dialog.variant_text,
+                             due=dialog.due.date().toString("yyyy-MM-dd"))
+        self.state.jobs.append(job)
+        self.state.save_jobs()
+        self.state.notify(f"เปิดงาน {job_no}: {model.name} × {dialog.sets.value()} คัน · "
+                          f"ต้องผลิต {sum(1 for p in job.parts if p.to_make > 0)} รายการ")
+        self.actions.go("production")
 
     def _save_current(self) -> None:
         if not self.state.partlist.parts:

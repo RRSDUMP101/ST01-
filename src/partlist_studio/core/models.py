@@ -53,6 +53,7 @@ class Part:
     status: str = "รอตรวจ"
     remark: str = ""
     image: str = ""  # picture of the part (from the company Parts List workbook), not a table column
+    outline: list = field(default_factory=list)  # flat pattern from the drawing: [outer, hole, ...] in mm (nesting)
 
     def get(self, key: str):
         return getattr(self, key)
@@ -71,6 +72,7 @@ class Part:
             if key in data:
                 part.set(key, data[key])
         part.image = str(data.get("image", "") or "")
+        part.outline = [[(float(x), float(y)) for x, y in loop] for loop in data.get("outline") or []]
         return part
 
 

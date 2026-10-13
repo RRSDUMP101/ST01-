@@ -10,23 +10,31 @@ from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QListWidget, QListWi
                                QMessageBox, QStackedWidget, QVBoxLayout, QWidget)
 
 from .. import APP_NAME, __version__
+from ..core.movements import DOC_TYPES
 from .actions import Actions
 from .pages.dashboard import DashboardPage
 from .pages.drawings import DrawingsPage
 from .pages.express import ExpressPage
-from .pages.models import ModelsPage
 from .pages.gsheets import GoogleSheetsPage
+from .pages.models import ModelsPage
+from .pages.movements import MovementsPage
+from .pages.nesting import NestingPage
 from .pages.partlist import PartListPage
+from .pages.production import ProductionPage
 from .pages.settings import SettingsPage
 from .pages.stock import StockPage
 from .state import AppState
+from .work_dialogs import CompareDialog
 
 NAV = [
     ("dashboard", "▦   ภาพรวม"),
     ("drawings", "◫   แบบ 2D (DWG/DXF)"),
     ("parts", "☰   Part List"),
     ("models", "▣   แบบกระบะ"),
+    ("production", "⚒   งานผลิต (SO)"),
+    ("nesting", "▦   วางแผนตัดเหล็ก"),
     ("stock", "▤   สโตร์ / คลังสินค้า"),
+    ("movements", "⇄   เบิก / รับ สต็อก"),
     ("express", "₿   Express"),
     ("sheets", "⇅   Google Sheets"),
     ("settings", "⚙   ตั้งค่า"),
@@ -84,7 +92,10 @@ class MainWindow(QMainWindow):
         self.pages["drawings"] = DrawingsPage(self.state, self.actions)
         self.pages["parts"] = PartListPage(self.state, self.actions)
         self.pages["models"] = ModelsPage(self.state, self.actions)
+        self.pages["production"] = ProductionPage(self.state, self.actions)
+        self.pages["nesting"] = NestingPage(self.state, self.actions)
         self.pages["stock"] = StockPage(self.state, self.actions)
+        self.pages["movements"] = MovementsPage(self.state, self.actions, self.pages["stock"])
         self.pages["sheets"] = GoogleSheetsPage(self.state, self.actions, self.pages["stock"])
         self.pages["express"] = ExpressPage(self.state, self.actions, self.pages["stock"], self.pages["sheets"])
         self.pages["settings"] = SettingsPage(self.state)
@@ -138,6 +149,24 @@ class MainWindow(QMainWindow):
         ex.addSeparator()
         ex.addAction("ตรวจรหัส Part List ↔ Express", lambda: (self.go("express"), self.pages["express"].check_codes()))
         ex.addAction("ตารางเทียบรหัส", lambda: (self.go("express"), self.pages["express"].tabs.setCurrentIndex(1)))
+        ex.addSeparator()
+        ex.addAction("ตรวจรูปแบบรหัส Express", lambda: (self.go("express"), self.pages["express"].audit_codes()))
+        ex.addAction("ตั้งรหัสใหม่ตามกฎรหัส…", self.pages["express"].new_code)
+        work = self.menuBar().addMenu("งานผลิต / สโตร์")
+        work.addAction("เปิดงานผลิตจาก Part List ปัจจุบัน…", lambda: (self.go("production"),
+                                                                    self.pages["production"].new_from_partlist()))
+        work.addAction("เปิดงานผลิตจากแบบกระบะ…", lambda: self.go("models"))
+        work.addSeparator()
+        for code, (name, _s) in DOC_TYPES.items():
+            work.addAction(f"ใบใหม่ {code} – {name}", lambda c=code: (self.go("movements"),
+                                                                     self.pages["movements"].new_doc(c)))
+        work.addAction("ประวัติการเคลื่อนไหวสินค้า", lambda: (self.go("movements"),
+                                                             self.pages["movements"].tabs.setCurrentIndex(1)))
+        work.addSeparator()
+        work.addAction("วางแผนตัดแผ่นเหล็ก", lambda: (self.go("nesting"), self.pages["nesting"].run()))
+        work.addAction("Min / Max & เตือนสั่งซื้อ", lambda: (self.go("stock"), self.pages["stock"].tabs.setCurrentIndex(2),
+                                                           self.pages["stock"].replenish.run()))
+        work.addAction("เทียบ Rev. แบบ / Part List…", self.compare_revisions)
         file_menu.addSeparator()
         quit_act = QAction("ออก", self)
         quit_act.setShortcut(QKeySequence.Quit)
@@ -145,6 +174,9 @@ class MainWindow(QMainWindow):
         file_menu.addAction(quit_act)
         help_menu = self.menuBar().addMenu("ช่วยเหลือ")
         help_menu.addAction("เกี่ยวกับโปรแกรม", self._about)
+
+    def compare_revisions(self) -> None:
+        CompareDialog(self.state, self.actions, self).exec()
 
     def go(self, key: str) -> None:
         self.nav.setCurrentRow([k for k, _ in NAV].index(key))

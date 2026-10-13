@@ -15,7 +15,7 @@ import re
 from dataclasses import dataclass, field, replace
 
 from .company_files import ModelBOM, ModelRow, base_code
-from .stock import StockItem, StockList, _key, find_by_code
+from .stock import StockItem, StockList, _key, find_by_code, find_variants
 
 ST_EXACT = "รหัสตรง"
 ST_AUTO = "จับคู่อัตโนมัติ"
@@ -56,6 +56,8 @@ class Context:
     heights: set[str] = field(default_factory=set)
     frame: str = ""  # "เฟรมบน" / "เฟรมล่าง" for frame sheets
     toyota_plain: bool = False
+    lengths: set[str] = field(default_factory=set)  # body length chosen by the user: {"230"}
+    fixed: bool = False  # chosen by the user (variant dialog): sizes in the row names do not count
 
 
 @dataclass
@@ -289,10 +291,10 @@ def resolve_row(model: ModelBOM, ctx: Context, row: ModelRow, express: StockList
     base = Resolved(model.name, row.item_no, row.raw_code or ", ".join(row.codes), row.name, row.qty, row.qty_text,
                     remark=row.remark, image=row.image, size=row.size,
                     side={"L": "ซ้าย", "R": "ขวา"}.get(_side(row.name), ""))
-    # 1. a code in the sheet that Express has as it is
+    # 1. a code in the sheet that Express has as it is (not when the user chose another variant)
     exact = [find_by_code(c, express) for c in row.codes]
     exact = [e for e in exact if e]
-    if exact and len(exact) == len(row.codes):
+    if exact and len(exact) == len(row.codes) and not ctx.fixed:
         out = []
         for i, item in enumerate(exact):
             r = replace(base)
@@ -310,6 +312,11 @@ def resolve_row(model: ModelBOM, ctx: Context, row: ModelRow, express: StockList
     optional = frozenset(_tokens(_core(ctx.frame)) - row_words) if ctx.frame else frozenset()
     row_nums = _numbers(row.name) | {n for c in row.codes for n in _numbers(c.split("(")[-1]) if "(" in c}
     row_nums |= {n for n in _numbers(f"{row.size} {model.name} {model.title}") if _lengths({n})}
+    if ctx.fixed:
+        if ctx.heights:
+            row_nums = {n for n in row_nums if n not in STALL_HEIGHTS}
+        if ctx.lengths:
+            row_nums = {n for n in row_nums if not _lengths({n})} | ctx.lengths
     pool = [i for i in express.items if i.code.upper().startswith(("RRS", "RRA"))]
     scored = sorted(((_score(row, ctx, item, row_core, row_nums, row_words, optional), item) for item in pool), key=lambda t: -t[0])
     scored = [(s, i) for s, i in scored if s > 0]
@@ -334,6 +341,8 @@ def resolve_row(model: ModelBOM, ctx: Context, row: ModelRow, express: StockList
         r.alternatives = alts
         second = alts and next((sc for sc, it in scored if f"{it.code} {it.name}" == alts[0]), 0)
         r.status = ST_AUTO if s >= 10.5 and (not second or s - second >= 1.5) else ST_CHECK if s >= 7.5 else ST_NONE
+        if r.status != ST_NONE and any(_key(item.code) == _key(c) for c in row.codes):
+            r.status = ST_EXACT
         if r.status == ST_NONE:
             r.alternatives = [f"{item.code} {item.name}"] + alts
             r.code, r.express_name = "", ""
@@ -359,6 +368,88 @@ def resolve_row(model: ModelBOM, ctx: Context, row: ModelRow, express: StockList
         base.status = ST_NONE
         return [base]
     return [make(choice, row.qty, {"L": "ซ้าย", "R": "ขวา"}.get(row_side, ""))]
+
+
+STALL_HEIGHTS = {"40", "50", "55", "60", "65", "71", "72", "80", "84"}
+# Choices of the variant dialog (เลือกรุ่นย่อย): label -> brands used for scoring
+VARIANT_BRANDS = {
+    "Toyota (Revo / Vigo)": {"TOYOTA", "REVO"},
+    "Toyota Champ": {"TOYOTA", "CHAMP"},
+    "Mitsubishi": {"MITSU"},
+    "Isuzu": {"ISUZU"},
+    "Nissan": {"NISSAN"},
+    "ใช้ทุกรุ่น (RRS-A)": set(),
+}
+VARIANT_HEIGHTS = {"84 (คอกสูง 4 ราว)": "84", "80 (คอกสูง 3 ราว)": "80", "60 (คอกสูง 2 ราว)": "60", "50": "50",
+                   "40 (คอกเตี้ย)": "40"}
+VARIANT_LENGTHS = {"2.30 ม.": "230", "2.40 ม.": "240", "2.50 ม.": "250"}
+
+
+def variant_context(model: ModelBOM, brand: str = "", height: str = "", length: str = "") -> Context:
+    """Context of a model with the brand / stall height / body length the user picked ('' = as the sheet says)."""
+    ctx = model_context(model)
+    if brand in VARIANT_BRANDS:
+        ctx.brands = {b for b in ctx.brands if b in ("PR", "2024", "CRANE")} | VARIANT_BRANDS[brand]
+        ctx.toyota_plain = brand.startswith("Toyota (")
+        if ctx.toyota_plain:
+            ctx.brands.discard("REVO")
+    if height:
+        ctx.heights = {VARIANT_HEIGHTS.get(height, height)}
+    if length:
+        ctx.lengths = {VARIANT_LENGTHS.get(length, length)}
+    ctx.fixed = bool(brand or height or length)
+    return ctx
+
+
+def resolve_variant(model: ModelBOM, express: StockList, brand: str = "", height: str = "",
+                    length: str = "") -> list[Resolved]:
+    ctx = variant_context(model, brand, height, length)
+    return [r for row in model.rows for r in resolve_row(model, ctx, row, express)]
+
+
+def row_options(r: Resolved, express: StockList, limit: int = 15) -> list[tuple[str, str]]:
+    """Codes a person can pick for one row: the chosen one, the near alternatives, then every Express
+    variant of the sheet's base code (same side)."""
+    out: list[tuple[str, str]] = []
+    seen: set[str] = set()
+
+    def add(code: str, name: str) -> None:
+        if code and _key(code) not in seen:
+            seen.add(_key(code))
+            out.append((code, name))
+
+    add(r.code, r.express_name)
+    for alt in r.alternatives:
+        code, _, name = alt.partition(" ")
+        add(code, name)
+    side = {"ซ้าย": "L", "ขวา": "R"}.get(r.side, "")
+    for raw in re.split(r"[,/]", r.old_code or ""):
+        base = base_code(raw.strip())
+        for item in find_variants(base, express) + ([find_by_code(base, express)] if base else []):
+            if item and (not side or not _item_side(item) or _item_side(item) == side):
+                add(item.code, item.name)
+    return out[:limit]
+
+
+def resolved_to_parts(model: ModelBOM, rows: list[Resolved], sets: float = 1,
+                      express: StockList | None = None) -> list:
+    """Part List rows with the Express code (or the sheet's code when Express has none)."""
+    from .models import Part
+
+    parts = []
+    for r in rows:
+        item = find_by_code(r.code, express) if r.code and express else None
+        notes = [r.remark] if r.remark else []
+        if r.code and _key(r.code) != _key(r.old_code) and r.old_code:
+            notes.append(f"รหัสเดิม {r.old_code}")
+        if r.status not in (ST_EXACT, ST_AUTO):
+            notes.append(r.status)
+        code = r.code or r.old_code.split(",")[0].strip()
+        name = r.express_name if r.code and r.express_name else side_name(r)
+        parts.append(Part(item_no=r.item_no, part_no=code, drawing_no=model.name, name=name, spec=r.size,
+                          qty=r.qty * sets, unit=(item.unit_name if item else "") or "ชิ้น",
+                          stock_code=r.code, remark=" · ".join(n for n in notes if n), image=r.image))
+    return parts
 
 
 def resolve_models(models: list[ModelBOM], express: StockList) -> dict[str, list[Resolved]]:

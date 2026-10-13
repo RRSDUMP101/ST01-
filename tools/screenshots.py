@@ -117,6 +117,69 @@ def main() -> int:
     mapping.show()
     shot(mapping, "8_column_mapping.png")
     mapping.close()
+
+    # ---- work flow: variant, production job, documents, nesting, Min/Max, code rules, Rev. compare
+    from partlist_studio.core import production
+    from partlist_studio.core.company_files import ModelBOM, ModelRow
+    from partlist_studio.ui.work_dialogs import CompareDialog, NewCodeDialog, VariantDialog
+
+    detail, _ = read_express_file(samples / "express_item_detail_STMASR0200.txt")
+    for k, item in enumerate(detail.items):
+        item.on_hand = (k * 5) % 9
+    state.add_stock_source("Express: STMASR0200.txt", detail)
+    model = ModelBOM("กระบะคอกสูง3ราว", "รายการชิ้นส่วนประกอบกระบะ Toyota (คอกสูง 3 ราว)", [
+        ModelRow("1", "RRS-T-023", ["RRS-T-023"], "เสาหลัง 80", "", "1+1", 2),
+        ModelRow("2", "RRS-T-024", ["RRS-T-024"], "บังอาย", "", "1+1", 2),
+        ModelRow("3", "RRS-019", ["RRS-019"], "ฝาข้าง", "", "2", 2),
+        ModelRow("4", "RRS-A-033", ["RRS-A-033"], "ตะขอเกี่ยวฝาท้าย", "", "6", 6),
+        ModelRow("5", "RRS-A-127", ["RRS-A-127"], "ปะกับ", "", "2", 2)])
+    state.set_models([model] + state.models)
+    variant = VariantDialog(state, model, for_job=True, parent=w)
+    variant.brand.setCurrentText("Toyota Champ")
+    variant.height.setCurrentIndex(1)
+    variant.job_no.setText("SO6910-015")
+    variant.resize(1240, 520)
+    variant.show()
+    shot(variant, "11_variant_dialog.png")
+    job = production.job_from_parts("SO6910-015", variant.parts(), 3, state.stock, model=model.name, title=model.title,
+                                    customer="บจก. ขนส่งตัวอย่าง", variant=variant.variant_text, due="2026-10-30")
+    variant.close()
+    job.record(job.parts[0], "ตัด", 3)
+    job.record(job.parts[0], "พับ", 2)
+    job.record(job.parts[1], production.DONE, 0)
+    job.record(job.parts[2], "ตัด", 1)
+    state.jobs = [job]
+    state.save_jobs()
+    w.go("production")
+    shot(w, "12_production.png")
+    w.pages["production"].make_documents()
+    shot(w, "13_movements.png")
+    w.go("nesting")
+    w.pages["nesting"].run()
+    shot(w, "14_nesting.png")
+    w.go("stock")
+    w.pages["stock"].tabs.setCurrentIndex(2)
+    w.pages["stock"].replenish.run()
+    shot(w, "15_minmax.png")
+    w.go("express")
+    w.pages["express"].audit_codes()
+    shot(w, "16_code_audit.png")
+    code = NewCodeDialog(state, "บังอาย T90(ซ้าย)", w)
+    code.brand.setCurrentIndex(2)
+    code.show()
+    shot(code, "16b_new_code.png")
+    code.close()
+    old_path = Path(data_dir) / "rev_A.rrspl"
+    state.partlist.save(old_path)
+    state.partlist.parts[0].qty += 1
+    state.partlist.parts[1].material = "SUS304"
+    compare = CompareDialog(state, w.actions, w)
+    compare.sources[0][1].setText(str(old_path))
+    compare.run()
+    compare.resize(1100, 420)
+    compare.show()
+    shot(compare, "17_compare_rev.png")
+    compare.close()
     state.dirty = False
     w.state.settings.q.clear()
     return 0

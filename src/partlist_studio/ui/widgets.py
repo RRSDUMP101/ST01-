@@ -6,8 +6,8 @@ import traceback
 
 from PySide6.QtCore import QObject, QPointF, QRectF, QRunnable, Qt, QThreadPool, Signal
 from PySide6.QtGui import QBrush, QColor, QPainter, QPainterPath, QPen, QPolygonF
-from PySide6.QtWidgets import (QApplication, QFrame, QGraphicsScene, QGraphicsView, QHBoxLayout, QLabel,
-                               QPushButton, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QAbstractItemView, QApplication, QFrame, QGraphicsScene, QGraphicsView, QHBoxLayout,
+                               QHeaderView, QLabel, QPushButton, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
 from . import theme
 
@@ -20,6 +20,47 @@ def button(text: str, kind: str = "", tooltip: str = "") -> QPushButton:
         btn.setToolTip(tooltip)
     btn.setCursor(Qt.PointingHandCursor)
     return btn
+
+
+def table(headers: list[str], widths: list[int] | None = None, editable: bool = False) -> QTableWidget:
+    t = QTableWidget(0, len(headers))
+    t.setHorizontalHeaderLabels(headers)
+    t.setAlternatingRowColors(True)
+    t.setSelectionBehavior(QAbstractItemView.SelectRows)
+    if not editable:
+        t.setEditTriggers(QAbstractItemView.NoEditTriggers)
+    t.verticalHeader().setVisible(False)
+    t.verticalHeader().setDefaultSectionSize(28)
+    t.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
+    t.horizontalHeader().setStretchLastSection(True)
+    for i, w in enumerate(widths or []):
+        t.setColumnWidth(i, w)
+    return t
+
+
+def fill(t: QTableWidget, rows: list[list], status_col: int | None = None, data: list | None = None) -> None:
+    """Rows of values; the status column is coloured; `data` is kept on column 0 (Qt.UserRole)."""
+    t.blockSignals(True)
+    t.setRowCount(len(rows))
+    for r, values in enumerate(rows):
+        for c, v in enumerate(values):
+            text = "" if v is None else (f"{v:,.3f}".rstrip("0").rstrip(".") if isinstance(v, float) else str(v))
+            item = QTableWidgetItem(text)
+            if isinstance(v, (int, float)) and not isinstance(v, bool):
+                item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            if c == status_col and text:
+                item.setForeground(QBrush(theme.status_color(text)))
+                f = item.font()
+                f.setBold(True)
+                item.setFont(f)
+            if c == 0 and data is not None:
+                item.setData(Qt.UserRole, data[r])
+            t.setItem(r, c, item)
+    t.blockSignals(False)
+
+
+def selected_rows(t: QTableWidget) -> list[int]:
+    return sorted({i.row() for i in t.selectedIndexes()})
 
 
 class PageHeader(QWidget):

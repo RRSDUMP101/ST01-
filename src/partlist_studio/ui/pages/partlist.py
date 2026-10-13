@@ -33,6 +33,8 @@ class PartListPage(QWidget):
         imp_menu.addAction("ตาราง BOM จาก ZWCAD / Excel / CSV…", actions.import_table)
         imp_menu.addAction("จากแบบกระบะมาตรฐาน (หน้า แบบกระบะ)…", lambda: self.window().go("models"))
         imp.setMenu(imp_menu)
+        rev = header.add_action(button("เทียบ Rev.", tooltip="เทียบแบบ/Part List 2 Rev.: เพิ่ม ตัด จำนวน ขนาด วัสดุ รูปคลี่"))
+        rev.clicked.connect(lambda: self.actions.window.compare_revisions())
         exp = header.add_action(button("ส่งออก ▾"))
         exp_menu = QMenu(exp)
         exp_menu.addAction("ตาราง Part List สำหรับ ZWCAD (DXF)…", actions.export_cad_dxf)

@@ -1,5 +1,7 @@
 # PyInstaller spec - build with:  pyinstaller --noconfirm packaging/partlist_studio.spec
 # Produces dist/RRS Part List Studio/ (Windows, Linux) or dist/RRS Part List Studio.app (macOS).
+# With PARTLIST_ONEFILE=1: dist/RRS Part List Studio Portable(.exe) - a single file.
+import os
 import sys
 from pathlib import Path
 
@@ -22,10 +24,15 @@ a = Analysis(
     excludes=["tkinter", "matplotlib", "PySide6.QtWebEngineCore", "PySide6.Qt3DCore"],
 )
 pyz = PYZ(a.pure)
-exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name=APP, console=False,
-          icon=str(ROOT / "packaging" / ("app.icns" if sys.platform == "darwin" else "app.ico")))
-coll = COLLECT(exe, a.binaries, a.datas, name=APP)
-if sys.platform == "darwin":
+ICON = str(ROOT / "packaging" / ("app.icns" if sys.platform == "darwin" else "app.ico"))
+if os.environ.get("PARTLIST_ONEFILE") == "1":
+    # Portable: one .exe that unpacks itself to a temp folder on start (runs straight from a zip).
+    exe = EXE(pyz, a.scripts, a.binaries, a.datas, [], name=f"{APP} Portable", console=False, icon=ICON,
+              upx=False, runtime_tmpdir=None)
+else:
+    exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name=APP, console=False, icon=ICON)
+    coll = COLLECT(exe, a.binaries, a.datas, name=APP)
+if sys.platform == "darwin" and os.environ.get("PARTLIST_ONEFILE") != "1":
     app = BUNDLE(coll, name=f"{APP}.app", icon=str(ROOT / "packaging" / "app.icns"),
                  bundle_identifier="com.rrs.partliststudio",
                  info_plist={"NSHighResolutionCapable": True, "CFBundleShortVersionString": "0.1.0",

@@ -100,6 +100,18 @@ jobs:
           if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress; }
           & $iscc /DAppVersion=0.1.0 packaging/windows_installer.iss
           Get-ChildItem dist/installer
+      - name: Portable single .exe (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          PARTLIST_ONEFILE: "1"
+        run: |
+          pyinstaller --noconfirm --distpath dist/portable --workpath build/portable packaging/partlist_studio.spec
+          $p = Start-Process -FilePath "dist/portable/RRS Part List Studio Portable.exe" -PassThru
+          Start-Sleep -Seconds 25
+          if ($p.HasExited) { throw "portable exe exited early with code $($p.ExitCode)" }
+          Stop-Process -Id $p.Id
+          Copy-Item "dist/portable/RRS Part List Studio Portable.exe" "RRS-PartListStudio-Portable-0.1.0.exe"
       - name: Package (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
@@ -112,7 +124,19 @@ jobs:
           cp -R "dist/RRS Part List Studio.app" dmg/
           ln -s /Applications dmg/Applications
           hdiutil create -volname "RRS Part List Studio" -srcfolder dmg -ov -format UDZO "${{ matrix.artifact }}.dmg"
+      # GitHub zips every artifact itself: upload the folder (Windows) so the download is one zip, not a zip in a zip
       - uses: actions/upload-artifact@v4
+        if: runner.os == 'Windows'
+        with:
+          name: ${{ matrix.artifact }}
+          path: dist/RRS Part List Studio
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'Windows'
+        with:
+          name: RRS-PartListStudio-Windows-Portable
+          path: RRS-PartListStudio-Portable-0.1.0.exe
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'macOS'
         with:
           name: ${{ matrix.artifact }}
           path: ${{ matrix.artifact }}.zip
@@ -134,3 +158,4 @@ jobs:
             ${{ matrix.artifact }}.zip
             ${{ matrix.artifact }}.dmg
             dist/installer/*.exe
+            RRS-PartListStudio-Portable-0.1.0.exe

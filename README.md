@@ -36,7 +36,10 @@
 ตัวติดตั้งมี **ตัวแปลง DWG (LibreDWG dwg2dxf)** ในตัว จึงเปิดไฟล์ `.dwg` ได้ทันที
 (ถ้าติดตั้ง ODA File Converter ไว้ด้วย โปรแกรมจะเลือกใช้ ODA ก่อน) · ดับเบิลคลิกไฟล์งาน `.rrspl` จะเปิดในโปรแกรมให้อัตโนมัติ
 
-แบบไม่ต้องติดตั้ง: ดาวน์โหลด `RRS-PartListStudio-Windows-x64` → แตก zip → เปิด `RRS Part List Studio.exe`
+แบบไม่ต้องติดตั้ง:
+* **`RRS-PartListStudio-Windows-Portable`** – ไฟล์ .exe ไฟล์เดียว ดับเบิลคลิกได้เลย (เปิดครั้งแรกช้ากว่าปกติเล็กน้อย)
+* `RRS-PartListStudio-Windows-x64` – โฟลเดอร์โปรแกรม: **คลิกขวาที่ zip → Extract All ก่อน** แล้วเปิด `RRS Part List Studio.exe`
+  (ถ้าเปิดจากใน zip โดยตรงจะขึ้น *Failed to load Python DLL … python312.dll*)
 
 ### ติดตั้งบน macOS
 1. GitHub → **Actions** → **test-and-build** ล่าสุด → **Artifacts** → ดาวน์โหลดให้ตรงกับเครื่อง

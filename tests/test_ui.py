@@ -115,3 +115,31 @@ def test_models_and_sources_flow(window, app, tmp_path):
 
     again = AppState(data_dir=state.data_dir())
     assert again.models[0].name == "แบบ A" and again.active_sources == ["นับสต๊อค"]
+
+
+def test_express_codes_for_models(window, app, tmp_path, monkeypatch):
+    import time
+
+    from PySide6.QtWidgets import QMessageBox
+
+    from partlist_studio.core.company_files import ModelBOM, ModelRow
+    from partlist_studio.core.express import read_express_file
+
+    state = window.state
+    express, _ = read_express_file(SAMPLES / "express_item_detail_STMASR0200.txt")
+    state.add_stock_source("Express: STMASR0200.txt", express)
+    state.set_models([ModelBOM("กระบะคอกสูง3ราว", "Toyota คอกสูง 3 ราว", [
+        ModelRow(item_no="1", raw_code="RRS-T-023", codes=["RRS-T-023"], name="เสาหลัง 80", qty_text="1+1", qty=2)])])
+    page = window.pages["express"]
+    out = tmp_path / "all.xlsx"
+    monkeypatch.setattr(page.actions, "save_path", lambda *a: str(out))
+    page.export_partlist_express()
+    deadline = time.time() + 20
+    while page.result.rowCount() == 0 and time.time() < deadline:
+        app.processEvents()
+        time.sleep(0.02)
+    assert out.is_file() and page.result.rowCount() == 2
+
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.Yes)
+    page.apply_express_codes()
+    assert [r.code for r in state.models[0].rows] == ["RRS-A-102-L-80", "RRS-A-102-R-80"]

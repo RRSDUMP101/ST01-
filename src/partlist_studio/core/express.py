@@ -22,7 +22,7 @@ from datetime import date
 from pathlib import Path
 
 from .models import Part, PartList
-from .stock import (ST_MISSING, RequirementLine, StockItem, StockList, find_by_code, _key)
+from .stock import (ST_MISSING, RequirementLine, StockItem, StockList, _key, find_by_code, find_variants)
 from .tabular import decode_bytes, write_table
 
 REPORT_CODE_WIDTH = 16
@@ -61,7 +61,7 @@ def code_family(code: str) -> str:
     """Prefix used by the company: 01-B00 (เหล็กแผ่น), 04-B00 (ท่อ), RRS-A, RRS-M ... ."""
     if not code:
         return ""
-    parts = code.split("-")
+    parts = code.replace(" ", "").split("-")
     return "-".join(parts[:2]) if len(parts) > 1 else code
 
 
@@ -101,9 +101,21 @@ class TextReport:
     has_quantities: bool = False
 
 
+def report_lines(text: str) -> list[str]:
+    """Lines of an Express print-to-file report. Some exports wrap every line in double quotes."""
+    out = []
+    for line in text.splitlines():
+        if len(line) >= 2 and line[0] == '"' and line[-1] == '"':
+            line = line[1:-1]
+        out.append(line.replace("\xa0", " "))
+    return out
+
+
 def parse_text_report(text: str) -> TextReport:
+    lines = report_lines(text)
+    if any("ตัวคูณ" in line and "รหัสบ/ช" in line for line in lines[:12]):
+        return parse_item_detail_report(text)
     report = TextReport()
-    lines = text.splitlines()
     name_col = None
     for line in lines:
         stripped = line.strip()
@@ -184,6 +196,111 @@ def _parse_item_line(line: str, name_col: int | None, report: TextReport) -> Sto
                 item.set(fld, value)
     item.infer_from_name()
     return item
+
+
+# ---- STMASR0200 รายงานรายละเอียดสินค้า (item master) ------------------------------------
+# code column: characters 3-22 (20 wide, codes may fill it and touch the name)
+_DETAIL_CODE_WIDTH = 20
+_DETAIL_ITEM_RE = re.compile(r"^(?P<name>\S.*?)\s+ย่อย(?:\s+(?P<unit>[^\s\d][^\s]*))?(?P<rest>.*)$")
+_DETAIL_UNIT_RE = re.compile(r"(?P<kind>ใหญ่|ซื้อ|ขาย)(?:\s+(?P<unit>[^\s\d][^\s]*))?(?:\s+(?P<factor>[\d,]+(?:\.\d+)?))?\s*$")
+_DETAIL_CATEGORY_RE = re.compile(r"^\s{2}(?P<cat>\d{1,3})\s{3,}(?P<name>\S.*?)\s*$")
+_UNIT_KEYS = {"ใหญ่": "big", "ซื้อ": "buy", "ขาย": "sell"}
+
+
+def parse_item_detail_report(text: str) -> TextReport:
+    """Express 'รายงานรายละเอียดสินค้า' (STMASR0200): one item over several lines -
+    code / name / หน่วยย่อย / รหัสบ/ช / ราคามาตรฐาน / สินค้าทดแทน / ผู้จัดจำหน่าย, then the ใหญ่, ซื้อ and ขาย
+    units with their factors, and an optional หมายเหตุ written on the left of those lines."""
+    report = TextReport(title="รายงานรายละเอียดสินค้า")
+    category, category_name = "", ""
+    current: StockItem | None = None
+    for line in report_lines(text):
+        stripped = line.strip()
+        if not stripped or set(stripped) <= set("-=<> .") or stripped.startswith(">>>"):
+            continue
+        if "หน้า" in line and ("บริษัท" in line or "จำกัด" in line):
+            report.company = report.company or re.sub(r"\s+หน้า\s*:.*$", "", stripped)
+            continue
+        if stripped.startswith("รายงาน") or stripped.startswith("รหัสสินค้า จาก") or (
+                "รายละเอียด" in stripped and "หน่วย" in stripped and "รหัส" in stripped):
+            if "วันที่" in stripped:
+                report.warehouse = report.warehouse  # page header
+            continue
+        m = None
+        if line.startswith("  ") and line[2:3].isascii() and line[2:3].strip() and "ย่อย" in line:
+            m = _DETAIL_ITEM_RE.match(line[2 + _DETAIL_CODE_WIDTH:].strip())
+        if m:
+            current = StockItem(code=line[2:2 + _DETAIL_CODE_WIDTH].strip(), name=m.group("name").strip(),
+                                unit=(m.group("unit") or "").strip(), category=category)
+            current.extra["category_name"] = category_name
+            rest = [t for t in re.split(r"\s{2,}", (m.group("rest") or "").strip()) if t]
+            numbers = [t for t in rest if re.fullmatch(r"-?[\d,]+\.\d+", t)]
+            words = [t for t in rest if t not in numbers]
+            if words:
+                current.account_group = words[0]
+            if numbers:
+                current.unit_cost = float(numbers[0].replace(",", ""))
+            tail = [w for w in words[1:] if w != "-"]
+            if tail:
+                current.extra["substitute"] = tail[0]
+            if len(tail) > 1:
+                current.extra["vendor"] = tail[1]
+            current.infer_from_name()
+            report.items.append(current)
+            continue
+        m = _DETAIL_CATEGORY_RE.match(line)
+        if m and "ย่อย" not in line:
+            category, category_name = m.group("cat"), m.group("name")
+            report.columns = report.columns  # categories are kept on each item
+            continue
+        if current is None:
+            continue
+        unit_match = _DETAIL_UNIT_RE.search(line)
+        if unit_match:
+            key = _UNIT_KEYS[unit_match.group("kind")]
+            if unit_match.group("unit"):
+                current.extra[f"unit_{key}"] = unit_match.group("unit")
+            if unit_match.group("factor"):
+                current.extra[f"factor_{key}"] = float(unit_match.group("factor").replace(",", ""))
+            left = line[:unit_match.start()]
+        else:
+            left = line
+        note = re.search(r"หมายเหตุ\s+(.+?)\s*$", left)
+        if note:
+            current.remark = (current.remark + " " + note.group(1).strip()).strip()
+    report.has_quantities = False
+    return report
+
+
+ITEM_FORM_HEADERS = ["รหัสสินค้า", "ชื่อสินค้า", "หมวด", "ชื่อหมวด", "กลุ่มรหัส", "ประเภท", "หน่วยย่อย", "หน่วยใหญ่",
+                     "ตัวคูณใหญ่", "หน่วยซื้อ", "ตัวคูณซื้อ", "หน่วยขาย", "ตัวคูณขาย", "รหัสบ/ช", "ราคามาตรฐาน",
+                     "สินค้าทดแทน", "ผู้จัดจำหน่าย", "หมายเหตุ (Express)"]
+
+
+def item_form_row(item: StockItem) -> list:
+    x = item.extra
+    return [item.code, item.name, item.category, x.get("category_name", ""), code_family(item.code),
+            item_kind(item.code), item.unit, x.get("unit_big", ""), x.get("factor_big", ""), x.get("unit_buy", ""),
+            x.get("factor_buy", ""), x.get("unit_sell", ""), x.get("factor_sell", ""), item.account_group,
+            item.unit_cost, x.get("substitute", ""), x.get("vendor", ""), item.remark]
+
+
+# Meaning of the code groups seen in the company item master.
+CODE_FAMILY_NAMES = {
+    "01-B00": "เหล็กแผ่นดำ", "01-FB0": "เหล็กแบน (แฟลตบาร์)", "01-T00": "ตะแกรงเหล็ก", "01-W00": "เหล็กเพลาขาว",
+    "02-A00": "แผ่นอลูมิเนียม", "03-S00": "แผ่นสแตนเลส", "04-API": "ท่อเหล็ก API", "04-B00": "ท่อเหล็กกลมดำ",
+    "05-B00": "เหล็กกล่องท่อแบน", "06-B00": "เหล็กกล่องท่อเหลี่ยม", "07-B00": "เหล็กกล่อง / เหล็กสี่เหลี่ยม",
+    "08-R00": "เหล็กรางพับ / รางน้ำ", "09-E00": "เหล็กฉาก",
+    "RRS-A": "ชิ้นงาน ใช้ร่วมทุกรุ่น", "RRS-A1": "ชิ้นงาน พื้นเรียบ / บานสวิง", "RRS-T": "ชิ้นงาน Toyota",
+    "RRS-M": "ชิ้นงาน Mitsubishi", "RRS-M1": "ชิ้นงาน Mitsubishi (รุ่นเก่า/2024)", "RRS-I": "ชิ้นงาน Isuzu",
+    "RRS-N": "ชิ้นงาน Nissan (N.V / F.T)", "RRS-S": "ชิ้นงาน Suzuki",
+}
+
+
+def item_kind(code: str) -> str:
+    if not code:
+        return ""
+    return "ชิ้นงานผลิต" if code.upper().startswith(("RRS", "RRA")) else "วัตถุดิบ"
 
 
 def read_express_file(path: str | Path) -> tuple[StockList, TextReport | None]:
@@ -342,7 +459,11 @@ def check_part_codes(partlist: PartList, stock: StockList) -> list[CodeCheck]:
             continue
         item = find_by_code(part.part_no, stock) or find_by_code(part.stock_code, stock)
         issues = code_issues(code)
-        if item is None:
+        variants = find_variants(code, stock) if item is None else []
+        if item is None and variants:
+            out.append(CodeCheck(code, part.name, "", f"มีรุ่นย่อย {len(variants)} รายการ",
+                                 "เลือกรหัสเต็ม: " + ", ".join(f"{v.code} {v.name}" for v in variants[:6])))
+        elif item is None:
             out.append(CodeCheck(code, part.name, "", "ไม่พบใน Express", " / ".join(issues)))
         elif item.code_truncated:
             out.append(CodeCheck(code, part.name, item.code, "พบ (รหัสในรายงานถูกตัด)",

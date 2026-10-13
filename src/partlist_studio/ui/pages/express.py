@@ -2,20 +2,26 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
-from PySide6.QtWidgets import (QAbstractItemView, QFileDialog, QGridLayout, QHBoxLayout, QHeaderView, QLabel,
-                               QLineEdit, QScrollArea, QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout,
+from PySide6.QtWidgets import (QAbstractItemView, QFileDialog, QGridLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
+                               QMessageBox, QScrollArea, QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout,
                                QWidget)
 
-from ...core.express import (SYNC_SAME, check_part_codes, code_family, compare_stock, export_new_items,
-                             export_pd_draft, new_items, read_express_file)
+from ...core.express import (SYNC_SAME, check_part_codes, code_family, compare_stock, export_new_items, export_pd_draft,
+                             new_items, read_express_file)
+from ...core.express_codes import ST_AUTO, ST_EXACT, resolve_models, resolved_to_model, summary
+from ...core.item_form import build_item_form
+from ...core.partlist_express import build_partlist_express
 from ...core.stock import StockList, export_requirements
 from ...core.tabular import read_table, write_table
 from ...core.xref import XREF_HEADERS, CodeXref, XrefEntry, suggest_links
 from .. import theme
 from ..state import AppState
-from ..widgets import Card, PageHeader, button
+from ..widgets import Card, PageHeader, button, run_async
+
+_COUNT_CODE = re.compile(r"^\d{2}-\d{4}-\d{4}$")
 
 EXPRESS_FILTER = ("ไฟล์จาก Express (*.xlsx *.xls *.csv *.txt *.prn);;Excel (*.xlsx *.xls);;CSV (*.csv);;"
                   "รายงานข้อความ (*.txt *.prn)")
@@ -104,7 +110,28 @@ class ExpressPage(QWidget):
         top.addWidget(exp, 1)
         lay.addLayout(top)
 
-        check = Card("3. ตรวจให้ข้อมูลตรงกัน")
+        forms = Card("3. รหัส Express ในแบบกระบะ และฟอร์ม Sheet")
+        t = QLabel("ใช้รายงาน <b>รายละเอียดสินค้า (STMASR0200)</b> ที่นำเข้าแล้ว: ให้ทุกแถวของแบบกระบะใช้รหัสเต็มใน Express "
+                   "(RRS-T-024 → RRS-T-024-L-84) จากชื่อชิ้นส่วน รุ่นรถ ความสูงคอก และซ้าย/ขวา "
+                   "<span style='color:%s'>– ตรวจแถว ควรตรวจ ก่อนใช้</span>" % theme.MUTED)
+        t.setWordWrap(True)
+        forms.body.addWidget(t)
+        row = QHBoxLayout()
+        for text, slot, tip, kind in (
+                ("Parts List All Model (รหัส Express)", self.export_partlist_express,
+                 "Excel ทุกแบบกระบะในรูปแบบเดิม + รูป ใช้รหัส Express พร้อมทะเบียนสินค้า ฟอร์มเปิดรหัสใหม่ "
+                 "อะไหล่กระบะ สต๊อกเหล็ก – อัปโหลดขึ้น Google Drive แล้วเปิดเป็น Google Sheet ได้", "primary"),
+                ("ฟอร์มทะเบียนสินค้า", self.export_item_form, "ทะเบียนสินค้า Express + สต็อกนับ + ฟอร์มเพิ่มสินค้าใหม่", ""),
+                ("ใช้รหัส Express กับแบบกระบะ", self.apply_express_codes,
+                 "เปลี่ยนรหัสในหน้า แบบกระบะ เป็นรหัสเต็มใน Express (แถวที่ไม่พบคงรหัสเดิม)", "")):
+            b = button(text, kind, tooltip=tip) if kind else button(text, tooltip=tip)
+            b.clicked.connect(slot)
+            row.addWidget(b)
+        row.addStretch(1)
+        forms.body.addLayout(row)
+        lay.addWidget(forms)
+
+        check = Card("4. ตรวจให้ข้อมูลตรงกัน")
         row = QHBoxLayout()
         for text, slot in (("ตรวจรหัส Part List ↔ Express", self.check_codes),
                            ("เทียบสต็อก Express ↔ Google Sheet", self.compare_with_sheet),
@@ -232,6 +259,93 @@ class ExpressPage(QWidget):
             n = export_new_items(self.state.partlist, stock, path, self.category.text().strip(),
                                  self.account_group.text().strip())
             self.state.notify(f"บันทึก {Path(path).name} แล้ว ({n} รหัส)")
+
+    # ---- Express codes for the models, Sheet forms ---------------------------
+    def _express_master(self) -> StockList | None:
+        """The Express item list (STMASR0200 or 4.สินค้า export) with the most RRS codes."""
+        express = [s for n, s in self.state.stock_sources.items() if n.startswith("Express")]
+        if not express:
+            self.actions.error("ยังไม่มีข้อมูล Express",
+                               "นำเข้า รายงานรายละเอียดสินค้า (STMASR0200.txt) หรือไฟล์ 4.สินค้า จาก Express ก่อน")
+            return None
+        return max(express, key=lambda s: sum(1 for i in s.items if i.code.upper().startswith("RRS")))
+
+    def _counted_stock(self) -> StockList:
+        """The stock-count file (codes 01-0001-0001 ...)."""
+        best, hits = StockList(), 0
+        for stock in self.state.stock_sources.values():
+            n = sum(1 for i in stock.items if _COUNT_CODE.match(i.code))
+            if n > hits:
+                best, hits = stock, n
+        return best
+
+    def _balances(self) -> dict[str, StockList]:
+        out = {}
+        for name, stock in self.state.stock_sources.items():
+            if stock.items and not any(i.code for i in stock.items) and not name.startswith("Express"):
+                out[name.split(" / ")[-1]] = stock
+        return out
+
+    def export_partlist_express(self) -> None:
+        express = self._express_master()
+        if express is None:
+            return
+        if not self.state.models:
+            self.actions.error("ยังไม่มีแบบกระบะ", "นำเข้าไฟล์ Parts List All Model ในหน้า แบบกระบะ ก่อน")
+            return
+        path = self.actions.save_path("Parts List All Model (รหัส Express)",
+                                      "Parts List All Model (รหัส Express).xlsx", "Excel (*.xlsx)")
+        if not path:
+            return
+        args = (path, self.state.models, express, self._counted_stock(), self.state.xref, self._balances(),
+                self.state.settings.densities)
+
+        def done(stats):
+            self._show_resolved(stats["resolved"])
+            st = stats["status"]
+            self.state.notify(f"บันทึก {Path(path).name} แล้ว · {len(self.state.models)} แบบ · "
+                              + " · ".join(f"{k} {v}" for k, v in st.items())
+                              + f" · ขอเปิดรหัสใหม่ {stats['new_items']} รายการ")
+
+        run_async(build_partlist_express, done, lambda e: self.actions.error("สร้างไฟล์ไม่สำเร็จ", e), *args)
+
+    def export_item_form(self) -> None:
+        express = self._express_master()
+        if express is None:
+            return
+        path = self.actions.save_path("ฟอร์มทะเบียนสินค้า", "ฟอร์มทะเบียนสินค้า_Express.xlsx", "Excel (*.xlsx)")
+        if not path:
+            return
+        stats = build_item_form(express, path, counted=self._counted_stock(), models=self.state.models,
+                                xref=self.state.xref, densities=self.state.settings.densities)
+        self.state.notify(f"บันทึก {Path(path).name} แล้ว · {stats['items']} รหัส · "
+                          f"ผูกรหัสนับสต็อก {stats['linked']} รายการ")
+
+    def _show_resolved(self, resolved: dict) -> None:
+        rows = [(r.code or r.old_code, f"{model} · {r.item_no} {r.name}" + (f" ({r.side})" if r.side else ""),
+                 r.status, r.express_name or " | ".join(r.alternatives[:2]) or r.remark)
+                for model, items in resolved.items() for r in items]
+        rows.sort(key=lambda t: t[2] in (ST_EXACT, ST_AUTO))
+        self._fill_result(rows)
+
+    def apply_express_codes(self) -> None:
+        express = self._express_master()
+        if express is None or not self.state.models:
+            if express is not None:
+                self.actions.error("ยังไม่มีแบบกระบะ", "นำเข้าไฟล์ Parts List All Model ในหน้า แบบกระบะ ก่อน")
+            return
+        resolved = resolve_models(self.state.models, express)
+        st = summary(resolved)
+        text = "\n".join(f"{k}: {v} แถว" for k, v in st.items())
+        if QMessageBox.question(self, "ใช้รหัส Express กับแบบกระบะ",
+                                f"{text}\n\nเปลี่ยนรหัสในแบบกระบะทั้งหมดเป็นรหัส Express?\n"
+                                "แถว 1+1 จะแยกเป็นซ้าย/ขวา · แถวที่ไม่พบใน Express คงรหัสเดิม") != QMessageBox.Yes:
+            self._show_resolved(resolved)
+            return
+        models = [resolved_to_model(m, resolved[m.name]) for m in self.state.models]
+        self.state.set_models(models)
+        self._show_resolved(resolved)
+        self.state.notify("แบบกระบะใช้รหัส Express แล้ว · " + " · ".join(f"{k} {v}" for k, v in st.items()))
 
     # ---- checks ----------------------------------------------------------
     def _fill_result(self, rows: list[tuple[str, str, str, str]], tab: int = 0) -> None:

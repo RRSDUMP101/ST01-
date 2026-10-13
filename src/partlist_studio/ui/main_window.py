@@ -131,6 +131,11 @@ class MainWindow(QMainWindow):
         ex.addAction("ร่างใบขอซื้อ…", self.pages["express"].export_purchase)
         ex.addAction("สินค้าใหม่สำหรับเปิดรหัส…", self.pages["express"].export_new_items)
         ex.addSeparator()
+        ex.addAction("Parts List All Model (รหัส Express)…", self.pages["express"].export_partlist_express)
+        ex.addAction("ฟอร์มทะเบียนสินค้า…", self.pages["express"].export_item_form)
+        ex.addAction("ใช้รหัส Express กับแบบกระบะ…", lambda: (self.go("express"),
+                                                             self.pages["express"].apply_express_codes()))
+        ex.addSeparator()
         ex.addAction("ตรวจรหัส Part List ↔ Express", lambda: (self.go("express"), self.pages["express"].check_codes()))
         ex.addAction("ตารางเทียบรหัส", lambda: (self.go("express"), self.pages["express"].tabs.setCurrentIndex(1)))
         file_menu.addSeparator()

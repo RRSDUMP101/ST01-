@@ -192,6 +192,47 @@ def company_stock_count():
     export_stock_count(StockList(items=items), OUT / "company_stock_count_sample.xlsx")
 
 
+DETAIL_ITEMS = [
+    # code, name, unit, remark
+    ("01-B00 -0003", "เหล็กแผ่นดำ 2.5 มม.4x8ฟุต(ฝาข้าง+ฝาท้าย)1219x2440", "แผ่น", "ฝาข้าง"),
+    ("RRS-A-019-188-5-2-30", "ฝาข้าง(188.5)กระบะ2.30", "ชิ้น", ""),
+    ("RRS-A-020-161CM", "ฝาท้าย (161cm)", "ชิ้น", ""),
+    ("RRS-A-024", "บังอาย 40", "ชิ้น", ""),
+    ("RRS-A-033", "ตะขอเกี่ยวฝาท้าย", "ชิ้น", ""),
+    ("RRS-A-092-L", "ซองเสา 2ราว(ซ้าย)", "ชิ้น", ""),
+    ("RRS-A-102-L-40", "เสาหลัง(ซ้าย) 40", "ต้น", ""),
+    ("RRS-A-102-L-80", "เสาหลัง(ซ้าย) 80", "ต้น", ""),
+    ("RRS-A-102-R-40", "เสาหลัง(ขวา) 40", "ต้น", ""),
+    ("RRS-A-102-R-80", "เสาหลัง(ขวา) 80", "ต้น", ""),
+    ("RRS-T-024-L-40-CHAMP", "บังอาย Champ 40(ซ้าย)", "ชิ้น", ""),
+    ("RRS-T-024-L-84", "บังอาย Champ 84(ซ้าย)", "ชิ้น", ""),
+    ("RRS-T-024-R-40-CHAMP", "บังอาย Champ 40(ขวา)", "ชิ้น", ""),
+    ("RRS-T-024-R-84-CHAMP", "บังอาย Champ 84(ขวา)", "ชิ้น", ""),
+]
+
+
+def express_item_detail_report() -> str:
+    """Same layout as Express 6.รายงาน → รายงานรายละเอียดสินค้า (STMASR0200), cp874 with NBSP and quotes."""
+    rule = "-" * 157
+    lines = ["สต๊อค บริษัทตัวอย่าง จำกัด".ljust(130) + "หน้า   :        1",
+             "  รายงานรายละเอียดสินค้า",
+             f"รหัสสินค้า จาก  {DETAIL_ITEMS[0][0]}     ถึง  {DETAIL_ITEMS[-1][0]}".ljust(140) + "วันที่ : 13/10/69",
+             rule,
+             "  รหัส       รายละเอียด                                                   หน่วย  นับเป็น      ตัวคูณ  "
+             "รหัสบ/ช   ราคามาตรฐาน   สินค้าทดแทน          ผู้จัดจำหน่าย",
+             rule,
+             "  21      รายการเหล็กสำหรับผลิตดั้มพ์"]
+    pad = " " * 74
+    for code, name, unit, remark in DETAIL_ITEMS:
+        lines.append(f"  {code:<20} {name.replace(' ', chr(160)):<51}ย่อย  {unit:<20}ST01            0.000")
+        lines.append(pad + "ใหญ่")
+        lines.append(pad + f"ซื้อ  {unit:<8}{1:>8.2f}")
+        left = f"             หมายเหตุ  {remark}".ljust(74) if remark else pad
+        lines.append(left + f"ขาย   {unit:<8}{1:>8.2f}")
+        lines.append(" " * 23 + "-" * 134)
+    return "\r\n".join(f'"{line}"' for line in lines) + "\r\n"
+
+
 def main() -> int:
     OUT.mkdir(exist_ok=True)
     side_panel()
@@ -200,6 +241,7 @@ def main() -> int:
     stock_csv()
     company_parts_list()
     company_stock_count()
+    (OUT / "express_item_detail_STMASR0200.txt").write_bytes(express_item_detail_report().encode("cp874"))
     print("samples written to", OUT)
     return 0
 

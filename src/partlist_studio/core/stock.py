@@ -48,7 +48,7 @@ STOCK_ALIASES: dict[str, list[str]] = {
     "spec": ["spec", "size", "thickness", "ขนาด/ความหนา", "ขนาด", "ความหนา"],
     "unit": ["unit", "uom", "หน่วย", "หน่วยนับ", "หน่วยย่อย"],
     "on_hand": ["on hand", "balance", "stock", "qty", "คงเหลือ", "ยอดคงเหลือ", "จำนวนคงเหลือ", "จำนวน"],
-    "unit_cost": ["ราคาต่อหน่วย", "ทุนต่อหน่วย", "ราคาทุน", "unit cost", "cost"],
+    "unit_cost": ["ราคาต่อหน่วย", "ทุนต่อหน่วย", "ราคาทุน", "ราคามาตรฐาน", "ทุนมาตรฐาน", "unit cost", "cost"],
     "min_qty": ["min", "minimum", "จุดสั่งซื้อ", "ขั้นต่ำ", "reorder point"],
     "max_qty": ["max", "maximum", "สูงสุด"],
     "location": ["location", "warehouse", "store", "คลัง", "คลังสินค้า", "ที่เก็บ"],
@@ -96,7 +96,8 @@ class StockItem:
     unit_cost: float = 0
     shelf: str = ""
     remark: str = ""
-    code_truncated: bool = False  # Express text reports cut codes longer than 16 characters
+    code_truncated: bool = False
+    extra: dict = field(default_factory=dict)  # Express unit set (ใหญ่/ซื้อ/ขาย + ตัวคูณ), สินค้าทดแทน, ผู้จัดจำหน่าย  # Express text reports cut codes longer than 16 characters
 
     def get(self, key: str):
         return getattr(self, key)
@@ -160,6 +161,7 @@ class StockList:
                 if key in raw:
                     item.set(key, raw[key])
             item.code_truncated = bool(raw.get("code_truncated", False))
+            item.extra = dict(raw.get("extra") or {})
             items.append(item)
         return cls(items=items, source=data.get("source", ""), has_quantities=data.get("has_quantities", True))
 
@@ -263,6 +265,15 @@ def _find_code(code: str, stock: StockList) -> StockItem | None:
         if item.code_truncated and key.startswith(_key(item.code)):
             return item
     return None
+
+
+def find_variants(code: str, stock: StockList) -> list[StockItem]:
+    """Express items that extend a base part number: 'RRS-T-024' -> RRS-T-024-L-84, RRS-T-024-80-L ...
+    (the Parts List workbook uses base numbers, Express one code per size/side/model)."""
+    base = re.sub(r"\(.*?\)", "", (code or "").upper().replace(" ", "").replace("_", "-")).strip("-")
+    if not base:
+        return []
+    return [i for i in stock.items if i.code and i.code.upper().replace(" ", "").startswith(base + "-")]
 
 
 def stock_candidates(part: Part, stock: StockList) -> list[StockItem]:

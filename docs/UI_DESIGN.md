@@ -19,7 +19,9 @@
 │ ▦ ภาพรวม       │                                                          │
 │ ◫ แบบ 2D       │                 เนื้อหาของหน้า (การ์ด / ตาราง)               │
 │ ☰ Part List    │                                                          │
+│ ▣ แบบกระบะ     │                                                          │
 │ ▤ สโตร์/คลัง    │                                                          │
+│ ₿ Express      │                                                          │
 │ ⇅ Google Sheets│                                                          │
 │ ⚙ ตั้งค่า        │                                                          │
 │                │                                                          │
@@ -40,6 +42,9 @@
 | สโตร์ / คลังสินค้า – สต็อก | ตารางสต็อกจากสโตร์ (แก้ไขได้) | ![](screenshots/4b_stock_master.png) |
 | Google Sheets | เชื่อมต่อ (Service Account / OAuth), ดึง/ส่ง Part List, สต็อก, ผลตรวจ | ![](screenshots/5_sheets.png) |
 | ตั้งค่า | ตัวแปลง DWG, เลเยอร์เส้นตัด, ความหนาแน่นวัสดุ | ![](screenshots/6_settings.png) |
+| แบบกระบะ | Part List มาตรฐานทุกแบบพร้อมรูป, ยอดคงเหลือของแต่ละชิ้น, สร้าง Part List จากแบบ | ![](screenshots/9_models.png) |
+| Express | นำเข้า / ส่งออกร่าง PD-ใบขอซื้อ-สินค้าใหม่ / ตรวจรหัส / เทียบกับ Google Sheet | ![](screenshots/10_express.png) |
+| Express – ตารางเทียบรหัส | รหัส Express/แบบ ↔ รหัสนับสต็อก (จับคู่จากชื่อ, ยืนยันเอง) | ![](screenshots/10b_express_xref.png) |
 | หน้าต่างนำเข้าแบบ | เลือกไฟล์ทางซ้าย, ดูตัวอย่าง + Title Block, ติ๊กรายการที่จะเพิ่ม | ![](screenshots/7_dwg_import_dialog.png) ![](screenshots/7b_dwg_import_bom.png) |
 | หน้าต่างจับคู่คอลัมน์ | ยืนยันว่าคอลัมน์ในไฟล์ ZWCAD/Excel/Google ตรงกับช่องใด | ![](screenshots/8_column_mapping.png) |
 

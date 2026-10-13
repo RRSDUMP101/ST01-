@@ -13,6 +13,8 @@ from .. import APP_NAME, __version__
 from .actions import Actions
 from .pages.dashboard import DashboardPage
 from .pages.drawings import DrawingsPage
+from .pages.express import ExpressPage
+from .pages.models import ModelsPage
 from .pages.gsheets import GoogleSheetsPage
 from .pages.partlist import PartListPage
 from .pages.settings import SettingsPage
@@ -23,7 +25,9 @@ NAV = [
     ("dashboard", "▦   ภาพรวม"),
     ("drawings", "◫   แบบ 2D (DWG/DXF)"),
     ("parts", "☰   Part List"),
+    ("models", "▣   แบบกระบะ"),
     ("stock", "▤   สโตร์ / คลังสินค้า"),
+    ("express", "₿   Express"),
     ("sheets", "⇅   Google Sheets"),
     ("settings", "⚙   ตั้งค่า"),
 ]
@@ -79,8 +83,10 @@ class MainWindow(QMainWindow):
         self.pages["dashboard"] = DashboardPage(self.state, self.actions, self.go)
         self.pages["drawings"] = DrawingsPage(self.state, self.actions)
         self.pages["parts"] = PartListPage(self.state, self.actions)
+        self.pages["models"] = ModelsPage(self.state, self.actions)
         self.pages["stock"] = StockPage(self.state, self.actions)
         self.pages["sheets"] = GoogleSheetsPage(self.state, self.actions, self.pages["stock"])
+        self.pages["express"] = ExpressPage(self.state, self.actions, self.pages["stock"], self.pages["sheets"])
         self.pages["settings"] = SettingsPage(self.state)
         for key, _label in NAV:
             self.stack.addWidget(self.pages[key])
@@ -107,13 +113,26 @@ class MainWindow(QMainWindow):
         imp = file_menu.addMenu("นำเข้า")
         imp.addAction("แบบ 2D ZWCAD (DWG/DXF)…", lambda: a.import_drawings())
         imp.addAction("ตาราง BOM ZWCAD / Excel / CSV…", a.import_table)
-        imp.addAction("สต็อกสโตร์…", self.pages["stock"].import_stock)
+        imp.addAction("ไฟล์ Parts List All Model (แบบกระบะ + รูป)…", lambda: self.pages["models"].import_workbook())
+        imp.addAction("สต็อก: ไฟล์นับสต๊อค / สต๊อกเหล็ก / อะไหล่กระบะ…", lambda: self.pages["stock"].import_stock())
+        imp.addAction("ไฟล์จาก Express (ทะเบียนสินค้า / รายงาน)…", self.pages["express"].import_express)
         exp = file_menu.addMenu("ส่งออก")
         exp.addAction("ตาราง Part List สำหรับ ZWCAD (DXF)…", a.export_cad_dxf)
         exp.addAction("ตาราง Part List สำหรับ ZWCAD (DWG)…", a.export_cad_dwg)
         exp.addAction("BOM สำหรับ ZWCAD (CSV/Excel)…", a.export_cad_table)
         exp.addAction("Part List ภาษาไทย (Excel)…", a.export_excel_report)
+        exp.addAction("Part List รูปแบบบริษัท (Parts List All Model พร้อมรูป)…", a.export_company_bom)
         exp.addAction("ทะเบียนแบบ (Excel)…", a.export_drawing_register)
+        file_menu.addSeparator()
+        ex = self.menuBar().addMenu("Express")
+        ex.addAction("นำเข้าทะเบียนสินค้า / สินค้าคงเหลือ…", self.pages["express"].import_express)
+        ex.addSeparator()
+        ex.addAction("ร่าง PD จ่ายวัตถุดิบเพื่อผลิต…", self.pages["express"].export_pd)
+        ex.addAction("ร่างใบขอซื้อ…", self.pages["express"].export_purchase)
+        ex.addAction("สินค้าใหม่สำหรับเปิดรหัส…", self.pages["express"].export_new_items)
+        ex.addSeparator()
+        ex.addAction("ตรวจรหัส Part List ↔ Express", lambda: (self.go("express"), self.pages["express"].check_codes()))
+        ex.addAction("ตารางเทียบรหัส", lambda: (self.go("express"), self.pages["express"].tabs.setCurrentIndex(1)))
         file_menu.addSeparator()
         quit_act = QAction("ออก", self)
         quit_act.setShortcut(QKeySequence.Quit)

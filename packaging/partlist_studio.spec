@@ -19,7 +19,7 @@ a = Analysis(
         (str(ROOT / "samples"), "samples"),
     ] + ([(str(LIBREDWG), "libredwg")] if LIBREDWG.is_dir() else []),
     hiddenimports=["ezdxf.addons.odafc", "openpyxl", "xlrd", "gspread", "google_auth_oauthlib.flow"],
-    excludes=["tkinter", "matplotlib", "PIL", "PySide6.QtWebEngineCore", "PySide6.Qt3DCore"],
+    excludes=["tkinter", "matplotlib", "PySide6.QtWebEngineCore", "PySide6.Qt3DCore"],
 )
 pyz = PYZ(a.pure)
 exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name=APP, console=False,

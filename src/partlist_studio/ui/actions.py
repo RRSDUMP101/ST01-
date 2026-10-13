@@ -188,6 +188,14 @@ class Actions:
             export_parts(self.state.partlist, path, style="thai")
             self.state.notify(f"บันทึก {Path(path).name} แล้ว")
 
+    def export_company_bom(self) -> None:
+        from ..core.company_files import export_models, models_from_partlist
+
+        path = self.save_path("Part List รูปแบบบริษัท", self.default_name(".xlsx", "PartsList"), "Excel (*.xlsx)")
+        if path:
+            export_models([models_from_partlist(self.state.partlist)], path)
+            self.state.notify(f"บันทึก {Path(path).name} แล้ว")
+
     def export_drawing_register(self) -> None:
         path = self.save_path("ส่งออกทะเบียนแบบ", self.default_name(".xlsx", "Drawings"), "Excel (*.xlsx);;CSV (*.csv)")
         if not path:

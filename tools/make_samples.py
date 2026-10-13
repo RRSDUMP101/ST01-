@@ -141,12 +141,65 @@ def stock_csv():
         csv.writer(fh).writerows(rows)
 
 
+def company_parts_list():
+    """Same layout as the company file "Parts List All Model" (one sheet per model + steel ledger)."""
+    import openpyxl
+    from openpyxl.drawing.image import Image as XLImage
+    from PIL import Image, ImageDraw
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "กระบะคอกสูง3ราว"
+    ws.append(["รายการชิ้นส่วนประกอบกระบะ ตัวอย่าง (คอกสูง 3 ราว)"])
+    ws.append(["ลำดับ", "รหัส", "รายการ", "ภาพประกอบ", "ขนาด", "จำนวนที่ใช้", "หมายเหตุ"])
+    rows = [("1", "RRS-A-107", "เฟรมล่าง", "1", "Lower frame"), ("2", "RRS-A-106", "เฟรมบน", "1", "Top frame"),
+            ("3", "RRS-T018", "พื้น คอกสูง", "1+1", "ซ้าย - ขวา"), ("4", "RRS-T-022", "เสาหน้า 80", "1+1", ""),
+            ("5", "RRS-T-028,029", "เหล็กซองเสา", "2+2+2", "ซ้าย 3 + ขวา 3"),
+            ("6", "RRS-A-108-209-2-50", "2ราวข้าง(209)กระบะ2.50", "2", "")]
+    pic_dir = OUT / "_pics"
+    pic_dir.mkdir(exist_ok=True)
+    for i, (no, code, name, qty, remark) in enumerate(rows):
+        ws.append([no, code, name, None, None, qty, remark])
+        img = Image.new("RGB", (240, 140), (205, 214, 226))
+        ImageDraw.Draw(img).rectangle((20, 30, 220, 110), outline=(31, 78, 121), width=6)
+        path = pic_dir / f"p{i}.png"
+        img.save(path)
+        ws.add_image(XLImage(str(path)), f"D{3 + i}")
+        ws.row_dimensions[3 + i].height = 60
+    st = wb.create_sheet("สต๊อกเหล็ก")
+    st.append(["ลำดับ", "รายการ", "ยอดยกมา", "ยอดรับเข้า", "จ่ายออก", None, "รวมจ่าย", "คงเหลือ"])
+    st.append([None, None, None, None, "2026-10-01", "2026-10-02", None, None])
+    st.append([1, "เหล็กแผ่นดำ 3 มม.  5x10ฟุต", 14, 0, 2, None, 2, 12])
+    st.append([2, "เหล็กแผ่นดำ 4 มม.  5x10 ฟุต", 3, 5, None, None, 0, 8])
+    wb.save(OUT / "company_parts_list_all_model_sample.xlsx")
+    for p in pic_dir.iterdir():
+        p.unlink()
+    pic_dir.rmdir()
+
+
+def company_stock_count():
+    """Same layout as "รายการ Stock ชิ้นส่วนกระบะดั้มพ์.นับสต๊อค" (STBALLL + Format Stock R1)."""
+    import sys as _sys
+
+    _sys.path.insert(0, str(ROOT / "src"))
+    from partlist_studio.core.company_files import export_stock_count
+    from partlist_studio.core.stock import StockItem, StockList
+
+    items = [StockItem(code="01-0001-0006", name="หน้าโปร 60", on_hand=5, unit="ชุด"),
+             StockItem(code="01-0003-0002", name="เสาหน้า(ขวา) 50", on_hand=10, unit="ต้น"),
+             StockItem(code="01-0007-0004", name="2ราวข้าง(209)กระบะ2.50", on_hand=6, unit="ชิ้น", remark="รอพับ"),
+             StockItem(code="01-0011-0049", name="ฉากยึดเฟรมพื้นเรียบ(ขวา)", on_hand=62, unit="ชิ้น", min_qty=20)]
+    export_stock_count(StockList(items=items), OUT / "company_stock_count_sample.xlsx")
+
+
 def main() -> int:
     OUT.mkdir(exist_ok=True)
     side_panel()
     assembly()
     zwcad_tableexport_csv()
     stock_csv()
+    company_parts_list()
+    company_stock_count()
     print("samples written to", OUT)
     return 0
 

@@ -19,15 +19,16 @@ def app():
 
 
 @pytest.fixture
-def window(app):
+def window(app, tmp_path):
     from PySide6.QtCore import QSettings
 
     from partlist_studio.ui import theme
     from partlist_studio.ui.main_window import MainWindow
+    from partlist_studio.ui.state import AppState
 
     QSettings().clear()
     app.setStyleSheet(theme.STYLE_SHEET)
-    w = MainWindow()
+    w = MainWindow(AppState(data_dir=tmp_path / "data"))
     w.show()
     yield w
     w.state.dirty = False
@@ -87,3 +88,30 @@ def test_drawing_dialog_selection(app):
     selected = dict((d.file_name, parts) for d, parts in dialog.selected_parts())
     assert len(selected["RRS-TB-001_side_panel.dxf"]) == 1
     assert len(selected["RRS-AS-100_tailgate_assembly.dxf"]) == 4  # 5 BOM rows, first unticked
+
+
+def test_models_and_sources_flow(window, app, tmp_path):
+    from partlist_studio.core.company_files import ModelBOM, ModelRow
+    from partlist_studio.core.stock import StockItem, StockList
+
+    state = window.state
+    state.set_models([ModelBOM("แบบ A", "แบบทดสอบ", [ModelRow("1", "RRS-A-1", ["RRS-A-1"], "เฟรม", "", "1+1", 2)])])
+    page = window.pages["models"]
+    assert page.list.count() == 1 and page.table.rowCount() == 1
+    page.sets.setValue(2)
+    page._use(replace=True)
+    assert [(p.part_no, p.qty) for p in state.partlist.parts] == [("RRS-A-1", 4)]
+    state.add_stock_source("นับสต๊อค", StockList(items=[StockItem(code="RRS-A-1", on_hand=10, unit="ชิ้น")]))
+    state.add_stock_source("สำรอง", StockList(items=[StockItem(code="RRS-A-1", on_hand=1)]), activate=False)
+    assert state.stock.items[0].on_hand == 10
+    assert window.pages["stock"].sources.count() == 2
+    assert window.pages["stock"].run_check(show=False)
+    assert state.requirements[0].status == "พอ"
+    express = window.pages["express"]
+    express.check_codes()
+    assert express.result.rowCount() == 1
+    # data survives a restart
+    from partlist_studio.ui.state import AppState
+
+    again = AppState(data_dir=state.data_dir())
+    assert again.models[0].name == "แบบ A" and again.active_sources == ["นับสต๊อค"]

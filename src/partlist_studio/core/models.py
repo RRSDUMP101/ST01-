@@ -52,6 +52,7 @@ class Part:
     process: str = ""
     status: str = "รอตรวจ"
     remark: str = ""
+    image: str = ""  # picture of the part (from the company Parts List workbook), not a table column
 
     def get(self, key: str):
         return getattr(self, key)
@@ -69,6 +70,7 @@ class Part:
         for key in COLUMN_KEYS:
             if key in data:
                 part.set(key, data[key])
+        part.image = str(data.get("image", "") or "")
         return part
 
 

@@ -34,7 +34,12 @@ def main() -> int:
     out.mkdir(parents=True, exist_ok=True)
     samples = ROOT / "samples"
 
-    w = MainWindow()
+    import tempfile
+
+    from partlist_studio.ui.state import AppState
+
+    data_dir = tempfile.mkdtemp(prefix="pls_shots_")
+    w = MainWindow(AppState(data_dir=data_dir))
     w.state.settings.q.clear()
     state = w.state
     info = state.partlist.info
@@ -56,9 +61,19 @@ def main() -> int:
             p.weight, p.process, p.remark = 1.097, "ตัด/พับ", "กลับด้านจาก RRS-TB-001"
     info.drawing_no, info.revision = "RRS-AS-100", "B"
     state.partlist.renumber()
-    state.stock = StockList.from_file(samples / "store_stock.csv")
-    state.stock.source = "store_stock.csv (ส่งออกจาก Express)"
-    state.stock_changed.emit()
+    from partlist_studio.core.company_files import read_company_workbook
+    from partlist_studio.core.express import read_express_file
+
+    book = read_company_workbook(samples / "company_parts_list_all_model_sample.xlsx", state.image_dir() / "sample")
+    state.set_models(book.models)
+    state.add_stock_source("store_stock.csv", StockList.from_file(samples / "store_stock.csv"))
+    for sheet, stock in book.stocks.items():
+        state.add_stock_source(f"Parts List All Model / {sheet}", stock)
+    w.pages["stock"].read_stock_file(str(samples / "company_stock_count_sample.xlsx"))
+    express, _ = read_express_file(samples / "express_item_list.csv")
+    state.add_stock_source("Express: express_item_list.csv", express)
+    state.xref.merge(w.pages["express"]._suggestions())
+    state.set_xref(state.xref)
     state.requirements = check_requirements(state.partlist, state.stock)
     state.mark_dirty()
     state.requirements_changed.emit()
@@ -82,6 +97,13 @@ def main() -> int:
         shot(w, f"{i + 1}_{key}.png")
     w.pages["stock"].tabs.setCurrentIndex(0)
     shot(w, "4b_stock_master.png")
+    w.go("models")
+    shot(w, "9_models.png")
+    w.go("express")
+    w.pages["express"].check_codes()
+    shot(w, "10_express.png")
+    w.pages["express"].tabs.setCurrentIndex(1)
+    shot(w, "10b_express_xref.png")
 
     dialog = DrawingImportDialog(drawings, dwg_io.DEFAULT_DENSITIES, w)
     dialog.show()

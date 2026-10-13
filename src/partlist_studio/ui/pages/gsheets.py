@@ -12,7 +12,9 @@ from PySide6.QtWidgets import (QFileDialog, QFormLayout, QGridLayout, QHBoxLayou
 from ...core.gsheets import SheetsClient, SheetsError, detect_mode, service_account_email
 from ...core.models import COLUMN_KEYS, COLUMN_LABELS
 from ...core.partlist_io import prepare_rows
+from ...core.company_files import models_from_rows, models_to_rows
 from ...core.stock import REQUIREMENT_HEADERS, StockList, requirement_row
+from ...core.xref import CodeXref
 from ..state import AppState
 from ..widgets import Card, PageHeader, button, run_async
 
@@ -64,7 +66,10 @@ class GoogleSheetsPage(QWidget):
         self.ws_parts = QLineEdit(s.get("google/ws_parts", "PartList"))
         self.ws_stock = QLineEdit(s.get("google/ws_stock", "Stock"))
         self.ws_check = QLineEdit(s.get("google/ws_check", "MaterialCheck"))
-        for label, edit in (("Part List", self.ws_parts), ("สต็อก", self.ws_stock), ("ผลตรวจ", self.ws_check)):
+        self.ws_xref = QLineEdit(s.get("google/ws_xref", "CodeXref"))
+        self.ws_models = QLineEdit(s.get("google/ws_models", "Models"))
+        for label, edit in (("Part List", self.ws_parts), ("สต็อก", self.ws_stock), ("ผลตรวจ", self.ws_check),
+                            ("เทียบรหัส", self.ws_xref), ("แบบกระบะ", self.ws_models)):
             tabs.addWidget(QLabel(label))
             tabs.addWidget(edit)
         form.addRow("ชื่อแท็บ", tabs)
@@ -88,6 +93,9 @@ class GoogleSheetsPage(QWidget):
             ("Part List", "รายการชิ้นส่วนของงานนี้", self.pull_parts, self.push_parts),
             ("สต็อกสโตร์", "ยอดคงเหลือ Min/Max จากสโตร์", self.pull_stock, self.push_stock),
             ("ผลตรวจวัตถุดิบ", "ต้องใช้ / คงเหลือ / แนะนำสั่งซื้อ", None, self.push_check),
+            ("ตารางเทียบรหัส", "รหัส Express/แบบ ↔ รหัสนับสต็อก", self.pull_xref, self.push_xref),
+            ("แบบกระบะ", "Part List มาตรฐานทุกแบบ (แบบ | ลำดับ | รหัส | รายการ | ขนาด | จำนวนที่ใช้)",
+             self.pull_models, self.push_models),
         ]
         for r, (title, desc, pull, push) in enumerate(rows):
             grid.addWidget(QLabel(f"<b>{title}</b>"), r, 0)
@@ -114,7 +122,8 @@ class GoogleSheetsPage(QWidget):
 
         for edit, key in ((self.cred, "google/credentials"), (self.url, "google/sheet_url"),
                           (self.ws_parts, "google/ws_parts"), (self.ws_stock, "google/ws_stock"),
-                          (self.ws_check, "google/ws_check")):
+                          (self.ws_check, "google/ws_check"), (self.ws_xref, "google/ws_xref"),
+                          (self.ws_models, "google/ws_models")):
             edit.editingFinished.connect(lambda e=edit, k=key: self._save(k, e.text()))
         self.cred.editingFinished.connect(self._update_account)
         self._client: SheetsClient | None = None
@@ -190,7 +199,7 @@ class GoogleSheetsPage(QWidget):
             if not stock.items:
                 self.actions.error("ไม่พบรายการสต็อก", "ตรวจหัวตารางในแท็บสต็อก (รหัสสินค้า, ชื่อสินค้า, คงเหลือ, หน่วย…)")
                 return
-            self.stock_page.set_stock(stock)
+            self.stock_page.set_stock(stock, f"Google Sheet / {self.ws_stock.text()}")
             self.state.notify(f"ดึงสต็อก {len(stock.items)} รายการจาก Google Sheet")
 
         self._call(self.client().read_rows, done, self.url.text(), self.ws_stock.text())
@@ -207,6 +216,30 @@ class GoogleSheetsPage(QWidget):
         rows = [["SO", info.so_no, "เลขที่แบบ", info.drawing_no, "จำนวนผลิต", info.build_qty]]
         rows += [REQUIREMENT_HEADERS] + [requirement_row(line) for line in lines]
         self._push(self.ws_check.text(), rows, "ส่งผลตรวจวัตถุดิบแล้ว")
+
+    # ---- code table / model BOMs ---------------------------------------
+    def pull_xref(self) -> None:
+        def done(rows):
+            added = self.state.xref.merge(CodeXref.from_rows(rows).entries)
+            self.state.set_xref(self.state.xref)
+            self.state.notify(f"ดึงตารางเทียบรหัส เพิ่ม {added} คู่")
+
+        self._call(self.client().read_rows, done, self.url.text(), self.ws_xref.text())
+
+    def push_xref(self) -> None:
+        self._push(self.ws_xref.text(), self.state.xref.to_rows(), f"ส่งตารางเทียบรหัส {len(self.state.xref.entries)} คู่แล้ว")
+
+    def pull_models(self) -> None:
+        def done(rows):
+            models = models_from_rows(rows, images_from=self.state.models)
+            if models:
+                self.state.set_models(models)
+            self.state.notify(f"ดึงแบบกระบะ {len(models)} แบบ")
+
+        self._call(self.client().read_rows, done, self.url.text(), self.ws_models.text())
+
+    def push_models(self) -> None:
+        self._push(self.ws_models.text(), models_to_rows(self.state.models), f"ส่งแบบกระบะ {len(self.state.models)} แบบแล้ว")
 
     def _push(self, worksheet: str, rows: list[list], message: str) -> None:
         self._call(self.client().write_rows, lambda url: self.state.notify(f"{message} → {worksheet}"),

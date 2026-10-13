@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections import Counter
 
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, QSortFilterProxyModel, Qt
-from PySide6.QtGui import QColor, QFont
+from PySide6.QtGui import QColor, QFont, QPixmap
 from PySide6.QtWidgets import QComboBox, QStyledItemDelegate
 
 from ..core.models import COLUMN_KEYS, COLUMN_LABELS, NUMERIC_COLUMNS, PROCESSES, STATUSES, UNITS, Part, PartList
@@ -33,6 +33,22 @@ def validate_part(part: Part, duplicates: set[str]) -> tuple[str, str]:
     if not part.material:
         return "warn", "ยังไม่ระบุวัสดุ"
     return "", ""
+
+
+_THUMBS: dict[str, QPixmap] = {}
+
+
+def thumbnail(path: str, size: int = 26) -> QPixmap | None:
+    """Small picture of a part (cached)."""
+    if not path:
+        return None
+    key = f"{path}@{size}"
+    if key not in _THUMBS:
+        pix = QPixmap(path)
+        _THUMBS[key] = pix.scaled(size * 2, size, Qt.KeepAspectRatio, Qt.SmoothTransformation) if not pix.isNull() \
+            else QPixmap()
+    pix = _THUMBS[key]
+    return None if pix.isNull() else pix
 
 
 class PartTableModel(QAbstractTableModel):
@@ -87,6 +103,10 @@ class PartTableModel(QAbstractTableModel):
             return value
         if role == Qt.TextAlignmentRole and key in NUMERIC_COLUMNS | {"item_no", "unit"}:
             return int(Qt.AlignCenter)
+        if role == Qt.DecorationRole and key == "name" and part.image:
+            return thumbnail(part.image)
+        if role == Qt.ToolTipRole and key == "name" and part.image:
+            return f"<b>{part.name}</b><br><img src='{part.image}' width='320'>"
         if role == Qt.ForegroundRole and key == "status":
             return theme.status_color(value)
         if role == Qt.FontRole and key == "status":

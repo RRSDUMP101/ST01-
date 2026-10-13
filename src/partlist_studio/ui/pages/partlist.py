@@ -31,6 +31,7 @@ class PartListPage(QWidget):
         imp_menu = QMenu(imp)
         imp_menu.addAction("แบบ 2D ZWCAD (DWG/DXF)…", lambda: actions.import_drawings())
         imp_menu.addAction("ตาราง BOM จาก ZWCAD / Excel / CSV…", actions.import_table)
+        imp_menu.addAction("จากแบบกระบะมาตรฐาน (หน้า แบบกระบะ)…", lambda: self.window().go("models"))
         imp.setMenu(imp_menu)
         exp = header.add_action(button("ส่งออก ▾"))
         exp_menu = QMenu(exp)
@@ -39,6 +40,7 @@ class PartListPage(QWidget):
         exp_menu.addAction("BOM สำหรับ ZWCAD Data Link (CSV/Excel)…", actions.export_cad_table)
         exp_menu.addSeparator()
         exp_menu.addAction("Part List ภาษาไทย สำหรับสโตร์/ฝ่ายผลิต (Excel)…", actions.export_excel_report)
+        exp_menu.addAction("Part List รูปแบบบริษัท (Parts List All Model พร้อมรูป)…", actions.export_company_bom)
         exp.setMenu(exp_menu)
         lay.addWidget(header)
 

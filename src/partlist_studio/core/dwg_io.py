@@ -20,6 +20,7 @@ import platform
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import unicodedata
 from collections import Counter
@@ -120,11 +121,23 @@ def find_converter(custom_path: str = "") -> Converter | None:
     for exe in _oda_candidates():
         if Path(exe).is_file():
             return Converter("oda", exe)
+    for exe in _bundled_candidates():
+        if exe.is_file():
+            return Converter("libredwg", str(exe))
     for name in ("ODAFileConverter", "dwg2dxf"):
         exe = shutil.which(name)
         if exe:
             return Converter("oda" if name.startswith("ODA") else "libredwg", exe)
     return None
+
+
+def _bundled_candidates() -> list[Path]:
+    """dwg2dxf shipped inside the Windows installer (folder 'libredwg' next to the program)."""
+    name = "dwg2dxf.exe" if platform.system() == "Windows" else "dwg2dxf"
+    roots = [Path(sys.executable).resolve().parent]
+    if getattr(sys, "_MEIPASS", None):
+        roots.insert(0, Path(sys._MEIPASS))
+    return [root / "libredwg" / name for root in roots]
 
 
 def _run(cmd: list[str], timeout: int = 180) -> subprocess.CompletedProcess:
@@ -266,7 +279,6 @@ class DrawingData:
 def read_drawing(path: str | Path, converter: Converter | None = None, cut_layer: str = "") -> DrawingData:
     """Read a DWG (via converter) or DXF file and extract Part List information."""
     import ezdxf
-    from ezdxf import recover
 
     path = Path(path)
     source = ""
@@ -277,11 +289,11 @@ def read_drawing(path: str | Path, converter: Converter | None = None, cut_layer
         source = str(path)
         path = convert_dwg_to_dxf(path, converter)
     try:
-        doc = ezdxf.readfile(path)
-    except ezdxf.DXFStructureError:
-        doc, _auditor = recover.readfile(path)
+        doc = _open_dxf(path)
     except OSError as exc:
         raise DrawingError(f"เปิดไฟล์ไม่ได้: {exc}") from exc
+    except ezdxf.DXFStructureError as exc:
+        raise DrawingError(f"โครงสร้างไฟล์ DXF เสียหาย: {exc}") from exc
 
     scale = _UNIT_TO_MM.get(doc.header.get("$INSUNITS", 4), 1.0)
     data = DrawingData(path=str(path), source_path=source, units_to_mm=scale)
@@ -311,6 +323,53 @@ def read_drawing(path: str | Path, converter: Converter | None = None, cut_layer
     if not data.bom and not data.outer_profiles and not data.title_block:
         data.warnings.append("ไม่พบ Title Block, ตาราง BOM หรือรูปคลี่ชิ้นงานในไฟล์นี้")
     return data
+
+
+def _open_dxf(path: Path):
+    import ezdxf
+    from ezdxf import recover
+
+    try:
+        return ezdxf.readfile(path)
+    except ezdxf.DXFStructureError:
+        pass
+    try:
+        return recover.readfile(path)[0]
+    except ezdxf.DXFStructureError:
+        repaired = repair_wrapped_values(path)
+        if repaired is None:
+            raise
+        return recover.readfile(repaired)[0]
+
+
+def repair_wrapped_values(path: Path) -> Path | None:
+    """Re-join values that a converter wrapped onto a new line.
+
+    LibreDWG's dwg2dxf breaks long MTEXT strings (common with Thai text in ZWCAD) in the
+    middle of a value, so the next line is not a group code. Such a line belongs to the value
+    before it. Returns the repaired copy, or None when nothing needed fixing.
+    """
+    raw = Path(path).read_bytes()
+    lines = raw.split(b"\n")
+    out: list[bytes] = []
+    fixed = 0
+    expect_code = True
+    for line in lines:
+        if expect_code:
+            if line.strip().lstrip(b"-").isdigit() or not line.strip():
+                out.append(line)
+                expect_code = False
+            else:  # continuation of the previous value
+                out[-1] = out[-1].rstrip(b"\r") + line
+                fixed += 1
+        else:
+            out.append(line)
+            expect_code = True
+    if not fixed:
+        return None
+    target = Path(path).with_name(Path(path).stem + "_repaired.dxf")
+    target.write_bytes(b"\n".join(out))
+    return target
 
 
 def _collect(entity, data: DrawingData, texts, tables, edge_entities, closed_paths, depth: int, cut_layer: str):
@@ -438,13 +497,21 @@ def _text_item(entity, scale: float) -> TextItem | None:
 
 
 def _title_from_texts(data: DrawingData, texts: list[TextItem]) -> None:
+    """'MATERIAL : SS400' style notes. A key written with different values in one drawing
+    (e.g. 'Thickness=3.00' and 'Thickness=4.00' next to each flat pattern exported from a
+    sheet-metal program) describes single parts, not the whole drawing, so it is skipped."""
+    found: dict[str, set[str]] = {}
     for item in texts:
         match = _KEY_VALUE_RE.match(item.text)
         if not match:
             continue
-        key = _TITLE_LOOKUP.get(normalize(match.group(1)))
-        if key and key not in data.title_block and match.group(2) not in _EMPTY_VALUES:
-            data.title_block[key] = match.group(2)
+        key, value = _TITLE_LOOKUP.get(normalize(match.group(1))), match.group(2)
+        if not key or value in _EMPTY_VALUES or (key == "material" and value.isdigit()):
+            continue
+        found.setdefault(key, set()).add(value)
+    for key, values in found.items():
+        if len(values) == 1 and key not in data.title_block:
+            data.title_block[key] = values.pop()
 
 
 # ---- BOM table ----------------------------------------------------------

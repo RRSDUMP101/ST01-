@@ -21,14 +21,24 @@
 
 ## ติดตั้ง / รัน
 
-### ใช้ตัวที่ build แล้ว
-GitHub Actions build ให้อัตโนมัติทุกครั้งที่ push (แท็บ **Actions → test-and-build → Artifacts**):
-`RRS-PartListStudio-Windows-x64.zip`, `RRS-PartListStudio-macOS-arm64.zip` (Apple Silicon), `RRS-PartListStudio-macOS-x64.zip` (Intel)
-– push แท็ก `v*` เพื่อแนบไฟล์เข้า Release
+### ติดตั้งบน Windows (แนะนำ)
+1. เปิด GitHub → แท็บ **Actions** → รายการ **test-and-build** ล่าสุด (เครื่องหมาย ✓ สีเขียว)
+2. ส่วน **Artifacts** ด้านล่าง → ดาวน์โหลด **`RRS-PartListStudio-Windows-Setup`** แล้วแตกไฟล์ zip
+3. ดับเบิลคลิก **`RRS-PartListStudio-Setup-0.1.0.exe`** → Next → Install
+   (ไม่ต้องใช้สิทธิ์ Administrator · ถ้า Windows SmartScreen เตือน ให้กด *More info → Run anyway* เพราะโปรแกรมยังไม่ได้ลงลายเซ็นดิจิทัล)
+4. เปิดโปรแกรมจากไอคอน **RRS Part List Studio** บนเดสก์ท็อปหรือเมนู Start
 
-* **Windows**: แตก zip → เปิด `RRS Part List Studio.exe`
-* **macOS**: แตก zip → ลาก `RRS Part List Studio.app` ไป Applications → ครั้งแรกคลิกขวา → *Open*
-  (แอปยังไม่ได้ sign กับ Apple)
+ตัวติดตั้งมี **ตัวแปลง DWG (LibreDWG dwg2dxf)** ในตัว จึงเปิดไฟล์ `.dwg` ได้ทันที
+(ถ้าติดตั้ง ODA File Converter ไว้ด้วย โปรแกรมจะเลือกใช้ ODA ก่อน) · ดับเบิลคลิกไฟล์งาน `.rrspl` จะเปิดในโปรแกรมให้อัตโนมัติ
+
+แบบไม่ต้องติดตั้ง: ดาวน์โหลด `RRS-PartListStudio-Windows-x64` → แตก zip → เปิด `RRS Part List Studio.exe`
+
+### macOS
+ดาวน์โหลด `RRS-PartListStudio-macOS-arm64` (Apple Silicon) หรือ `-macOS-x64` (Intel) → แตก zip →
+ลาก `RRS Part List Studio.app` ไป Applications → ครั้งแรกคลิกขวา → *Open* (แอปยังไม่ได้ sign กับ Apple)
+· บน macOS ต้องติดตั้ง ODA File Converter เพื่อเปิด `.dwg` (หรือใช้ไฟล์ `.dxf`)
+
+push แท็ก `v*` (เช่น `v0.1.0`) เพื่อแนบไฟล์ติดตั้งทั้งหมดเข้า GitHub Release
 
 ### รันจากซอร์สโค้ด (ต้องมี Python 3.10+)
 * Windows: ดับเบิลคลิก `scripts\run_windows.bat`
@@ -40,8 +50,10 @@ GitHub Actions build ให้อัตโนมัติทุกครั้�
 * macOS: `scripts/build_macos.sh` → `dist/RRS Part List Studio.app`
 
 ### อ่านไฟล์ DWG
-DWG เป็นรูปแบบปิด ต้องติดตั้ง **[ODA File Converter](https://www.opendesign.com/guestfiles/oda_file_converter)** (ฟรี)
-แล้วกด *ค้นหาอัตโนมัติ* ในหน้า **ตั้งค่า** – หรือใน ZWCAD ใช้ *Save As → DXF* แล้วนำเข้า DXF ได้เลยโดยไม่ต้องติดตั้งอะไรเพิ่ม
+DWG เป็นรูปแบบปิด ต้องแปลงเป็น DXF ก่อนอ่าน: ตัวติดตั้ง Windows มี LibreDWG ในตัวแล้ว ·
+ใช้ **[ODA File Converter](https://www.opendesign.com/guestfiles/oda_file_converter)** (ฟรี, แม่นยำกว่า) ได้ โดยกด *ค้นหาอัตโนมัติ* ในหน้า **ตั้งค่า** ·
+หรือใน ZWCAD ใช้ *Save As → DXF* แล้วนำเข้า DXF โดยตรง
+LibreDWG เป็นซอฟต์แวร์ GPLv3 (ไฟล์สัญญาอนุญาตอยู่ในโฟลเดอร์ `libredwg` ของโปรแกรม)
 
 ### Google Sheets
 1. Google Cloud Console → เปิด *Google Sheets API* และ *Google Drive API*

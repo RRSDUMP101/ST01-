@@ -110,3 +110,41 @@ def test_real_oda_roundtrip(tmp_path):
     dxf = dwg_io.export_dxf_table(PartList(parts=[Part(part_no="A", qty=1)]), tmp_path / "t.dxf")
     dwg = dwg_io.export_dxf_to_dwg(dxf, tmp_path / "t.dwg", conv)
     assert dwg_io.read_drawing(dwg, conv).bom.to_parts()[0].part_no == "A"
+
+
+def test_repair_values_wrapped_by_converter(tmp_path):
+    """LibreDWG dwg2dxf can break a long Thai MTEXT value onto a second line."""
+    pl = PartList(parts=[Part(part_no="A", name="แผ่นพื้น", qty=1)])
+    path = dwg_io.export_dxf_table(pl, tmp_path / "t.dxf")
+    raw = path.read_bytes()
+    value = "แผ่นพื้น".encode()
+    raw = raw.replace(value, value[:6] + b"\r\n" + value[6:], 1)  # split inside the Thai text
+    broken = tmp_path / "broken.dxf"
+    broken.write_bytes(raw)
+    data = dwg_io.read_drawing(broken)
+    assert data.bom.to_parts()[0].name == "แผ่นพื้น"
+
+
+def test_conflicting_key_values_are_not_title_block(tmp_path):
+    import ezdxf
+
+    doc = ezdxf.new()
+    msp = doc.modelspace()
+    for i, text in enumerate(["Thickness=3.00", "Thickness=4.00", "Material=1", "MATERIAL : SS400"]):
+        msp.add_text(text, height=3).set_placement((0, i * 10))
+    path = tmp_path / "notes.dxf"
+    doc.saveas(path)
+    tb = dwg_io.read_drawing(path).title_block
+    assert "thickness" not in tb
+    assert tb["material"] == "SS400"
+
+
+def test_bundled_libredwg_is_found(tmp_path, monkeypatch):
+    name = "dwg2dxf.exe" if sys.platform == "win32" else "dwg2dxf"
+    exe = tmp_path / "libredwg" / name
+    exe.parent.mkdir()
+    exe.write_text("")
+    monkeypatch.setattr(dwg_io, "_oda_candidates", lambda: [])
+    monkeypatch.setattr(sys, "_MEIPASS", str(tmp_path), raising=False)
+    conv = dwg_io.find_converter()
+    assert conv.kind == "libredwg" and conv.exe == str(exe)

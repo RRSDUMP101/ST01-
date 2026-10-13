@@ -7,6 +7,12 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: write  # attach the installers to a GitHub Release when a v* tag is pushed
+
+env:
+  LIBREDWG_VERSION: "0.13.3"
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -41,8 +47,38 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -r requirements-dev.txt
+      - name: Bundle LibreDWG dwg2dxf (Windows) so .dwg opens without ODA File Converter
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $url = "https://github.com/LibreDWG/libredwg/releases/download/$env:LIBREDWG_VERSION/libredwg-$env:LIBREDWG_VERSION-win64.zip"
+          Invoke-WebRequest $url -OutFile libredwg.zip
+          Expand-Archive libredwg.zip -DestinationPath libredwg_full
+          $dst = "packaging/third_party/libredwg"
+          New-Item -ItemType Directory -Force $dst | Out-Null
+          Copy-Item libredwg_full/dwg2dxf.exe, libredwg_full/*.dll, libredwg_full/README.txt $dst
+          try { Invoke-WebRequest "https://www.gnu.org/licenses/gpl-3.0.txt" -OutFile "$dst/COPYING.txt" } catch { Write-Warning "GPL text not downloaded: $_" }
+          Set-Content "$dst/SOURCE.txt" "GNU LibreDWG $env:LIBREDWG_VERSION (GPLv3). Source: https://github.com/LibreDWG/libredwg/releases/tag/$env:LIBREDWG_VERSION"
+          & "$dst/dwg2dxf.exe" --version
       - name: Build with PyInstaller
         run: pyinstaller --noconfirm packaging/partlist_studio.spec
+      - name: Smoke test the built program
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath "dist/RRS Part List Studio/RRS Part List Studio.exe" -PassThru
+          Start-Sleep -Seconds 15
+          if ($p.HasExited) { throw "program exited early with code $($p.ExitCode)" }
+          Stop-Process -Id $p.Id
+          if (-not (Test-Path "dist/RRS Part List Studio/_internal/libredwg/dwg2dxf.exe")) { throw "dwg2dxf not bundled" }
+      - name: Windows installer (Inno Setup)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress; }
+          & $iscc /DAppVersion=0.1.0 packaging/windows_installer.iss
+          Get-ChildItem dist/installer
       - name: Package (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
@@ -55,8 +91,15 @@ jobs:
         with:
           name: ${{ matrix.artifact }}
           path: ${{ matrix.artifact }}.zip
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'Windows'
+        with:
+          name: RRS-PartListStudio-Windows-Setup
+          path: dist/installer/*.exe
       - name: Attach to release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: ${{ matrix.artifact }}.zip
+          files: |
+            ${{ matrix.artifact }}.zip
+            dist/installer/*.exe

@@ -7,6 +7,9 @@ from PyInstaller.utils.hooks import collect_data_files
 
 ROOT = Path(SPECPATH).parent
 APP = "RRS Part List Studio"
+# Optional: LibreDWG dwg2dxf (Windows build fetches it, see .github/workflows/build.yml) so that
+# .dwg files open without installing ODA File Converter.
+LIBREDWG = ROOT / "packaging" / "third_party" / "libredwg"
 
 a = Analysis(
     [str(ROOT / "src" / "partlist_studio" / "__main__.py")],
@@ -14,7 +17,7 @@ a = Analysis(
     datas=collect_data_files("ezdxf") + [
         (str(ROOT / "src" / "partlist_studio" / "resources"), "partlist_studio/resources"),
         (str(ROOT / "samples"), "samples"),
-    ],
+    ] + ([(str(LIBREDWG), "libredwg")] if LIBREDWG.is_dir() else []),
     hiddenimports=["ezdxf.addons.odafc", "openpyxl", "xlrd", "gspread", "google_auth_oauthlib.flow"],
     excludes=["tkinter", "matplotlib", "PIL", "PySide6.QtWebEngineCore", "PySide6.Qt3DCore"],
 )

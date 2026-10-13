@@ -33,10 +33,20 @@
 
 แบบไม่ต้องติดตั้ง: ดาวน์โหลด `RRS-PartListStudio-Windows-x64` → แตก zip → เปิด `RRS Part List Studio.exe`
 
-### macOS
-ดาวน์โหลด `RRS-PartListStudio-macOS-arm64` (Apple Silicon) หรือ `-macOS-x64` (Intel) → แตก zip →
-ลาก `RRS Part List Studio.app` ไป Applications → ครั้งแรกคลิกขวา → *Open* (แอปยังไม่ได้ sign กับ Apple)
-· บน macOS ต้องติดตั้ง ODA File Converter เพื่อเปิด `.dwg` (หรือใช้ไฟล์ `.dxf`)
+### ติดตั้งบน macOS
+1. GitHub → **Actions** → **test-and-build** ล่าสุด → **Artifacts** → ดาวน์โหลดให้ตรงกับเครื่อง
+   * **`RRS-PartListStudio-macOS-arm64-dmg`** – Mac ชิป Apple (M1/M2/M3/M4…)
+   * **`RRS-PartListStudio-macOS-x64-dmg`** – Mac ชิป Intel
+   (ดูชิปได้ที่เมนู  → About This Mac)
+2. แตก zip → ดับเบิลคลิกไฟล์ `.dmg` → **ลากไอคอน RRS Part List Studio ไปวางที่ Applications**
+3. เปิดครั้งแรก: แอปยังไม่ได้ลงทะเบียนนักพัฒนากับ Apple macOS จึงจะเตือน ให้ทำอย่างใดอย่างหนึ่ง
+   * คลิกขวาที่แอปใน Applications → **Open** → **Open**
+   * หรือ macOS 15 ขึ้นไป: เปิดแล้วกด Done → **System Settings → Privacy & Security** → เลื่อนลง กด **Open Anyway**
+   * ถ้าขึ้นว่า "is damaged": เปิด Terminal แล้วพิมพ์ `xattr -cr "/Applications/RRS Part List Studio.app"`
+4. ครั้งต่อไปเปิดจาก Launchpad หรือ Applications ได้ตามปกติ
+
+ตัว macOS มี **ตัวแปลง DWG (LibreDWG dwg2dxf)** ในตัวเหมือน Windows จึงเปิดไฟล์ `.dwg` ได้ทันที
+(แบบไม่ต้องติดตั้ง: ดาวน์โหลด `RRS-PartListStudio-macOS-arm64` / `-x64` เป็น zip ที่มี `.app` อยู่ข้างใน)
 
 push แท็ก `v*` (เช่น `v0.1.0`) เพื่อแนบไฟล์ติดตั้งทั้งหมดเข้า GitHub Release
 
@@ -47,10 +57,10 @@ push แท็ก `v*` (เช่น `v0.1.0`) เพื่อแนบไฟล
 
 ### Build เอง
 * Windows: `scripts\build_windows.bat` → `dist\RRS Part List Studio\RRS Part List Studio.exe`
-* macOS: `scripts/build_macos.sh` → `dist/RRS Part List Studio.app`
+* macOS: `scripts/build_macos.sh` → `dist/RRS Part List Studio.app` (สร้างตัวแปลง DWG ให้ด้วย ใช้เวลาครั้งแรกไม่กี่นาที)
 
 ### อ่านไฟล์ DWG
-DWG เป็นรูปแบบปิด ต้องแปลงเป็น DXF ก่อนอ่าน: ตัวติดตั้ง Windows มี LibreDWG ในตัวแล้ว ·
+DWG เป็นรูปแบบปิด ต้องแปลงเป็น DXF ก่อนอ่าน: ตัวติดตั้ง Windows และ macOS มี LibreDWG ในตัวแล้ว ·
 ใช้ **[ODA File Converter](https://www.opendesign.com/guestfiles/oda_file_converter)** (ฟรี, แม่นยำกว่า) ได้ โดยกด *ค้นหาอัตโนมัติ* ในหน้า **ตั้งค่า** ·
 หรือใน ZWCAD ใช้ *Save As → DXF* แล้วนำเข้า DXF โดยตรง
 LibreDWG เป็นซอฟต์แวร์ GPLv3 (ไฟล์สัญญาอนุญาตอยู่ในโฟลเดอร์ `libredwg` ของโปรแกรม)

@@ -6,6 +6,8 @@ cd "$(dirname "$0")/.."
 . .venv/bin/activate
 python -m pip install --upgrade pip
 pip install -r requirements-dev.txt
+# Optional: bundle dwg2dxf so .dwg opens without ODA File Converter (takes a few minutes once)
+scripts/build_libredwg_unix.sh || echo "LibreDWG build skipped - .dwg will need ODA File Converter"
 pyinstaller --noconfirm packaging/partlist_studio.spec
 # Unsigned app: remove the quarantine flag so Gatekeeper lets it open on this Mac.
 xattr -cr "dist/RRS Part List Studio.app" || true

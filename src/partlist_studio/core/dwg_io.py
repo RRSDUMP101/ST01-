@@ -152,6 +152,8 @@ def convert_dwg_to_dxf(dwg_path: str | Path, converter: Converter, out_dir: str 
     out_dir = Path(out_dir or tempfile.mkdtemp(prefix="partlist_dwg_"))
     out_dir.mkdir(parents=True, exist_ok=True)
     if converter.kind == "libredwg":
+        if platform.system() != "Windows" and not os.access(converter.exe, os.X_OK):
+            os.chmod(converter.exe, 0o755)  # execute bit can get lost when copied into an app bundle
         target = out_dir / (dwg_path.stem + ".dxf")
         result = _run([converter.exe, "-y", "-o", str(target), str(dwg_path)])
     else:

@@ -60,8 +60,29 @@ jobs:
           try { Invoke-WebRequest "https://www.gnu.org/licenses/gpl-3.0.txt" -OutFile "$dst/COPYING.txt" } catch { Write-Warning "GPL text not downloaded: $_" }
           Set-Content "$dst/SOURCE.txt" "GNU LibreDWG $env:LIBREDWG_VERSION (GPLv3). Source: https://github.com/LibreDWG/libredwg/releases/tag/$env:LIBREDWG_VERSION"
           & "$dst/dwg2dxf.exe" --version
+      - name: Cache LibreDWG build (macOS)
+        if: runner.os == 'macOS'
+        uses: actions/cache@v4
+        with:
+          path: packaging/third_party/libredwg
+          key: libredwg-${{ env.LIBREDWG_VERSION }}-${{ runner.os }}-${{ runner.arch }}-v1
+      - name: Build LibreDWG dwg2dxf (macOS) so .dwg opens without ODA File Converter
+        if: runner.os == 'macOS'
+        run: scripts/build_libredwg_unix.sh "$LIBREDWG_VERSION"
       - name: Build with PyInstaller
         run: pyinstaller --noconfirm packaging/partlist_studio.spec
+      - name: Smoke test the built program (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          APP="dist/RRS Part List Studio.app"
+          "$APP/Contents/MacOS/RRS Part List Studio" &
+          PID=$!
+          sleep 20
+          kill -0 $PID || { echo "program exited early"; exit 1; }
+          kill $PID
+          CONV=$(find "$APP" -name dwg2dxf -type f -perm -u+x | head -1)
+          [ -n "$CONV" ] || { echo "dwg2dxf not bundled"; exit 1; }
+          "$CONV" --version
       - name: Smoke test the built program
         if: runner.os == 'Windows'
         shell: pwsh
@@ -83,10 +104,14 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: Compress-Archive -Path "dist/RRS Part List Studio" -DestinationPath "${{ matrix.artifact }}.zip"
-      - name: Package (macOS)
+      - name: Package (macOS) - .dmg with drag-to-Applications, and .zip
         if: runner.os == 'macOS'
         run: |
           ditto -c -k --sequesterRsrc --keepParent "dist/RRS Part List Studio.app" "${{ matrix.artifact }}.zip"
+          mkdir -p dmg
+          cp -R "dist/RRS Part List Studio.app" dmg/
+          ln -s /Applications dmg/Applications
+          hdiutil create -volname "RRS Part List Studio" -srcfolder dmg -ov -format UDZO "${{ matrix.artifact }}.dmg"
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
@@ -96,10 +121,16 @@ jobs:
         with:
           name: RRS-PartListStudio-Windows-Setup
           path: dist/installer/*.exe
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'macOS'
+        with:
+          name: ${{ matrix.artifact }}-dmg
+          path: ${{ matrix.artifact }}.dmg
       - name: Attach to release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
           files: |
             ${{ matrix.artifact }}.zip
+            ${{ matrix.artifact }}.dmg
             dist/installer/*.exe

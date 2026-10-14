@@ -6,6 +6,11 @@ on:
     tags: ["v*"]
   pull_request:
   workflow_dispatch:
+    inputs:
+      macos:
+        description: "Build the macOS apps too (.dmg for Apple chip and Intel)"
+        type: boolean
+        default: false
 
 permissions:
   contents: write  # attach the installers to a GitHub Release when a v* tag is pushed
@@ -33,15 +38,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: windows-latest
-            artifact: RRS-PartListStudio-Windows-x64
-          - os: macos-latest
-            artifact: RRS-PartListStudio-macOS-arm64
-            macos_target: "11.0"
-          - os: macos-15-intel
-            artifact: RRS-PartListStudio-macOS-x64
-            macos_target: "11.0"
+        # Windows (Setup, Portable .exe, folder) on every push. macOS only when asked for:
+        # Actions -> test-and-build -> Run workflow -> tick "Build the macOS apps too".
+        include: ${{ fromJSON(inputs.macos && '[{"os":"windows-latest","artifact":"RRS-PartListStudio-Windows-x64"},{"os":"macos-latest","artifact":"RRS-PartListStudio-macOS-arm64","macos_target":"11.0"},{"os":"macos-15-intel","artifact":"RRS-PartListStudio-macOS-x64","macos_target":"11.0"}]' || '[{"os":"windows-latest","artifact":"RRS-PartListStudio-Windows-x64"}]') }}
     runs-on: ${{ matrix.os }}
     env:
       # oldest macOS the app must open on (the runners are macOS 15; Intel Macs often run 11-14)

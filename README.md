@@ -51,7 +51,10 @@
   (ถ้าเปิดจากใน zip โดยตรงจะขึ้น *Failed to load Python DLL … python312.dll*)
 
 ### ติดตั้งบน macOS (macOS 11 Big Sur ขึ้นไป)
-1. GitHub → **Actions** → **test-and-build** ล่าสุด → **Artifacts** → ดาวน์โหลดให้ตรงกับเครื่อง
+ทุกครั้งที่ push จะสร้างเฉพาะตัว Windows – ตัว macOS สร้างเมื่อสั่งเอง:
+GitHub → **Actions** → **test-and-build** → **Run workflow** → ติ๊ก *Build the macOS apps too* → **Run workflow**
+
+1. GitHub → **Actions** → **test-and-build** ที่สั่งสร้าง macOS → **Artifacts** → ดาวน์โหลดให้ตรงกับเครื่อง
    * **`RRS-PartListStudio-macOS-arm64-dmg`** – Mac ชิป Apple (M1/M2/M3/M4…)
    * **`RRS-PartListStudio-macOS-x64-dmg`** – Mac ชิป Intel
    (ดูชิปได้ที่เมนู  → About This Mac)
@@ -66,7 +69,7 @@
 ตัว macOS มี **ตัวแปลง DWG (LibreDWG dwg2dxf)** ในตัวเหมือน Windows จึงเปิดไฟล์ `.dwg` ได้ทันที
 (แบบไม่ต้องติดตั้ง: ดาวน์โหลด `RRS-PartListStudio-macOS-arm64` / `-x64` เป็น zip ที่มี `.app` อยู่ข้างใน)
 
-push แท็ก `v*` (เช่น `v0.1.0`) เพื่อแนบไฟล์ติดตั้งทั้งหมดเข้า GitHub Release
+push แท็ก `v*` (เช่น `v0.1.0`) เพื่อแนบไฟล์ติดตั้ง Windows เข้า GitHub Release (ตัว macOS ใช้ Run workflow ตามด้านบน)
 
 ### รันจากซอร์สโค้ด (ต้องมี Python 3.10+)
 * Windows: ดับเบิลคลิก `scripts\run_windows.bat`

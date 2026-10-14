@@ -1,0 +1,5 @@
+# macOS builds that open on macOS 11 Big Sur and newer (see scripts/macos_deps.sh).
+# PySide6 6.9+ wheels need macOS 13/14+ (the 6.12 binaries are marked macOS 26), 6.7.3 needs 11.0.
+PySide6-Essentials==6.7.3
+shiboken6==6.7.3
+numpy==2.3.5

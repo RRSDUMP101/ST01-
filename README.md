@@ -50,12 +50,13 @@
 * `RRS-PartListStudio-Windows-x64` – โฟลเดอร์โปรแกรม: **คลิกขวาที่ zip → Extract All ก่อน** แล้วเปิด `RRS Part List Studio.exe`
   (ถ้าเปิดจากใน zip โดยตรงจะขึ้น *Failed to load Python DLL … python312.dll*)
 
-### ติดตั้งบน macOS
+### ติดตั้งบน macOS (macOS 11 Big Sur ขึ้นไป)
 1. GitHub → **Actions** → **test-and-build** ล่าสุด → **Artifacts** → ดาวน์โหลดให้ตรงกับเครื่อง
    * **`RRS-PartListStudio-macOS-arm64-dmg`** – Mac ชิป Apple (M1/M2/M3/M4…)
    * **`RRS-PartListStudio-macOS-x64-dmg`** – Mac ชิป Intel
    (ดูชิปได้ที่เมนู  → About This Mac)
 2. แตก zip → ดับเบิลคลิกไฟล์ `.dmg` → **ลากไอคอน RRS Part List Studio ไปวางที่ Applications**
+   (ใน `.dmg` มีไฟล์ *วิธีเปิดครั้งแรก (อ่านก่อน).txt* ภาษาไทย)
 3. เปิดครั้งแรก: แอปยังไม่ได้ลงทะเบียนนักพัฒนากับ Apple macOS จึงจะเตือน ให้ทำอย่างใดอย่างหนึ่ง
    * คลิกขวาที่แอปใน Applications → **Open** → **Open**
    * หรือ macOS 15 ขึ้นไป: เปิดแล้วกด Done → **System Settings → Privacy & Security** → เลื่อนลง กด **Open Anyway**
@@ -75,6 +76,8 @@ push แท็ก `v*` (เช่น `v0.1.0`) เพื่อแนบไฟล
 ### Build เอง
 * Windows: `scripts\build_windows.bat` → `dist\RRS Part List Studio\RRS Part List Studio.exe`
 * macOS: `scripts/build_macos.sh` → `dist/RRS Part List Studio.app` (สร้างตัวแปลง DWG ให้ด้วย ใช้เวลาครั้งแรกไม่กี่นาที)
+  ใช้ Python 3.12 · ติดตั้ง PySide6 6.7.3 / numpy ที่สร้างสำหรับ macOS 11 (`scripts/macos_deps.sh`) แล้วตรวจด้วย
+  `tools/macho_min_os.py` ว่าทุกไฟล์ในแอปเปิดได้บน macOS 11 – รุ่นใหม่ของ PySide6 เปิดได้เฉพาะ macOS รุ่นใหม่มาก
 
 ### อ่านไฟล์ DWG
 DWG เป็นรูปแบบปิด ต้องแปลงเป็น DXF ก่อนอ่าน: ตัวติดตั้ง Windows และ macOS มี LibreDWG ในตัวแล้ว ·

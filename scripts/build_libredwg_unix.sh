@@ -14,7 +14,10 @@ tar xf libredwg.tar.xz
 cd "libredwg-$VER"
 JOBS="$(sysctl -n hw.ncpu 2>/dev/null || nproc)"
 # Static library + no bindings: one executable that only needs the system libraries.
-./configure --disable-shared --enable-static --disable-bindings --disable-python CFLAGS="-O2" >/dev/null
+# MACOSX_DEPLOYMENT_TARGET (11.0 in CI) keeps it running on older macOS than the build machine.
+MINOS="${MACOSX_DEPLOYMENT_TARGET:+-mmacosx-version-min=$MACOSX_DEPLOYMENT_TARGET}"
+./configure --disable-shared --enable-static --disable-bindings --disable-python CFLAGS="-O2 $MINOS" \
+    LDFLAGS="$MINOS" >/dev/null
 make -j"$JOBS" -C src >/dev/null
 make -j"$JOBS" -C programs dwg2dxf >/dev/null
 mkdir -p "$DST"

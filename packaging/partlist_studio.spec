@@ -36,6 +36,8 @@ if sys.platform == "darwin" and os.environ.get("PARTLIST_ONEFILE") != "1":
     app = BUNDLE(coll, name=f"{APP}.app", icon=str(ROOT / "packaging" / "app.icns"),
                  bundle_identifier="com.rrs.partliststudio",
                  info_plist={"NSHighResolutionCapable": True, "CFBundleShortVersionString": "0.1.0",
+                             # the build uses wheels for macOS 11+ (scripts/macos_deps.sh, tools/macho_min_os.py)
+                             "LSMinimumSystemVersion": os.environ.get("MACOSX_DEPLOYMENT_TARGET") or "11.0",
                              "CFBundleDocumentTypes": [{"CFBundleTypeName": "RRS Part List",
                                                         "CFBundleTypeExtensions": ["rrspl"],
                                                         "CFBundleTypeRole": "Editor"}]})

@@ -38,15 +38,25 @@ jobs:
             artifact: RRS-PartListStudio-Windows-x64
           - os: macos-latest
             artifact: RRS-PartListStudio-macOS-arm64
+            macos_target: "11.0"
           - os: macos-15-intel
             artifact: RRS-PartListStudio-macOS-x64
+            macos_target: "11.0"
     runs-on: ${{ matrix.os }}
+    env:
+      # oldest macOS the app must open on (the runners are macOS 15; Intel Macs often run 11-14)
+      MACOSX_DEPLOYMENT_TARGET: ${{ matrix.macos_target }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install -r requirements-dev.txt
+      - name: Install Python packages
+        if: runner.os == 'Windows'
+        run: pip install -r requirements-dev.txt
+      - name: Install Python packages built for macOS 11+ (macOS)
+        if: runner.os == 'macOS'
+        run: sh scripts/macos_deps.sh
       - name: Bundle LibreDWG dwg2dxf (Windows) so .dwg opens without ODA File Converter
         if: runner.os == 'Windows'
         shell: pwsh
@@ -65,12 +75,23 @@ jobs:
         uses: actions/cache@v4
         with:
           path: packaging/third_party/libredwg
-          key: libredwg-${{ env.LIBREDWG_VERSION }}-${{ runner.os }}-${{ runner.arch }}-v1
+          key: libredwg-${{ env.LIBREDWG_VERSION }}-${{ runner.os }}-${{ runner.arch }}-macos${{ matrix.macos_target }}-v2
       - name: Build LibreDWG dwg2dxf (macOS) so .dwg opens without ODA File Converter
         if: runner.os == 'macOS'
         run: scripts/build_libredwg_unix.sh "$LIBREDWG_VERSION"
       - name: Build with PyInstaller
         run: pyinstaller --noconfirm packaging/partlist_studio.spec
+      - name: Check the app opens on older macOS and its signature is valid (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          APP="dist/RRS Part List Studio.app"
+          python tools/macho_min_os.py "$APP" --max "$MACOSX_DEPLOYMENT_TARGET"
+          /usr/libexec/PlistBuddy -c "Print :LSMinimumSystemVersion" "$APP/Contents/Info.plist"
+          if ! codesign --verify --deep --strict --verbose=2 "$APP"; then
+            echo "re-signing (ad-hoc)"
+            codesign --force --deep --sign - "$APP"
+            codesign --verify --deep --strict --verbose=2 "$APP"
+          fi
       - name: Smoke test the built program (macOS)
         if: runner.os == 'macOS'
         run: |
@@ -123,6 +144,7 @@ jobs:
           mkdir -p dmg
           cp -R "dist/RRS Part List Studio.app" dmg/
           ln -s /Applications dmg/Applications
+          cp packaging/macos_first_open.txt "dmg/วิธีเปิดครั้งแรก (อ่านก่อน).txt"
           hdiutil create -volname "RRS Part List Studio" -srcfolder dmg -ov -format UDZO "${{ matrix.artifact }}.dmg"
       # GitHub zips every artifact itself: upload the folder (Windows) so the download is one zip, not a zip in a zip
       - uses: actions/upload-artifact@v4

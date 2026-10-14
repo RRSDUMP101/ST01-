@@ -1,0 +1,27 @@
+RRS Part List Studio – วิธีเปิดครั้งแรกบน Mac
+================================================
+
+1) ลากไอคอน "RRS Part List Studio" ไปวางที่ Applications
+
+2) เปิดครั้งแรก (โปรแกรมยังไม่ได้ลงทะเบียนนักพัฒนากับ Apple จึงมีคำเตือน)
+
+   macOS 15 Sequoia ขึ้นไป
+     - ดับเบิลคลิกโปรแกรมใน Applications -> ขึ้นว่าเปิดไม่ได้ / Apple ตรวจสอบไม่ได้ -> กด Done
+     - เปิด System Settings (การตั้งค่าระบบ) -> Privacy & Security (ความเป็นส่วนตัวและความปลอดภัย)
+     - เลื่อนลงล่างสุด จะเห็น "RRS Part List Studio was blocked..." -> กด Open Anyway (เปิดต่อไป)
+     - ใส่รหัสผ่านเครื่อง -> กด Open Anyway อีกครั้ง
+
+   macOS 11 - 14
+     - คลิกขวา (หรือกด Control ค้างแล้วคลิก) ที่โปรแกรมใน Applications -> Open -> Open
+
+   ถ้าขึ้นว่า "is damaged and can't be opened" (ไฟล์เสียหาย)
+     - เปิด Terminal (Applications -> Utilities -> Terminal) แล้ววางคำสั่งนี้ กด Enter
+         xattr -cr "/Applications/RRS Part List Studio.app"
+     - แล้วเปิดโปรแกรมอีกครั้ง
+
+3) ครั้งต่อไปเปิดจาก Launchpad / Applications ได้ตามปกติ
+
+ใช้ได้กับ macOS 11 Big Sur ขึ้นไป
+ดูรุ่น macOS และชิปได้ที่เมนู Apple -> About This Mac (เกี่ยวกับ Mac เครื่องนี้)
+  - Chip: Apple M1/M2/M3/M4 ...  -> ใช้ไฟล์ macOS-arm64
+  - Processor: Intel ...         -> ใช้ไฟล์ macOS-x64

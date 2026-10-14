@@ -48,6 +48,27 @@ class Settings:
         return find_converter(self.get("dwg/converter_path"))
 
     @property
+    def default_thickness(self) -> float:
+        """mm for flat patterns whose drawing gives no thickness (0 = none)."""
+        try:
+            return max(0.0, float(self.get("dwg/default_thickness", "0") or 0))
+        except ValueError:
+            return 0.0
+
+    @default_thickness.setter
+    def default_thickness(self, value: float) -> None:
+        self.set("dwg/default_thickness", f"{float(value):g}")
+
+    @property
+    def thickness_mode(self) -> str:
+        """"drawing" = as written in the drawing, "fixed" = the default thickness for every plate part."""
+        return "fixed" if self.get("dwg/thickness_mode") == "fixed" else "drawing"
+
+    @thickness_mode.setter
+    def thickness_mode(self, value: str) -> None:
+        self.set("dwg/thickness_mode", value)
+
+    @property
     def replenish(self) -> ReplenishParams:
         p = ReplenishParams()
         try:

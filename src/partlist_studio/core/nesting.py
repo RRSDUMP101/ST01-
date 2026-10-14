@@ -251,7 +251,7 @@ def nest_parts_from(partlist: PartList, build_qty: int | None = None,
     build = build_qty if build_qty is not None else max(1, partlist.info.build_qty)
     out, skipped = [], []
     for i, part in enumerate(partlist.parts):
-        thk = spec_thickness(part.spec) or (default_thickness if part.outline else 0)
+        thk = part.thickness or spec_thickness(part.spec) or (default_thickness if part.outline else 0)
         size = part_size(part)
         if not thk or not size or part.process == "ซื้อสำเร็จ":
             skipped.append(part)

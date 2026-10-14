@@ -59,7 +59,10 @@ def test_dxf_table_export_roundtrip(tmp_path):
 
 
 @pytest.mark.parametrize("text, mm", [("t3.2", 3.2), ("THK 4.5", 4.5), ("SS400 t=6", 6), ("2.3 mm", 2.3),
-                                      ("หนา 1.6", 1.6), ("50x50x2.3", 0), ("", 0)])
+                                      ("หนา 1.6", 1.6), ("50x50x2.3", 0), ("", 0), ("Thickness=3.00", 3),
+                                      ("4 มิลแบบมียาง", 4), ("หนา 9มิล 4 ชิ้น", 9), ("เพิ่มความหนาเป็น4 มิล", 4),
+                                      ("T: 2", 2), ("RRS-T001", 0), ("RRS-T-001", 0), ("500 mm", 0),
+                                      ("Material=1", 0)])
 def test_parse_thickness(text, mm):
     assert dwg_io.parse_thickness(text) == mm
 
@@ -148,3 +151,102 @@ def test_bundled_libredwg_is_found(tmp_path, monkeypatch):
     monkeypatch.setattr(sys, "_MEIPASS", str(tmp_path), raising=False)
     conv = dwg_io.find_converter()
     assert conv.kind == "libredwg" and conv.exe == str(exe)
+
+
+# --------------------------------------------------------------------------
+# Labels of each flat pattern: code, name, thickness
+# --------------------------------------------------------------------------
+SET = SAMPLES / "RRS-T-SET_frame_parts.dxf"
+
+
+def test_code_name_thickness_per_flat_pattern():
+    data = dwg_io.read_drawing(SET)
+    assert data.thickness == 2.3 and len(data.outer_profiles) == 5
+    rows = {c.part.part_no: c for c in dwg_io.drawing_to_candidates(data)}
+    got = {code: (c.part.name, c.part.thickness, c.thickness_source, c.part.qty) for code, c in rows.items()}
+    assert got == {
+        "RRS-T-001": ("เฟรมบน", 3, dwg_io.THK_FROM_PART, 1),  # three texts under the part
+        "RRS-T-002": ("เฟรมล่าง", 3.2, dwg_io.THK_FROM_PART, 2),  # one combined text inside it
+        "RRS-T-003": ("แผ่นปิดข้าง", 4, dwg_io.THK_FROM_PART, 1),  # PART_NO / NAME / THK attributes
+        "RRS-T-004": ("ขาจับ", 2, dwg_io.THK_FROM_PART, 1),  # Thickness=2.00 note
+        "RRS-T-005": ("ฝาปิดท้าย", 2.3, dwg_io.THK_FROM_TITLE, 1),  # nothing on the part: THK of the title block
+    }
+    p1 = rows["RRS-T-001"].part
+    assert p1.spec == "t3 x 150 x 60" and p1.drawing_thickness == 3
+    assert p1.weight == pytest.approx(dwg_io.outline_net_area(p1.outline) * 3 * 7.85e-6, abs=2e-3)
+    # the label block of RRS-T-003 is not the title block
+    assert data.title_block["drawing_no"] == "RRS-T-SET" and data.title_block["name"] == "ชุดเฟรมกระบะ"
+    record = dwg_io.drawing_record(data, 5, [c.part for c in rows.values()])
+    assert record.thickness == "2, 2.3, 3, 3.2, 4"
+
+
+def test_thickness_rule_fixed_and_default(tmp_path):
+    data = dwg_io.read_drawing(SET)
+    fixed = dwg_io.drawing_to_candidates(data, default_thickness=6, thickness_mode="fixed")
+    assert {(c.part.thickness, c.thickness_source) for c in fixed} == {(6, dwg_io.THK_MANUAL)}
+    assert sorted(c.part.drawing_thickness for c in fixed) == [2, 2.3, 3, 3.2, 4]  # what the drawing said is kept
+
+    import ezdxf
+
+    doc = ezdxf.new()
+    msp = doc.modelspace()
+    msp.add_lwpolyline([(0, 0), (100, 0), (100, 50), (0, 50)], close=True)
+    msp.add_lwpolyline([(200, 0), (300, 0), (300, 50), (200, 50)], close=True)
+    msp.add_text("RRS-T-020 แผ่นรอง", height=4).set_placement((10, 20))
+    path = tmp_path / "no_thk.dxf"
+    doc.saveas(path)
+    data = dwg_io.read_drawing(path)
+    plain = dwg_io.drawing_to_candidates(data)
+    assert {c.thickness_source for c in plain} == {dwg_io.THK_MISSING}
+    assert all(c.part.weight == 0 for c in plain)
+    filled = dwg_io.drawing_to_candidates(data, default_thickness=2.5)
+    assert {(c.part.thickness, c.thickness_source) for c in filled} == {(2.5, dwg_io.THK_DEFAULT)}
+    assert filled[0].part.part_no == "RRS-T-020" and filled[0].part.name == "แผ่นรอง"
+    assert all(c.part.weight > 0 for c in filled)
+
+
+def test_labels_inside_a_part_do_not_make_it_a_frame(tmp_path):
+    import ezdxf
+
+    doc = ezdxf.new()
+    msp = doc.modelspace()
+    msp.add_lwpolyline([(0, 0), (200, 0), (200, 100), (0, 100)], close=True)
+    msp.add_circle((150, 50), 10)
+    for i, text in enumerate(["PART NO: RRS-T-010", "NAME: แผ่นพื้น", "THK: 4.5", "QTY: 3"]):
+        msp.add_text(text, height=4).set_placement((10, 80 - i * 10))
+    path = tmp_path / "labels.dxf"
+    doc.saveas(path)
+    data = dwg_io.read_drawing(path)
+    [prof] = data.outer_profiles
+    assert len(prof.holes) == 1
+    [cand] = dwg_io.drawing_to_candidates(data)
+    assert (cand.part.part_no, cand.part.name, cand.part.thickness, cand.part.qty) == ("RRS-T-010", "แผ่นพื้น", 4.5, 3)
+
+
+def test_set_part_thickness_keeps_size_and_weight_in_step():
+    data = dwg_io.read_drawing(SET)
+    part = next(c.part for c in dwg_io.drawing_to_candidates(data) if c.part.part_no == "RRS-T-001")
+    w3 = part.weight
+    dwg_io.set_part_thickness(part, 4.5)
+    assert part.thickness == 4.5 and part.spec == "t4.5 x 150 x 60"
+    assert part.weight == pytest.approx(w3 * 1.5, abs=2e-3)
+    dwg_io.set_part_thickness(part, 0)
+    assert part.spec == "150 x 60" and part.weight == 0
+    bom = Part(part_no="X", spec="t2 x 100 x 100", thickness=2, weight=1.0)
+    dwg_io.set_part_thickness(bom, 3)  # no flat pattern: weight scales with the thickness
+    assert bom.weight == 1.5 and bom.spec == "t3 x 100 x 100"
+    assert dwg_io.spec_with_thickness("50x50x2.3", 3) == "50x50x2.3"  # a tube size is left alone
+    assert dwg_io.spec_with_thickness("", 3) == "t3"
+
+
+def test_thickness_column_and_old_files(tmp_path):
+    from partlist_studio.core.mapping import match_header
+
+    assert match_header("THK") == "thickness" and match_header("ความหนา") == "thickness"
+    assert match_header("ขนาด/ความหนา") == "spec"
+    old = {"parts": [{"part_no": "A", "spec": "t3.2 x 300 x 150", "qty": 1}]}
+    assert PartList.from_dict(old).parts[0].thickness == 3.2  # saved before the thickness column existed
+    pl = PartList(parts=[Part(part_no="B", thickness=2.5, drawing_thickness=3)])
+    pl.save(tmp_path / "x.rrspl")
+    back = PartList.load(tmp_path / "x.rrspl").parts[0]
+    assert (back.thickness, back.drawing_thickness) == (2.5, 3)

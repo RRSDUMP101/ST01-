@@ -8,7 +8,9 @@ from PySide6.QtCore import QAbstractTableModel, QModelIndex, QSortFilterProxyMod
 from PySide6.QtGui import QColor, QFont, QPixmap
 from PySide6.QtWidgets import QComboBox, QStyledItemDelegate
 
-from ..core.models import COLUMN_KEYS, COLUMN_LABELS, NUMERIC_COLUMNS, PROCESSES, STATUSES, UNITS, Part, PartList
+from ..core.dwg_io import set_part_thickness
+from ..core.models import (COLUMN_KEYS, COLUMN_LABELS, COMMON_THICKNESS, NUMERIC_COLUMNS, PROCESSES, STATUSES, UNITS,
+                           Part, PartList, to_number)
 from ..core.stock import STOCK_KEYS, STOCK_LABELS, STOCK_NUMERIC, REQUIREMENT_HEADERS, RequirementLine, StockItem, \
     StockList, requirement_row
 from . import theme
@@ -30,6 +32,8 @@ def validate_part(part: Part, duplicates: set[str]) -> tuple[str, str]:
         return "error", "จำนวนต้องมากกว่า 0"
     if part.part_no and part.part_no in duplicates:
         return "warn", "รหัสชิ้นส่วนซ้ำ"
+    if part.outline and not part.thickness:
+        return "warn", "ยังไม่ระบุความหนา (คำนวณน้ำหนักไม่ได้) – ใส่ในช่อง หนา (mm) หรือปุ่ม ปรับความหนา"
     if not part.material:
         return "warn", "ยังไม่ระบุวัสดุ"
     return "", ""
@@ -55,6 +59,7 @@ class PartTableModel(QAbstractTableModel):
     def __init__(self, partlist: PartList, parent=None):
         super().__init__(parent)
         self.partlist = partlist
+        self.densities: dict[str, float] | None = None  # kg/dm3 by material, to weigh a part again
         self._dups: set[str] = set()
         self.modelReset.connect(self._refresh_dups)
         self.dataChanged.connect(self._refresh_dups)
@@ -127,7 +132,13 @@ class PartTableModel(QAbstractTableModel):
         if role != Qt.EditRole or not index.isValid():
             return False
         part = self.partlist.parts[index.row()]
-        part.set(COLUMN_KEYS[index.column()], value)
+        key = COLUMN_KEYS[index.column()]
+        if key == "thickness":  # size text and weight follow the thickness
+            set_part_thickness(part, to_number(value), self.densities)
+        else:
+            part.set(key, value)
+            if key == "material" and part.thickness and part.outline:
+                set_part_thickness(part, part.thickness, self.densities)
         self.dataChanged.emit(self.index(index.row(), 0), self.index(index.row(), self.columnCount() - 1))
         return True
 
@@ -183,7 +194,8 @@ class PartFilterProxy(QSortFilterProxyModel):
 class ChoiceDelegate(QStyledItemDelegate):
     """Combo box editor for status / process / unit (editable so new values are allowed)."""
 
-    CHOICES = {"status": STATUSES, "process": PROCESSES, "unit": UNITS}
+    CHOICES = {"status": STATUSES, "process": PROCESSES, "unit": UNITS,
+               "thickness": [""] + [f"{v:g}" for v in COMMON_THICKNESS]}
 
     def createEditor(self, parent, option, index):  # noqa: N802
         key = COLUMN_KEYS[index.column()]
@@ -196,7 +208,9 @@ class ChoiceDelegate(QStyledItemDelegate):
 
     def setEditorData(self, editor, index):  # noqa: N802
         if isinstance(editor, QComboBox):
-            editor.setCurrentText(str(index.data(Qt.EditRole)))
+            value = index.data(Qt.EditRole)
+            editor.setCurrentText("" if value in (0, None) and COLUMN_KEYS[index.column()] == "thickness"
+                                  else str(value))
         else:
             super().setEditorData(editor, index)
 

@@ -112,6 +112,13 @@ def main() -> int:
     dialog.files.setCurrentRow(0)
     shot(dialog, "7b_dwg_import_bom.png")
     dialog.close()
+    labelled = dwg_io.read_drawing(samples / "RRS-T-SET_frame_parts.dxf")
+    dialog = DrawingImportDialog([labelled], dwg_io.DEFAULT_DENSITIES, w, default_thickness=2.0)
+    dialog.show()
+    dialog.table.item(1, dialog._col("thickness")).setText("4.5")  # one row set by hand
+    dialog.table.selectRow(1)
+    shot(dialog, "7c_dwg_code_name_thickness.png")
+    dialog.close()
 
     mapping = ColumnMappingDialog(prepare_import(samples / "zwcad_tableexport_bom.csv"), "zwcad_tableexport_bom.csv", w)
     mapping.show()

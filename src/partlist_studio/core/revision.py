@@ -17,7 +17,7 @@ CH_CHANGED = "แก้ไข"
 CH_SAME = "เหมือนเดิม"
 CHANGE_ORDER = {CH_ADDED: 0, CH_REMOVED: 1, CH_QTY: 2, CH_CHANGED: 3, CH_SAME: 4}
 
-FIELDS = [("name", "ชื่อ"), ("material", "วัสดุ"), ("spec", "ขนาด/ความหนา"), ("unit", "หน่วย"),
+FIELDS = [("name", "ชื่อ"), ("material", "วัสดุ"), ("spec", "ขนาด"), ("thickness", "ความหนา"), ("unit", "หน่วย"),
           ("weight", "น้ำหนัก/ชิ้น"), ("process", "กระบวนการ"), ("stock_code", "รหัสสโตร์")]
 
 
@@ -60,7 +60,7 @@ def _group(parts: list[Part]) -> dict[str, tuple[Part, float]]:
 
 def _value(p: Part, key: str) -> str:
     v = getattr(p, key)
-    if key == "weight":
+    if key in ("weight", "thickness"):
         return f"{v:g}" if v else ""
     return str(v or "").strip()
 

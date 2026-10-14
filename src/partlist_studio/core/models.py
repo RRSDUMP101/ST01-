@@ -16,7 +16,8 @@ COLUMNS: list[tuple[str, str]] = [
     ("drawing_no", "เลขที่แบบ"),
     ("name", "ชื่อชิ้นส่วน"),
     ("material", "วัสดุ"),
-    ("spec", "ขนาด/ความหนา"),
+    ("spec", "ขนาด"),
+    ("thickness", "หนา (mm)"),
     ("qty", "จำนวน"),
     ("unit", "หน่วย"),
     ("weight", "น้ำหนัก/ชิ้น (kg)"),
@@ -28,11 +29,12 @@ COLUMNS: list[tuple[str, str]] = [
 COLUMN_KEYS = [k for k, _ in COLUMNS]
 COLUMN_LABELS = dict(COLUMNS)
 
-NUMERIC_COLUMNS = {"qty", "weight"}
+NUMERIC_COLUMNS = {"qty", "weight", "thickness"}
 
 STATUSES = ["รอตรวจ", "พร้อม", "ขาด", "รอสั่งซื้อ"]
 PROCESSES = ["", "ตัด/พับ", "เชื่อม", "ยิงทราย/ทำสี", "พ่นสี", "ประกอบ", "ซื้อสำเร็จ"]
 UNITS = ["ชิ้น", "ชุด", "แผ่น", "เส้น", "ม.", "กก.", "ตัว"]
+COMMON_THICKNESS = [1.0, 1.2, 1.5, 1.6, 2.0, 2.3, 2.5, 3.0, 3.2, 4.0, 4.5, 5.0, 6.0, 8.0, 9.0, 10.0, 12.0]  # mm
 
 FILE_SUFFIX = ".rrspl"
 
@@ -45,6 +47,7 @@ class Part:
     name: str = ""
     material: str = ""
     spec: str = ""
+    thickness: float = 0  # mm, plate parts
     qty: float = 1
     unit: str = "ชิ้น"
     weight: float = 0
@@ -54,6 +57,7 @@ class Part:
     remark: str = ""
     image: str = ""  # picture of the part (from the company Parts List workbook), not a table column
     outline: list = field(default_factory=list)  # flat pattern from the drawing: [outer, hole, ...] in mm (nesting)
+    drawing_thickness: float = 0  # thickness the drawing gave (kept so "ตามแบบ" can undo a manual value)
 
     def get(self, key: str):
         return getattr(self, key)
@@ -71,8 +75,11 @@ class Part:
         for key in COLUMN_KEYS:
             if key in data:
                 part.set(key, data[key])
+        if "thickness" not in data:  # files saved before the column existed: "t3.2 x 300 x 150"
+            part.thickness = parse_thickness(part.spec, plain_number=False)
         part.image = str(data.get("image", "") or "")
         part.outline = [[(float(x), float(y)) for x, y in loop] for loop in data.get("outline") or []]
+        part.drawing_thickness = to_number(data.get("drawing_thickness", 0))
         return part
 
 
@@ -182,3 +189,39 @@ def to_number(value) -> float:
             return 0
         number = float(match.group())
     return int(number) if number.is_integer() else number
+
+
+# 't3.2', 'THK 4.5', 'Thickness=3.00', 'SS400 t=6', 'หนา 1.6', 'T: 2'
+_THICK_PREFIX_RE = re.compile(r"(?:thickness|thk\.?|(?<![a-z0-9_\-])t|ความหนา|หนา)\s*[=:.]?\s*(\d+(?:\.\d+)?)",
+                              re.IGNORECASE)
+# '2.3 mm', '4 มิล', '9มิล', '3 มม.' - a number with a thickness unit (a length in mm is longer than a plate is thick)
+_THICK_UNIT_RE = re.compile(r"(?<![\d.])(\d+(?:\.\d+)?)\s*(?:มิล|มม\.?|mm(?![a-z]))", re.IGNORECASE)
+MAX_PLATE_THICKNESS = 50.0
+
+
+def parse_thickness(text, plain_number: bool = True) -> float:
+    """Plate thickness in mm from drawing notes and specs; 0 when the text gives none.
+    plain_number: a bare '3.2' counts (a THK attribute or a thickness column), not in a spec or a note."""
+    text = "" if text is None else str(text)
+    if not text.strip():
+        return 0
+    match = _THICK_PREFIX_RE.search(text)
+    if match:
+        value = float(match.group(1))
+        return _int_or(value) if 0 < value <= MAX_PLATE_THICKNESS else 0
+    match = _THICK_UNIT_RE.search(text)
+    if match and 0 < float(match.group(1)) <= MAX_PLATE_THICKNESS:
+        return _int_or(float(match.group(1)))
+    if plain_number and re.fullmatch(r"\s*\d+(?:\.\d+)?\s*", text):
+        return to_number(text)
+    return 0
+
+
+def _int_or(value: float):
+    return int(value) if float(value).is_integer() else value
+
+
+def strip_thickness(text: str) -> str:
+    """The text without its thickness: 'เฟรมบน t3' -> 'เฟรมบน'."""
+    text = _THICK_UNIT_RE.sub(" ", _THICK_PREFIX_RE.sub(" ", text or ""))
+    return re.sub(r"\s+", " ", text).strip()

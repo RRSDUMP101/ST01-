@@ -1,13 +1,13 @@
-"""ตั้งค่า - DWG converter, cutting layer and material densities."""
+"""ตั้งค่า - DWG converter, cutting layer, plate thickness rule and material densities."""
 
 from __future__ import annotations
 
 from PySide6.QtCore import QUrl
 from PySide6.QtGui import QDesktopServices
-from PySide6.QtWidgets import (QFileDialog, QFormLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QTableWidget,
-                               QTableWidgetItem, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QComboBox, QDoubleSpinBox, QFileDialog, QFormLayout, QHBoxLayout, QHeaderView, QLabel,
+                               QLineEdit, QScrollArea, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
-from ...core.dwg_io import DEFAULT_DENSITIES, find_converter
+from ...core.dwg_io import DEFAULT_DENSITIES, THICKNESS_MODES, find_converter
 from ...core.models import to_number
 from ..state import AppState
 from ..widgets import Card, PageHeader, button
@@ -20,7 +20,16 @@ class SettingsPage(QWidget):
         super().__init__(parent)
         self.state = state
         s = state.settings
-        lay = QVBoxLayout(self)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        scroll = QScrollArea()  # the cards are taller than a small screen
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.NoFrame)
+        body = QWidget()
+        body.setObjectName("Content")
+        scroll.setWidget(body)
+        outer.addWidget(scroll)
+        lay = QVBoxLayout(body)
         lay.setContentsMargins(28, 24, 28, 16)
         lay.setSpacing(14)
         lay.addWidget(PageHeader("ตั้งค่า", "การอ่านแบบ DWG และค่าที่ใช้คำนวณน้ำหนักชิ้นงานจากรูปคลี่"))
@@ -56,9 +65,29 @@ class SettingsPage(QWidget):
         self.cut_layer.setPlaceholderText("ว่างไว้ = อัตโนมัติ (ข้ามเลเยอร์ DIM, TEXT, FRAME, TITLE, CENTER …)")
         self.cut_layer.editingFinished.connect(lambda: s.set("dwg/cut_layer", self.cut_layer.text().strip()))
         form.addRow("เลเยอร์เส้นตัด (Layer)", self.cut_layer)
+        self.thk_mode = QComboBox()
+        for key, label in THICKNESS_MODES.items():
+            self.thk_mode.addItem(label, key)
+        self.thk_mode.setCurrentIndex(max(0, self.thk_mode.findData(s.thickness_mode)))
+        self.thk_mode.currentIndexChanged.connect(
+            lambda _i: setattr(self.state.settings, "thickness_mode", self.thk_mode.currentData()))
+        form.addRow("การกำหนดความหนา", self.thk_mode)
+        self.thk_default = QDoubleSpinBox()
+        self.thk_default.setRange(0, 100)
+        self.thk_default.setDecimals(2)
+        self.thk_default.setSingleStep(0.1)
+        self.thk_default.setSuffix(" mm")
+        self.thk_default.setSpecialValueText("ไม่กำหนด")
+        self.thk_default.setValue(s.default_thickness)
+        self.thk_default.setMaximumWidth(160)
+        self.thk_default.valueChanged.connect(lambda v: setattr(self.state.settings, "default_thickness", v))
+        form.addRow("ความหนาเริ่มต้น / ที่กำหนด", self.thk_default)
         cut.body.addLayout(form)
         hint = QLabel("แนะนำให้ฝ่ายเขียนแบบวาดรูปคลี่บนเลเยอร์เดียวกันเสมอ เช่น <b>CUT</b> และใช้ Title Block ที่มี "
-                      "Attribute: DWG_NO, TITLE, MATERIAL, THK, QTY, REV เพื่อให้อ่านค่าได้ครบ")
+                      "Attribute: DWG_NO, TITLE, MATERIAL, THK, QTY, REV · ถ้าแบบเดียวมีหลายชิ้น ให้เขียนป้ายไว้ใน"
+                      "หรือติดกับรูปคลี่แต่ละชิ้น เช่น <b>RRS-T-001</b> / <b>เฟรมบน</b> / <b>t3</b> (หรือ Thickness=3.00, "
+                      "หนา 3 มิล) หรือใช้บล็อก Attribute PART_NO, NAME, THK – โปรแกรมจะอ่านรหัส ชื่อ "
+                      "และความหนาแยกรายชิ้น")
         hint.setObjectName("Hint")
         hint.setWordWrap(True)
         cut.body.addWidget(hint)

@@ -29,7 +29,7 @@ from glob import glob
 from pathlib import Path
 
 from .mapping import CAD_HEADERS, match_header, normalize
-from .models import COLUMN_KEYS, COLUMN_LABELS, Part, PartList, to_number
+from .models import COLUMN_KEYS, COLUMN_LABELS, Part, PartList, parse_thickness, strip_thickness, to_number
 from .partlist_io import TableImport, prepare_rows
 
 DRAWING_SUFFIXES = {".dwg", ".dxf"}
@@ -72,6 +72,25 @@ TITLE_TAGS: dict[str, list[str]] = {
     "drawn_by": ["drawn", "drawn by", "designer", "ผู้เขียนแบบ", "ผู้ออกแบบ"],
 }
 _TITLE_LOOKUP = {normalize(alias): key for key, aliases in TITLE_TAGS.items() for alias in aliases}
+# Keys that describe one part when written next to / inside its flat pattern (the rest describe the drawing).
+PART_LABEL_KEYS = ("part_no", "name", "thickness", "material", "qty")
+DRAWING_KEYS = {key for key in TITLE_TAGS if key not in PART_LABEL_KEYS}
+
+# Part codes written on a flat pattern: RRS-T-001, RRS-TB-001, STD-M10-30 (letters, then dash groups, some digit).
+_CODE_RE = re.compile(r"(?<![\w-])([A-Za-z]{2,6}(?:-[A-Za-z0-9]+){1,6})(?![\w-])")
+_QTY_RE = re.compile(r"(?:\bqty|\bq'ty|จำนวน)\s*[:=.]?\s*(\d+)|(\d+)\s*(?:ชิ้น|pcs?\b|ea\b)", re.IGNORECASE)
+# Bend notes from sheet-metal programs: '90.0', '-90.0', 'UP 90° R 0', 'DOWN 45°'.
+_BEND_RE = re.compile(r"^(?:up|down|ขึ้น|ลง)?\s*-?\d+(?:\.\d+)?\s*°?(?:\s*r\s*[\d.]+)?$", re.IGNORECASE)
+# A text this many text heights away from a flat pattern is still its label.
+LABEL_DISTANCE = 5.0
+
+THK_FROM_PART = "แบบ (ป้ายที่ชิ้นงาน)"
+THK_FROM_TITLE = "แบบ (Title Block)"
+THK_FROM_BOM = "แบบ (ตาราง BOM)"
+THK_DEFAULT = "ค่าเริ่มต้น"
+THK_MANUAL = "กำหนดเอง"
+THK_MISSING = "ไม่พบในแบบ"
+THICKNESS_MODES = {"drawing": "ตามแบบ (ถ้าแบบไม่ระบุ ใช้ค่าเริ่มต้น)", "fixed": "กำหนดเองทุกชิ้น (ไม่ใช้ค่าในแบบ)"}
 
 # "MATERIAL : SS400", "THK. 3.2", "วัสดุ: SUS304" written as plain text.
 _KEY_VALUE_RE = re.compile(r"^\s*([A-Za-z\u0E00-\u0E7F][\w\u0E00-\u0E7F .]*?)\s*[:=]\s*(.+?)\s*$")
@@ -201,6 +220,8 @@ class TextItem:
     height: float
     layer: str = ""
     width: float = 0  # estimated
+    key: str = ""  # Part field of the attribute tag this text came from (PART_NO -> part_no)
+    title: bool = False  # part of the title block, never the label of one flat pattern
 
     @property
     def left(self) -> float:
@@ -228,6 +249,7 @@ class Profile:
     label: str = ""  # text written inside the outline (part name / number)
     net_area: float = 0
     cut_length: float = 0
+    info: dict = field(default_factory=dict)  # read from its labels: part_no, name, thickness, material, qty
 
     @property
     def bbox(self) -> tuple[float, float, float, float]:
@@ -260,6 +282,7 @@ class DrawingData:
     preview: list[list[tuple[float, float]]] = field(default_factory=list)
     layers: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    inserts: list[list[TextItem]] = field(default_factory=list)  # attribute texts of each block with attributes
 
     @property
     def file_name(self) -> str:
@@ -318,10 +341,12 @@ def read_drawing(path: str | Path, converter: Converter | None = None, cut_layer
                 _collect(entity, data, texts, tables, [], [], depth=0, cut_layer=cut_layer)
 
     data.texts = texts
+    _title_from_attributes(data)
     _title_from_texts(data, texts)
     _find_bom(data, tables, texts)
     data.profiles = _build_profiles(edge_entities, closed_paths, scale)
     _classify_profiles(data)
+    _label_profiles(data)
     if not data.bom and not data.outer_profiles and not data.title_block:
         data.warnings.append("ไม่พบ Title Block, ตาราง BOM หรือรูปคลี่ชิ้นงานในไฟล์นี้")
     return data
@@ -395,17 +420,22 @@ def _collect(entity, data: DrawingData, texts, tables, edge_entities, closed_pat
     if kind == "INSERT":
         name = entity.dxf.name
         attribs = list(entity.attribs)
+        items = []
         for attrib in attribs:
             tag, value = attrib.dxf.tag, _clean_text(attrib.dxf.text)
             if value in _EMPTY_VALUES:
                 value = ""
             data.attributes.append((name, tag, value))
-            key = _TITLE_LOOKUP.get(normalize(tag))
-            if key and value and key not in data.title_block:
-                data.title_block[key] = value
             item = _text_item(attrib, data.units_to_mm)
-            if item:
+            if item is None:
+                item = TextItem("", 0, 0, 0)
+            item.text = value
+            item.key = _TITLE_LOOKUP.get(normalize(tag), "")
+            items.append(item)
+            if value:
                 texts.append(item)
+        if items:
+            data.inserts.append(items)
         if not name.startswith("*") and not attribs and depth == 0:
             data.blocks[name] += 1
         if depth < 2:
@@ -496,6 +526,20 @@ def _text_item(entity, scale: float) -> TextItem | None:
     width = _text_width(text, height)
     x += {0: width / 2, 1: 0, 2: -width / 2}[halign]
     return TextItem(text, x * scale, y * scale, height * scale, entity.dxf.get("layer", "0"), width * scale)
+
+
+def _title_from_attributes(data: DrawingData) -> None:
+    """A block whose attributes name the drawing (DWG_NO, REV, SCALE ...) is the title block. Blocks with only
+    part attributes (PART_NO, NAME, THK) are labels of single flat patterns - unless there is just one of them."""
+    titles = [items for items in data.inserts if any(t.key in DRAWING_KEYS for t in items)]
+    labels = [items for items in data.inserts if items not in titles and any(t.key for t in items)]
+    if not titles and len(labels) == 1:
+        titles = labels
+    for items in titles:
+        for item in items:
+            item.title = True
+            if item.key and item.text and item.key not in data.title_block:
+                data.title_block[item.key] = item.text
 
 
 def _title_from_texts(data: DrawingData, texts: list[TextItem]) -> None:
@@ -669,10 +713,8 @@ def _point_in(profile: Profile, x: float, y: float) -> bool:
 def _classify_profiles(data: DrawingData) -> None:
     profiles = data.profiles
     profiles.sort(key=lambda p: -p.area)
-    # Frames and table borders: they contain the title block / BOM text.
-    table_points = [(t.x, t.y) for t in data.texts if match_header(t.text) or _KEY_VALUE_RE.match(t.text)]
-    table_points += [(t.x, t.y) for t in data.texts
-                     if any(t.text == v for _b, _tag, v in data.attributes if v)]
+    # Frames and table borders: they contain the title block / BOM text (not the labels of one part).
+    table_points = [(t.x, t.y) for t in data.texts if t.title or _is_table_text(t)]
     for prof in profiles:
         if any(_point_in(prof, x, y) for x, y in table_points):
             prof.is_container = True
@@ -708,19 +750,122 @@ def _classify_profiles(data: DrawingData) -> None:
             prof.label = " ".join(labels[:2])
 
 
+def _is_table_text(t: TextItem) -> bool:
+    if t.key:  # attribute of a part label block
+        return False
+    match = _KEY_VALUE_RE.match(t.text)
+    if match:
+        return _TITLE_LOOKUP.get(normalize(match.group(1))) in DRAWING_KEYS
+    return len(normalize(t.text)) > 1 and match_header(t.text) not in (None, "thickness")
+
+
+# ---- labels of each flat pattern: code, name, thickness ------------------
+def _bbox_gap(bbox: tuple[float, float, float, float], t: TextItem) -> float:
+    """Distance between a part's bounding box and the box of a text (0 when they overlap)."""
+    x0, y0, x1, y1 = bbox
+    dx = max(x0 - t.right, 0, t.left - x1)
+    dy = max(y0 - (t.y + t.height / 2), 0, (t.y - t.height / 2) - y1)
+    return math.hypot(dx, dy)
+
+
+def _label_profiles(data: DrawingData) -> None:
+    """Give every text near a flat pattern to that part (inside it, or within LABEL_DISTANCE text heights)
+    and read its code (RRS-T-001), name (เฟรมบน), thickness (t3 / Thickness=3.00 / หนา 3 มิล), material, qty."""
+    profiles = data.profiles
+    outers = [i for i, p in enumerate(profiles) if p.is_outer]
+    if not outers:
+        return
+    boxes = {i: profiles[i].bbox for i in outers}
+    containers = [p for p in profiles if p.is_container]
+    part_frames = {i: {c for c, frame in enumerate(containers) if _point_in(frame, *profiles[i].points[0])}
+                   for i in outers}
+    near: dict[int, list[tuple[float, TextItem]]] = {i: [] for i in outers}
+    for t in data.texts:
+        if t.title or not t.text:
+            continue
+        inside = [i for i in outers if _point_in(profiles[i], t.x, t.y)]
+        if inside:
+            owner, gap = min(inside, key=lambda i: profiles[i].area), 0.0
+        else:
+            gap, owner = min((_bbox_gap(boxes[i], t), i) for i in outers)
+            if gap > LABEL_DISTANCE * max(t.height, 1e-6):
+                continue
+            frames = {c for c, frame in enumerate(containers) if _point_in(frame, t.x, t.y)}
+            if not frames <= part_frames[owner]:  # a title block / table cell next to the part
+                continue
+        near[owner].append((gap, t))
+    for i, items in near.items():
+        profiles[i].info = read_labels(items)
+
+
+def _name_text(text: str) -> str:
+    """The text when it can be a part name: not a bend note ('90.0', 'UP 90° R 0') or a lone letter ('t')."""
+    text = re.sub(r"\s+", " ", text or "").strip(" -:=,/")
+    letters = sum(1 for ch in text if ch.isalpha())
+    if _BEND_RE.match(text) or (letters < 2 and not re.fullmatch(r"[A-Za-z]{1,3}\d+", text)):
+        return ""
+    return text
+
+
+def read_labels(items: list[tuple[float, TextItem]]) -> dict:
+    """items: (distance from the part, text). Nearer texts win; an attribute or 'KEY: value' wins over a guess.
+    A name written with no key is kept as 'label_name' (the one closest to the code, else the nearest)."""
+    info: dict = {}
+    names: list[tuple[int, float, float, str, float, float]] = []  # (rank, gap, -height, name, x, y)
+    code_at = None
+    for gap, t in sorted(items, key=lambda it: it[0]):
+        text = t.text.strip()
+        key, value = t.key, text
+        if not key:
+            match = _KEY_VALUE_RE.match(text)
+            if match:
+                key, value = _TITLE_LOOKUP.get(normalize(match.group(1)), "-"), match.group(2).strip()
+        if key:
+            if key not in PART_LABEL_KEYS or not value or value in _EMPTY_VALUES:
+                continue  # 'Main Unit=Millimeters', 'DWG NO: ...'
+            if key == "thickness":
+                value = parse_thickness(value)
+            elif key == "qty":
+                value = to_number(value)
+            elif key == "material" and value.isdigit():
+                continue  # 'Material=1' from sheet-metal exports
+            elif key == "part_no" and _CODE_RE.fullmatch(value):
+                value = value.upper()
+            if value and key not in info:
+                info[key] = value
+            continue
+        code = next((m for m in _CODE_RE.finditer(text) if any(ch.isdigit() for ch in m.group(1))), None)
+        rest = text
+        if code:
+            info.setdefault("part_no", code.group(1).upper())
+            code_at = code_at or (t.x, t.y)
+            rest = (text[:code.start()] + " " + text[code.end():]).strip()
+        thickness = parse_thickness(rest, plain_number=False)
+        if thickness:
+            info.setdefault("thickness", thickness)
+        qty = _QTY_RE.search(rest)
+        if qty:
+            info.setdefault("qty", to_number(qty.group(1) or qty.group(2)))
+        if code:  # 'RRS-T-001 เฟรมบน t3': the rest of the code's text is the name
+            name = _name_text(_QTY_RE.sub(" ", strip_thickness(rest)))
+            rank = 0
+        else:  # a note with a thickness or a quantity is not a name ('หนา 9มิล 4 ชิ้น')
+            name = "" if thickness or qty else _name_text(text)
+            rank = 1
+        if name:
+            names.append((rank, gap, -t.height, name, t.x, t.y))
+    if "name" not in info and names:
+        def order(n):
+            near = n[1] if code_at is None else math.hypot(n[4] - code_at[0], n[5] - code_at[1])
+            return n[0], near, n[2]
+
+        info["label_name"] = min(names, key=order)[3]
+    return info
+
+
 # --------------------------------------------------------------------------
 # Drawing -> Part List rows
 # --------------------------------------------------------------------------
-def parse_thickness(text: str) -> float:
-    """'t3.2', 'THK 3', '3.2 mm', 'SS400 t=4.5' -> mm."""
-    if not text:
-        return 0
-    match = re.search(r"(?:\bt|thk\.?|หนา)\s*=?\s*(\d+(?:\.\d+)?)", str(text), re.IGNORECASE)
-    if match:
-        return float(match.group(1))
-    if re.fullmatch(r"\s*\d+(?:\.\d+)?\s*(mm)?\s*", str(text), re.IGNORECASE):
-        return float(to_number(text))
-    return 0
 
 
 def density_for(material: str, densities: dict[str, float] | None = None) -> float:
@@ -743,14 +888,31 @@ class CandidatePart:
     source: str  # "bom" | "title" | "profile" | "block"
     profile_index: int | None = None
     selected: bool = True
+    thickness_source: str = ""  # THK_FROM_PART, THK_FROM_TITLE, THK_DEFAULT, THK_MANUAL ... ("" = not a plate)
+
+
+def resolve_thickness(own: float, drawing: float, default: float = 0,
+                      mode: str = "drawing") -> tuple[float, str]:
+    """(thickness, where it came from). own = written on the part, drawing = title block,
+    default = the user's value; mode "fixed" uses the default for every part whatever the drawing says."""
+    if mode == "fixed" and default:
+        return default, THK_MANUAL
+    if own:
+        return own, THK_FROM_PART
+    if drawing:
+        return drawing, THK_FROM_TITLE
+    if default:
+        return default, THK_DEFAULT
+    return 0, THK_MISSING
 
 
 def drawing_to_candidates(data: DrawingData, densities: dict[str, float] | None = None,
-                          include_blocks: bool = False) -> list[CandidatePart]:
-    """Propose Part List rows from a drawing. The user reviews them before they are added."""
+                          include_blocks: bool = False, default_thickness: float = 0,
+                          thickness_mode: str = "drawing") -> list[CandidatePart]:
+    """Propose Part List rows from a drawing. The user reviews them before they are added.
+    Each flat pattern takes its code / name / thickness from its own labels first, then from the title block."""
     tb = data.title_block
     drawing_no = tb.get("drawing_no") or Path(data.file_name).stem
-    thickness = data.thickness
     material = tb.get("material", "")
     candidates: list[CandidatePart] = []
 
@@ -759,33 +921,50 @@ def drawing_to_candidates(data: DrawingData, densities: dict[str, float] | None 
             part.drawing_no = part.drawing_no or drawing_no
             if not part.material and material:
                 part.material = material
-            candidates.append(CandidatePart(part, "bom"))
+            own = part.thickness or parse_thickness(part.spec, plain_number=False)
+            cand = CandidatePart(part, "bom")
+            if own:  # plate rows only - bolts and bought parts have no thickness
+                part.drawing_thickness = own
+                value, source = resolve_thickness(own, 0, default_thickness, thickness_mode)
+                cand.thickness_source = THK_FROM_BOM if source == THK_FROM_PART else source
+                set_part_thickness(part, value, densities)
+            candidates.append(cand)
 
     outers = [(i, p) for i, p in enumerate(data.profiles) if p.is_outer]
     if not data.bom and outers:
         single = len(outers) == 1
         for n, (i, prof) in enumerate(outers, start=1):
             w, h = prof.size
+            lab = prof.info
+            own = to_number(lab.get("thickness", 0))
+            thickness, source = resolve_thickness(own, data.thickness, default_thickness, thickness_mode)
+            mat = lab.get("material") or material
             part = Part(
-                part_no=(tb.get("part_no") or tb.get("drawing_no", "")) if single else "",
+                part_no=lab.get("part_no") or ((tb.get("part_no") or tb.get("drawing_no", "")) if single else ""),
                 drawing_no=drawing_no,
-                name=(tb.get("name", "") if single else "") or prof.label or f"ชิ้นที่ {n}",
-                material=material,
-                spec=f"t{_fmt(thickness)} x {w:.0f} x {h:.0f}" if thickness else f"{w:.0f} x {h:.0f}",
-                qty=(to_number(tb.get("qty", 1)) or 1) if single else 1,
+                name=lab.get("name") or (tb.get("name", "") if single else "") or lab.get("label_name")
+                or _name_text(prof.label) or f"ชิ้นที่ {n}",
+                material=mat,
+                spec=plate_spec(thickness, w, h),
+                thickness=thickness,
+                qty=lab.get("qty") or ((to_number(tb.get("qty", 1)) or 1) if single else 1),
                 process="ตัด/พับ",
                 remark=f"พื้นที่สุทธิ {prof.net_area / 1e6:.4f} m² · ระยะตัด {prof.cut_length:,.0f} mm"
                        f" · รู {len(prof.holes)}",
             )
+            part.drawing_thickness = own or data.thickness
             if thickness:
-                part.weight = plate_weight(prof.net_area, thickness, density_for(material, densities))
+                part.weight = plate_weight(prof.net_area, thickness, density_for(mat, densities))
             part.outline = profile_outline(data, prof)
-            candidates.append(CandidatePart(part, "profile", profile_index=i))
+            candidates.append(CandidatePart(part, "profile", profile_index=i, thickness_source=source))
+        candidates.sort(key=lambda c: (not c.part.part_no, c.part.part_no))  # by code, uncoded parts last
     elif not data.bom and (tb.get("name") or tb.get("part_no")):
-        candidates.append(CandidatePart(Part(
-            part_no=tb.get("part_no", ""), drawing_no=drawing_no, name=tb.get("name", ""),
-            material=material, spec=f"t{_fmt(thickness)}" if thickness else "",
-            qty=to_number(tb.get("qty", 1)) or 1), "title"))
+        thickness, source = resolve_thickness(0, data.thickness, default_thickness, thickness_mode)
+        part = Part(part_no=tb.get("part_no", ""), drawing_no=drawing_no, name=tb.get("name", ""),
+                    material=material, spec=f"t{_fmt(thickness)}" if thickness else "", thickness=thickness,
+                    qty=to_number(tb.get("qty", 1)) or 1)
+        part.drawing_thickness = data.thickness
+        candidates.append(CandidatePart(part, "title", thickness_source=source))
 
     if include_blocks:
         for name, count in sorted(data.blocks.items()):
@@ -793,6 +972,54 @@ def drawing_to_candidates(data: DrawingData, densities: dict[str, float] | None 
                 Part(name=name, drawing_no=drawing_no, qty=count, process="ซื้อสำเร็จ", unit="ตัว"),
                 "block", selected=False))
     return candidates
+
+
+def plate_spec(thickness: float, w: float, h: float) -> str:
+    return f"t{_fmt(thickness)} x {w:.0f} x {h:.0f}" if thickness else f"{w:.0f} x {h:.0f}"
+
+
+_SPEC_THICK_RE = re.compile(r"^\s*(?:t|thk\.?)\s*=?\s*\d+(?:\.\d+)?\s*(?:mm)?\s*(?:[x×*]\s*)?", re.IGNORECASE)
+_SPEC_SIZE_RE = re.compile(r"^\s*\d+(?:\.\d+)?\s*[x×*]\s*\d+(?:\.\d+)?\s*$")
+
+
+def spec_with_thickness(spec: str, thickness: float) -> str:
+    """'t3 x 500 x 200' -> 't4 x 500 x 200'; '500 x 200' -> 't4 x 500 x 200'; other specs ('50x50x2.3') stay."""
+    spec = spec or ""
+    match = _SPEC_THICK_RE.match(spec)
+    if match:
+        rest = spec[match.end():].strip()
+        if not thickness:
+            return rest
+        return f"t{_fmt(thickness)} x {rest}" if rest else f"t{_fmt(thickness)}"
+    if not thickness:
+        return spec
+    if not spec.strip():
+        return f"t{_fmt(thickness)}"
+    if _SPEC_SIZE_RE.match(spec):
+        return f"t{_fmt(thickness)} x {spec.strip()}"
+    return spec
+
+
+def outline_net_area(outline: list) -> float:
+    """mm2 of a stored flat pattern: outer loop minus its holes."""
+    if not outline:
+        return 0
+    loops = [abs(_area([(float(x), float(y)) for x, y in loop])) for loop in outline]
+    return max(loops[0] - sum(loops[1:]), 0)
+
+
+def set_part_thickness(part: Part, thickness: float, densities: dict[str, float] | None = None) -> None:
+    """Change a part's thickness and keep its size text and weight in step: a flat pattern is weighed again
+    from its area, a part without one (from a BOM) has its weight scaled by the new / old thickness."""
+    thickness = to_number(thickness)
+    old = part.thickness
+    part.thickness = thickness
+    part.spec = spec_with_thickness(part.spec, thickness)
+    area = outline_net_area(part.outline)
+    if area:
+        part.weight = plate_weight(area, thickness, density_for(part.material, densities)) if thickness else 0
+    elif old and thickness and part.weight:
+        part.weight = round(part.weight * thickness / old, 3)
 
 
 def profile_outline(data: DrawingData, prof: Profile) -> list[list[tuple[float, float]]]:
@@ -806,10 +1033,11 @@ def _fmt(value: float) -> str:
     return f"{value:g}"
 
 
-def drawing_record(data: DrawingData, part_count: int):
+def drawing_record(data: DrawingData, part_count: int, parts: list[Part] | None = None):
     from .models import DrawingRecord
 
     tb = data.title_block
+    thicknesses = sorted({p.thickness for p in parts or [] if p.thickness})
     return DrawingRecord(
         file_name=data.file_name,
         path=data.source_path or data.path,
@@ -817,7 +1045,8 @@ def drawing_record(data: DrawingData, part_count: int):
         title=tb.get("name", ""),
         revision=tb.get("revision", ""),
         material=tb.get("material", ""),
-        thickness=_fmt(data.thickness) if data.thickness else "",
+        thickness=", ".join(_fmt(t) for t in thicknesses) if thicknesses else
+        (_fmt(data.thickness) if data.thickness else ""),
         part_count=part_count,
     )
 
@@ -826,7 +1055,8 @@ def drawing_record(data: DrawingData, part_count: int):
 # Export: Part List as a table drawing ZWCAD can open / insert
 # --------------------------------------------------------------------------
 _DXF_COL_WIDTH = {"item_no": 12, "part_no": 35, "drawing_no": 35, "name": 60, "material": 28, "spec": 40,
-                  "qty": 15, "unit": 15, "weight": 22, "stock_code": 30, "process": 28, "status": 22, "remark": 60}
+                  "thickness": 18, "qty": 15, "unit": 15, "weight": 22, "stock_code": 30, "process": 28, "status": 22,
+                  "remark": 60}
 
 
 def export_dxf_table(partlist: PartList, path: str | Path, thai_headers: bool = True,
@@ -868,7 +1098,7 @@ def export_dxf_table(partlist: PartList, path: str | Path, thai_headers: bool = 
         y = -(r + 0.5) * row_h
         x = 0.0
         for key, w, value in zip(COLUMN_KEYS, widths, row):
-            centered = r == 0 or key in ("item_no", "qty", "unit", "weight", "status")
+            centered = r == 0 or key in ("item_no", "thickness", "qty", "unit", "weight", "status")
             if centered:
                 put(value, x + w / 2, y, TextEntityAlignment.MIDDLE_CENTER)
             else:
@@ -881,7 +1111,7 @@ def export_dxf_table(partlist: PartList, path: str | Path, thai_headers: bool = 
 
 def _dxf_value(part: Part, key: str) -> str:
     value = part.get(key)
-    if key == "weight":
+    if key in ("weight", "thickness"):
         return f"{value:g}" if value else ""
     if key == "qty":
         return f"{value:g}"

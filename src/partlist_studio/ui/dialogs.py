@@ -3,15 +3,18 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QGridLayout,
-                               QHBoxLayout, QHeaderView, QLabel, QListWidget, QListWidgetItem, QSpinBox, QSplitter,
-                               QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget)
+from PySide6.QtGui import QColor
+from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox,
+                               QGridLayout, QHBoxLayout, QHeaderView, QLabel, QListWidget, QListWidgetItem, QSpinBox,
+                               QSplitter, QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget)
 
-from ..core.dwg_io import CandidatePart, DrawingData, drawing_to_candidates
-from ..core.models import COLUMN_KEYS, COLUMN_LABELS, NUMERIC_COLUMNS, Part
+from ..core.dwg_io import (THICKNESS_MODES, THK_DEFAULT, THK_FROM_BOM, THK_FROM_PART, THK_MANUAL, THK_MISSING,
+                           CandidatePart, DrawingData, drawing_to_candidates, resolve_thickness, set_part_thickness)
+from ..core.models import COLUMN_KEYS, COLUMN_LABELS, COMMON_THICKNESS, NUMERIC_COLUMNS, Part, to_number
 from ..core.mapping import auto_map
 from ..core.partlist_io import TableImport
-from .widgets import DrawingPreview
+from . import theme
+from .widgets import DrawingPreview, button
 
 NOT_USED = "— ไม่ใช้ —"
 
@@ -111,21 +114,35 @@ class ColumnMappingDialog(QDialog):
 
 
 # --------------------------------------------------------------------------
-CAND_COLUMNS = ["part_no", "drawing_no", "name", "material", "spec", "qty", "unit", "weight", "process", "remark"]
+CAND_COLUMNS = ["part_no", "drawing_no", "name", "material", "spec", "thickness", "qty", "unit", "weight", "process",
+                "remark"]
 SOURCE_LABEL = {"bom": "ตาราง BOM", "profile": "รูปคลี่", "title": "Title Block", "block": "บล็อกมาตรฐาน"}
+THK_SOURCE_COL = "_thk_source"
+
+
+def thickness_color(source: str) -> QColor | None:
+    if source == THK_MISSING:
+        return theme.ERROR_BG
+    if source in (THK_DEFAULT, THK_MANUAL):
+        return theme.WARN_BG
+    return None
 
 
 class DrawingImportDialog(QDialog):
-    """Review what was found in each drawing, tick the rows to add to the Part List."""
+    """Review what was found in each drawing, tick the rows to add to the Part List.
+    Code, name and thickness come from the labels of each flat pattern; the thickness can be set here."""
 
-    def __init__(self, drawings: list[DrawingData], densities: dict[str, float], parent=None):
+    def __init__(self, drawings: list[DrawingData], densities: dict[str, float], parent=None,
+                 default_thickness: float = 0, thickness_mode: str = "drawing"):
         super().__init__(parent)
         self.drawings = drawings
         self.densities = densities
         self.candidates: dict[int, list[CandidatePart]] = {
-            i: drawing_to_candidates(d, densities, include_blocks=True) for i, d in enumerate(drawings)}
+            i: drawing_to_candidates(d, densities, include_blocks=True, default_thickness=default_thickness,
+                                     thickness_mode=thickness_mode) for i, d in enumerate(drawings)}
+        self._manual: set[int] = set()  # id() of candidates whose thickness was set row by row
         self.setWindowTitle("นำเข้าแบบ 2D จาก ZWCAD (DWG/DXF)")
-        self.resize(1280, 760)
+        self.resize(1320, 800)
 
         lay = QVBoxLayout(self)
         split = QSplitter(Qt.Horizontal)
@@ -151,9 +168,9 @@ class DrawingImportDialog(QDialog):
         self.info_labels: dict[str, QLabel] = {}
         for r, (key, label) in enumerate([("drawing_no", "เลขที่แบบ"), ("name", "ชื่อแบบ/ชิ้นงาน"),
                                           ("material", "วัสดุ"), ("thickness", "ความหนา (mm)"),
-                                          ("qty", "จำนวน"), ("revision", "Rev."), ("bom", "ตาราง BOM"),
-                                          ("profiles", "รูปคลี่ที่พบ"), ("blocks", "บล็อกมาตรฐาน"),
-                                          ("warn", "หมายเหตุ")]):
+                                          ("labels", "ป้ายที่ชิ้นงาน"), ("qty", "จำนวน"), ("revision", "Rev."),
+                                          ("bom", "ตาราง BOM"), ("profiles", "รูปคลี่ที่พบ"),
+                                          ("blocks", "บล็อกมาตรฐาน"), ("warn", "หมายเหตุ")]):
             name = QLabel(label)
             name.setObjectName("Hint")
             value = QLabel("-")
@@ -164,13 +181,57 @@ class DrawingImportDialog(QDialog):
             self.info_labels[key] = value
         grid.setRowStretch(20, 1)
         top.addWidget(info)
-        top.setSizes([700, 320])
+        top.setSizes([700, 340])
         rlay.addWidget(top, 3)
 
+        # ---- thickness: as drawn, a default for parts without one, or one value for every part
+        thk = QHBoxLayout()
+        thk.addWidget(QLabel("<b>ความหนา</b>"))
+        self.thk_mode = QComboBox()
+        for key, label in THICKNESS_MODES.items():
+            self.thk_mode.addItem(label, key)
+        self.thk_mode.setCurrentIndex(max(0, self.thk_mode.findData(thickness_mode)))
+        self.thk_mode.setToolTip("ตามแบบ: ใช้ค่าที่เขียนไว้ที่ชิ้นงาน (t3, Thickness=3.00, หนา 3 มิล, Attribute THK) "
+                                 "ถ้าไม่มีใช้ THK ใน Title Block แล้วจึงใช้ค่าเริ่มต้น\n"
+                                 "กำหนดเองทุกชิ้น: ใช้ค่าที่ตั้งกับทุกชิ้นที่เป็นแผ่น")
+        thk.addWidget(self.thk_mode)
+        self.thk_label = QLabel()
+        thk.addWidget(self.thk_label)
+        self.thk_value = QDoubleSpinBox()
+        self.thk_value.setRange(0, 100)
+        self.thk_value.setDecimals(2)
+        self.thk_value.setSingleStep(0.1)
+        self.thk_value.setSuffix(" mm")
+        self.thk_value.setSpecialValueText("ไม่กำหนด")
+        self.thk_value.setValue(default_thickness)
+        self.thk_value.setMinimumWidth(110)
+        thk.addWidget(self.thk_value)
+        self.thk_common = QComboBox()
+        self.thk_common.addItem("ค่าที่ใช้บ่อย…", 0.0)
+        for v in COMMON_THICKNESS:
+            self.thk_common.addItem(f"{v:g} mm", v)
+        self.thk_common.activated.connect(self._common_picked)
+        thk.addWidget(self.thk_common)
+        self.apply_btn = button("ใช้กับแถวที่เลือก", tooltip="ตั้งความหนาของแถวที่เลือก (คลิก/Shift/Ctrl เลือกหลายแถว) "
+                                                            "แล้วคำนวณขนาดและน้ำหนักใหม่")
+        self.apply_btn.clicked.connect(self._apply_selected)
+        thk.addWidget(self.apply_btn)
+        self.reset_btn = button("คืนค่าตามแบบ", tooltip="แถวที่เลือก (หรือทั้งแบบนี้ถ้าไม่ได้เลือก) กลับไปใช้ความหนาที่อ่านจากแบบ")
+        self.reset_btn.clicked.connect(self._reset_selected)
+        thk.addWidget(self.reset_btn)
+        thk.addStretch(1)
+        rlay.addLayout(thk)
+        self.thk_mode.currentIndexChanged.connect(self._thickness_rule_changed)
+        self.thk_value.valueChanged.connect(self._thickness_rule_changed)
+
         self.tabs = QTabWidget()
+        self.columns = ["_check", "_source"] + CAND_COLUMNS
+        self.columns.insert(self.columns.index("thickness") + 1, THK_SOURCE_COL)
+        labels = {"_check": "เพิ่ม", "_source": "ที่มา", THK_SOURCE_COL: "ความหนาจาก"}
         self.table = QTableWidget()
-        self.table.setColumnCount(len(CAND_COLUMNS) + 2)
-        self.table.setHorizontalHeaderLabels(["เพิ่ม", "ที่มา"] + [COLUMN_LABELS[k] for k in CAND_COLUMNS])
+        self.table.setColumnCount(len(self.columns))
+        self.table.setHorizontalHeaderLabels([labels.get(k) or COLUMN_LABELS[k] for k in self.columns])
+        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.itemChanged.connect(self._item_changed)
@@ -192,7 +253,7 @@ class DrawingImportDialog(QDialog):
         opts.addWidget(self.summary)
         rlay.addLayout(opts)
         split.addWidget(right)
-        split.setSizes([230, 1050])
+        split.setSizes([230, 1090])
 
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.button(QDialogButtonBox.Ok).setText("เพิ่มเข้า Part List")
@@ -204,10 +265,22 @@ class DrawingImportDialog(QDialog):
 
         self._current = -1
         self._loading = False
+        self._update_thk_label()
         if drawings:
             self.files.setCurrentRow(0)
 
     # ---------------------------------------------------------------------
+    @property
+    def thickness_mode(self) -> str:
+        return self.thk_mode.currentData()
+
+    @property
+    def default_thickness(self) -> float:
+        return round(self.thk_value.value(), 3)
+
+    def _col(self, key: str) -> int:
+        return self.columns.index(key)
+
     def _show(self, index: int) -> None:
         self._store_table()
         self._current = index
@@ -218,13 +291,20 @@ class DrawingImportDialog(QDialog):
         self.info_labels["drawing_no"].setText(tb.get("drawing_no", "-"))
         self.info_labels["name"].setText(tb.get("name", "-"))
         self.info_labels["material"].setText(tb.get("material", "-"))
-        self.info_labels["thickness"].setText(f"{data.thickness:g}" if data.thickness else "-")
+        self.info_labels["thickness"].setText(f"{data.thickness:g} (Title Block)" if data.thickness
+                                              else "Title Block ไม่ระบุ")
+        outers = data.outer_profiles
+        labelled = [p for p in outers if p.info]
+        self.info_labels["labels"].setText(
+            f"รหัส {sum(1 for p in outers if p.info.get('part_no'))} · ชื่อ "
+            f"{sum(1 for p in outers if p.info.get('name') or p.info.get('label_name'))} · ความหนา "
+            f"{sum(1 for p in outers if p.info.get('thickness'))} จาก {len(outers)} ชิ้น" if labelled else
+            ("ไม่พบ (เขียน รหัส / ชื่อ / t3 ไว้ใน หรือติดกับรูปคลี่แต่ละชิ้น)" if outers else "-"))
         self.info_labels["qty"].setText(tb.get("qty", "-"))
         self.info_labels["revision"].setText(tb.get("revision", "-"))
         self.info_labels["bom"].setText(
             f"{len(data.bom.data_rows)} แถว ({'ACAD_TABLE' if data.bom_source == 'table' else 'เส้น + ข้อความ'})"
             if data.bom else "ไม่พบ")
-        outers = data.outer_profiles
         self.info_labels["profiles"].setText(
             f"{len(outers)} ชิ้น · รู/ช่อง {sum(len(p.holes) for p in outers)}" if outers else "ไม่พบ")
         self.info_labels["blocks"].setText(", ".join(f"{k} ×{v}" for k, v in data.blocks.most_common(6)) or "-")
@@ -244,18 +324,46 @@ class DrawingImportDialog(QDialog):
             check.setCheckState(Qt.Checked if cand.selected else Qt.Unchecked)
             self.table.setItem(r, 0, check)
             src = QTableWidgetItem(SOURCE_LABEL.get(cand.source, cand.source))
-            src.setFlags(Qt.ItemIsEnabled)
+            src.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
             self.table.setItem(r, 1, src)
-            for c, key in enumerate(CAND_COLUMNS, start=2):
-                value = cand.part.get(key)
-                if key in NUMERIC_COLUMNS:
-                    text = f"{value:g}" if value or key == "qty" else ""
-                else:
-                    text = str(value)
-                self.table.setItem(r, c, QTableWidgetItem(text))
+            self._fill_row(r, cand)
         self.table.resizeColumnsToContents()
+        self.table.setColumnWidth(self._col("name"), max(self.table.columnWidth(self._col("name")), 160))
         self._loading = False
         self._refresh_preview()
+
+    def _fill_row(self, r: int, cand: CandidatePart) -> None:
+        loading, self._loading = self._loading, True
+        for key in CAND_COLUMNS:
+            value = cand.part.get(key)
+            if key in NUMERIC_COLUMNS:
+                text = f"{value:g}" if value or key == "qty" else ""
+            else:
+                text = str(value)
+            item = QTableWidgetItem(text)
+            if key == "thickness":
+                item.setToolTip("พิมพ์ค่าใหม่ได้ (mm) – ขนาดและน้ำหนักจะคำนวณใหม่")
+            self.table.setItem(r, self._col(key), item)
+        src = QTableWidgetItem(cand.thickness_source)
+        src.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+        color = thickness_color(cand.thickness_source)
+        for c in (self._col("thickness"), self._col(THK_SOURCE_COL)):
+            cell = src if c == self._col(THK_SOURCE_COL) else self.table.item(r, c)
+            if color is not None:
+                cell.setBackground(color)
+        if cand.thickness_source == THK_MISSING:
+            src.setToolTip("แบบไม่ระบุความหนา – พิมพ์ค่าในช่อง หนา (mm) หรือตั้งค่าเริ่มต้นด้านบน")
+        elif cand.part.drawing_thickness and cand.part.drawing_thickness != cand.part.thickness:
+            src.setToolTip(f"ในแบบเขียนไว้ {cand.part.drawing_thickness:g} mm")
+        self.table.setItem(r, self._col(THK_SOURCE_COL), src)
+        self._loading = loading
+
+    def _store_row(self, r: int, cand: CandidatePart, skip: str = "") -> None:
+        cand.selected = self.table.item(r, 0).checkState() == Qt.Checked
+        for key in CAND_COLUMNS:
+            item = self.table.item(r, self._col(key)) if key != skip else None
+            if item is not None:
+                cand.part.set(key, item.text())
 
     def _store_table(self) -> None:
         if self._current < 0:
@@ -263,16 +371,106 @@ class DrawingImportDialog(QDialog):
         for r, cand in enumerate(self.candidates[self._current]):
             if r >= self.table.rowCount():
                 break
-            cand.selected = self.table.item(r, 0).checkState() == Qt.Checked
-            for c, key in enumerate(CAND_COLUMNS, start=2):
-                item = self.table.item(r, c)
-                if item is not None:
-                    cand.part.set(key, item.text())
+            self._store_row(r, cand)
 
     def _item_changed(self, item: QTableWidgetItem) -> None:
-        if self._loading or item.column() != 0:
+        if self._loading or self._current < 0:
+            return
+        col, r = item.column(), item.row()
+        if col == 0:
+            self._store_table()
+            self._refresh_preview()
+            return
+        cand = self.candidates[self._current][r]
+        if col == self._col("thickness"):
+            self._store_row(r, cand, skip="thickness")  # the old value scales the weight of a BOM row
+            self._set_thickness(cand, to_number(item.text()), THK_MANUAL)
+            self._fill_row(r, cand)
+            self._refresh_preview()
+        elif col == self._col("material") and cand.part.thickness:
+            self._store_row(r, cand)
+            set_part_thickness(cand.part, cand.part.thickness, self.densities)  # weigh with the new density
+            self._fill_row(r, cand)
+
+    # ---- thickness ---------------------------------------------------------
+    def _plate(self, cand: CandidatePart) -> bool:
+        return cand.source in ("profile", "title") or (cand.source == "bom" and bool(cand.thickness_source))
+
+    def _own_thickness(self, index: int, cand: CandidatePart) -> tuple[float, float]:
+        """(thickness written on the part / in its BOM row, thickness of the title block)."""
+        data = self.drawings[index]
+        if cand.source == "profile":
+            return to_number(data.profiles[cand.profile_index].info.get("thickness", 0)), data.thickness
+        if cand.source == "bom":
+            return cand.part.drawing_thickness, 0
+        return 0, data.thickness
+
+    def _set_thickness(self, cand: CandidatePart, value: float, source: str) -> None:
+        set_part_thickness(cand.part, value, self.densities)
+        cand.thickness_source = source if value else THK_MISSING
+        self._manual.add(id(cand))
+
+    def _resolve(self, index: int, cand: CandidatePart, mode: str) -> None:
+        own, drawing = self._own_thickness(index, cand)
+        value, source = resolve_thickness(own, drawing, self.default_thickness, mode)
+        if cand.source == "bom" and source == THK_FROM_PART:
+            source = THK_FROM_BOM
+        set_part_thickness(cand.part, value, self.densities)
+        cand.thickness_source = source
+
+    def _thickness_rule_changed(self, *_args) -> None:
+        self._update_thk_label()
+        self._store_table()
+        for index, cands in self.candidates.items():
+            for cand in cands:
+                if self._plate(cand) and id(cand) not in self._manual:
+                    self._resolve(index, cand, self.thickness_mode)
+        self._reload_rows()
+
+    def _update_thk_label(self) -> None:
+        fixed = self.thickness_mode == "fixed"
+        self.thk_label.setText("ความหนาทุกชิ้น" if fixed else "ค่าเริ่มต้น (แบบไม่ระบุ)")
+
+    def _common_picked(self, index: int) -> None:
+        value = self.thk_common.itemData(index)
+        if value:
+            self.thk_value.setValue(value)
+        self.thk_common.setCurrentIndex(0)
+
+    def _rows(self, all_if_none: bool) -> list[int]:
+        rows = sorted({i.row() for i in self.table.selectedIndexes()})
+        if not rows and all_if_none:
+            rows = list(range(self.table.rowCount()))
+        return rows
+
+    def _apply_selected(self) -> None:
+        if self._current < 0:
             return
         self._store_table()
+        cands = self.candidates[self._current]
+        for r in self._rows(all_if_none=False):
+            if cands[r].source != "block":
+                self._set_thickness(cands[r], self.default_thickness, THK_MANUAL)
+        self._reload_rows()
+
+    def _reset_selected(self) -> None:
+        if self._current < 0:
+            return
+        self._store_table()
+        cands = self.candidates[self._current]
+        for r in self._rows(all_if_none=True):
+            cand = cands[r]
+            if self._plate(cand):
+                self._resolve(self._current, cand, "drawing")
+                self._manual.add(id(cand))  # stays as drawn even when the rule says one value for all
+        self._reload_rows()
+
+    def _reload_rows(self) -> None:
+        if self._current < 0:
+            return
+        for r, cand in enumerate(self.candidates[self._current]):
+            if r < self.table.rowCount():
+                self._fill_row(r, cand)
         self._refresh_preview()
 
     def _refresh_preview(self) -> None:
@@ -283,8 +481,12 @@ class DrawingImportDialog(QDialog):
         profile_cands = [c for c in cands if c.profile_index is not None]
         selected = {c.profile_index for c in profile_cands if c.selected} if profile_cands else None
         self.preview.show_drawing(data, selected)
-        total = sum(1 for cs in self.candidates.values() for c in cs if c.selected)
-        self.summary.setText(f"เลือกแล้ว {total} รายการ จาก {len(self.drawings)} แบบ")
+        chosen = [c for cs in self.candidates.values() for c in cs if c.selected]
+        missing = sum(1 for c in chosen if c.thickness_source == THK_MISSING)
+        text = f"เลือกแล้ว {len(chosen)} รายการ จาก {len(self.drawings)} แบบ"
+        if missing:
+            text += f"  ·  ⚠ ยังไม่มีความหนา {missing} รายการ"
+        self.summary.setText(text)
 
     def accept(self) -> None:
         self._store_table()

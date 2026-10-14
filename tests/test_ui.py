@@ -90,6 +90,64 @@ def test_drawing_dialog_selection(app):
     assert len(selected["RRS-AS-100_tailgate_assembly.dxf"]) == 4  # 5 BOM rows, first unticked
 
 
+def test_drawing_dialog_thickness(app):
+    from partlist_studio.core import dwg_io
+    from partlist_studio.ui.dialogs import DrawingImportDialog
+
+    data = dwg_io.read_drawing(SAMPLES / "RRS-T-SET_frame_parts.dxf")
+    dialog = DrawingImportDialog([data], dwg_io.DEFAULT_DENSITIES)
+    cands = dialog.candidates[0]
+    col = dialog._col("thickness")
+    assert [c.part.part_no for c in cands] == [f"RRS-T-00{i}" for i in range(1, 6)]
+    assert dialog.table.item(0, dialog._col("name")).text() == "เฟรมบน"
+    assert dialog.table.item(0, col).text() == "3"
+    w = cands[0].part.weight
+    dialog.table.item(0, col).setText("6")  # typed in the table
+    assert cands[0].part.thickness == 6 and cands[0].thickness_source == dwg_io.THK_MANUAL
+    assert cands[0].part.weight == pytest.approx(w * 2, abs=2e-3)
+    assert dialog.table.item(0, dialog._col("spec")).text() == "t6 x 150 x 60"
+    # one value for every part; the row typed by hand keeps its value
+    dialog.thk_value.setValue(2.5)
+    dialog.thk_mode.setCurrentIndex(dialog.thk_mode.findData("fixed"))
+    assert [c.part.thickness for c in cands] == [6, 2.5, 2.5, 2.5, 2.5]
+    dialog.table.selectRow(1)
+    dialog.thk_value.setValue(5)
+    dialog._apply_selected()
+    assert cands[1].part.thickness == 5
+    dialog.table.clearSelection()
+    dialog._reset_selected()  # nothing selected: the whole drawing back to what it says
+    assert [c.part.thickness for c in cands] == [3, 3.2, 4, 2, 2.3]
+    dialog.thk_mode.setCurrentIndex(dialog.thk_mode.findData("drawing"))
+    dialog.accept()
+    [(_d, parts)] = dialog.selected_parts()
+    assert [p.thickness for p in parts] == [3, 3.2, 4, 2, 2.3]
+    assert dialog.thickness_mode == "drawing" and dialog.default_thickness == 5
+
+
+def test_partlist_thickness_edit_and_dialog(window, app):
+    from partlist_studio.core import dwg_io
+    from partlist_studio.core.models import COLUMN_KEYS
+    from partlist_studio.ui.work_dialogs import ThicknessDialog
+
+    state = window.state
+    data = dwg_io.read_drawing(SAMPLES / "RRS-T-SET_frame_parts.dxf")
+    state.partlist.parts.extend(c.part for c in dwg_io.drawing_to_candidates(data))
+    state.mark_dirty()
+    page = window.pages["parts"]
+    part = state.partlist.parts[0]
+    w = part.weight
+    assert page.model.setData(page.model.index(0, COLUMN_KEYS.index("thickness")), "4.5")
+    assert part.thickness == 4.5 and part.spec.startswith("t4.5")
+    assert part.weight == pytest.approx(w * 1.5, abs=2e-3)
+    dialog = ThicknessDialog(state.partlist.parts, [1, 2], 8)
+    dialog.apply()
+    assert [p.thickness for p in state.partlist.parts] == [4.5, 8, 8, 2, 2.3]
+    dialog.scope.button(1).setChecked(True)  # every plate part
+    dialog.action.button(1).setChecked(True)  # back to the drawing
+    assert dialog.apply() == 3
+    assert [p.thickness for p in state.partlist.parts] == [3, 3.2, 4, 2, 2.3]
+
+
 def test_models_and_sources_flow(window, app, tmp_path, monkeypatch):
     from partlist_studio.core.company_files import ModelBOM, ModelRow
     from partlist_studio.core.stock import StockItem, StockList

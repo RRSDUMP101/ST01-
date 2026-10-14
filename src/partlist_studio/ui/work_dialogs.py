@@ -1,4 +1,5 @@
-"""Dialogs of the work flow: model variant (เลือกรุ่นย่อย), new item code (ตั้งรหัสใหม่), revision compare (เทียบ Rev.)."""
+"""Dialogs of the work flow: model variant (เลือกรุ่นย่อย), new item code (ตั้งรหัสใหม่), revision compare (เทียบ Rev.),
+plate thickness (ปรับความหนา)."""
 
 from __future__ import annotations
 
@@ -6,14 +7,16 @@ from pathlib import Path
 
 from PySide6.QtCore import QDate, Qt
 from PySide6.QtGui import QBrush, QGuiApplication
-from PySide6.QtWidgets import (QCheckBox, QComboBox, QDateEdit, QDialog, QDialogButtonBox, QFileDialog, QGridLayout,
-                               QHBoxLayout, QLabel, QLineEdit, QPushButton, QSpinBox, QVBoxLayout)
+from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QComboBox, QDateEdit, QDialog, QDialogButtonBox,
+                               QDoubleSpinBox, QFileDialog, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
+                               QRadioButton, QSpinBox, QVBoxLayout)
 
 from ..core import code_rules, revision
+from ..core.dwg_io import set_part_thickness
 from ..core.company_files import ModelBOM
 from ..core.express_codes import (ST_NONE, VARIANT_BRANDS, VARIANT_HEIGHTS, VARIANT_LENGTHS, Resolved,
                                   resolve_variant, resolved_to_parts, row_options, summary)
-from ..core.models import Part, PartList
+from ..core.models import COMMON_THICKNESS, Part, PartList
 from ..core.stock import find_by_code
 from . import theme
 from .state import AppState
@@ -356,3 +359,90 @@ class CompareDialog(QDialog):
             revision.export_compare(self.changes, path, *self.names, self.info)
             self.state.notify(f"บันทึก {Path(path).name} แล้ว")
 
+
+
+# --------------------------------------------------------------------------
+class ThicknessDialog(QDialog):
+    """ปรับความหนา: one thickness for the chosen rows, or back to what their DWG said when it was imported.
+    Size text and weight per piece follow (flat patterns are weighed again from their area)."""
+
+    def __init__(self, parts: list[Part], selected: list[int], value: float = 0, parent=None):
+        super().__init__(parent)
+        self.parts = parts
+        self.selected = [r for r in selected if 0 <= r < len(parts)]
+        self.setWindowTitle("ปรับความหนา")
+        self.setMinimumWidth(520)
+        lay = QVBoxLayout(self)
+        lay.addWidget(QLabel("<b>ใช้กับ</b>"))
+        self.scope = QButtonGroup(self)
+        plates = self._plates()
+        missing = [r for r in plates if not parts[r].thickness]
+        self._scopes = {0: self.selected, 1: plates, 2: missing}
+        for key, text in ((0, f"แถวที่เลือก ({len(self.selected)} รายการ)"),
+                          (1, f"ทุกชิ้นที่เป็นแผ่น / มีรูปคลี่ ({len(plates)} รายการ)"),
+                          (2, f"เฉพาะชิ้นที่ยังไม่มีความหนา ({len(missing)} รายการ)")):
+            rb = QRadioButton(text)
+            rb.setEnabled(bool(self._scopes[key]))
+            self.scope.addButton(rb, key)
+            lay.addWidget(rb)
+        first = next((k for k in (0, 2, 1) if self._scopes[k]), 0)
+        self.scope.button(first).setChecked(True)
+
+        lay.addWidget(QLabel("<b>ความหนา</b>"))
+        self.action = QButtonGroup(self)
+        row = QHBoxLayout()
+        set_rb = QRadioButton("กำหนดเป็น")
+        set_rb.setChecked(True)
+        self.action.addButton(set_rb, 0)
+        row.addWidget(set_rb)
+        self.value = QDoubleSpinBox()
+        self.value.setRange(0, 100)
+        self.value.setDecimals(2)
+        self.value.setSingleStep(0.1)
+        self.value.setSuffix(" mm")
+        self.value.setSpecialValueText("ไม่ระบุ")
+        self.value.setValue(value)
+        row.addWidget(self.value)
+        common = QComboBox()
+        common.addItem("ค่าที่ใช้บ่อย…", 0.0)
+        for v in COMMON_THICKNESS:
+            common.addItem(f"{v:g} mm", v)
+
+        def pick(i: int) -> None:
+            if common.itemData(i):
+                self.value.setValue(common.itemData(i))
+                set_rb.setChecked(True)
+            common.setCurrentIndex(0)
+
+        common.activated.connect(pick)
+        row.addWidget(common)
+        row.addStretch(1)
+        lay.addLayout(row)
+        drawn = sum(1 for p in parts if p.drawing_thickness)
+        reset_rb = QRadioButton(f"คืนค่าตามแบบ DWG (ค่าที่อ่านได้ตอนนำเข้า · มี {drawn} รายการ)")
+        reset_rb.setEnabled(bool(drawn))
+        self.action.addButton(reset_rb, 1)
+        lay.addWidget(reset_rb)
+        hint = QLabel("ขนาด (เช่น t3 x 500 x 200) และน้ำหนัก/ชิ้นจะคำนวณใหม่ตามความหนา")
+        hint.setObjectName("Hint")
+        lay.addWidget(hint)
+        lay.addWidget(_buttons(self, "ปรับความหนา"))
+
+    def _plates(self) -> list[int]:
+        return [r for r, p in enumerate(self.parts) if p.outline or p.thickness or p.drawing_thickness]
+
+    def targets(self) -> list[int]:
+        return self._scopes[self.scope.checkedId()]
+
+    def apply(self, densities: dict[str, float] | None = None) -> int:
+        """Change the parts; returns how many changed."""
+        changed = 0
+        for r in self.targets():
+            part = self.parts[r]
+            value = part.drawing_thickness if self.action.checkedId() == 1 else round(self.value.value(), 3)
+            if self.action.checkedId() == 1 and not value:
+                continue  # nothing was read from its drawing
+            if value != part.thickness:
+                set_part_thickness(part, value, densities)
+                changed += 1
+        return changed

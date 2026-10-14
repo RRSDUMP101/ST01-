@@ -12,6 +12,7 @@ from ..table_models import ChoiceDelegate, PartFilterProxy, PartTableModel
 from ..widgets import PageHeader, button
 
 COLUMN_WIDTHS = {"item_no": 50, "part_no": 120, "drawing_no": 110, "name": 200, "material": 90, "spec": 130,
+                 "thickness": 70,
                  "qty": 60, "unit": 60, "weight": 95, "stock_code": 130, "process": 100, "status": 90}
 
 
@@ -56,6 +57,10 @@ class PartListPage(QWidget):
         self.status_filter.addItems(["ทุกสถานะ"] + STATUSES)
         tools.addWidget(self.status_filter)
         tools.addStretch(1)
+        b = button("ปรับความหนา…", tooltip="กำหนดความหนาให้แถวที่เลือก/ทุกชิ้นที่เป็นแผ่น หรือคืนค่าตามแบบ DWG "
+                                           "– ขนาดและน้ำหนักคำนวณใหม่")
+        b.clicked.connect(self.adjust_thickness)
+        tools.addWidget(b)
         for text, slot in (("+ เพิ่มแถว", self.add_row), ("ลบแถวที่เลือก", self.remove_rows),
                            ("เรียงลำดับใหม่", self.renumber)):
             b = button(text)
@@ -64,6 +69,7 @@ class PartListPage(QWidget):
         lay.addLayout(tools)
 
         self.model = PartTableModel(state.partlist, self)
+        self.model.densities = state.settings.densities
         self.proxy = PartFilterProxy(self)
         self.proxy.setSourceModel(self.model)
         self.view = QTableView()
@@ -139,6 +145,19 @@ class PartListPage(QWidget):
         if rows:
             self.model.remove_rows(rows)
             self.state.mark_dirty()
+
+    def adjust_thickness(self) -> None:
+        from ..work_dialogs import ThicknessDialog
+
+        dialog = ThicknessDialog(self.state.partlist.parts, self._selected_rows(),
+                                 self.state.settings.default_thickness, self)
+        if not dialog.exec():
+            return
+        self.model.densities = self.state.settings.densities
+        changed = dialog.apply(self.model.densities)
+        if changed:
+            self.state.mark_dirty()
+        self.state.notify(f"ปรับความหนา {changed} รายการ")
 
     def renumber(self) -> None:
         self.state.partlist.renumber()

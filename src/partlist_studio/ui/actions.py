@@ -84,14 +84,19 @@ class Actions:
             self.error("บางไฟล์อ่านไม่ได้", "\n".join(errors))
         if not drawings:
             return
-        dialog = DrawingImportDialog(drawings, self.state.settings.densities, self.window)
+        settings = self.state.settings
+        dialog = DrawingImportDialog(drawings, settings.densities, self.window,
+                                     default_thickness=settings.default_thickness,
+                                     thickness_mode=settings.thickness_mode)
         if not dialog.exec():
             return
+        settings.default_thickness = dialog.default_thickness
+        settings.thickness_mode = dialog.thickness_mode
         pl = self.state.partlist
         added = 0
         for data, parts in dialog.selected_parts():
             self.state.drawing_cache[data.source_path or data.path] = data
-            record = dwg_io.drawing_record(data, len(parts))
+            record = dwg_io.drawing_record(data, len(parts), parts)
             pl.drawings = [d for d in pl.drawings if d.path != record.path] + [record]
             pl.parts.extend(parts)
             added += len(parts)

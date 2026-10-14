@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .mapping import CAD_HEADERS, auto_map, find_header_row
-from .models import COLUMN_KEYS, COLUMN_LABELS, NUMERIC_COLUMNS, Part, PartList
+from .models import COLUMN_KEYS, COLUMN_LABELS, NUMERIC_COLUMNS, Part, PartList, parse_thickness
 from .tabular import read_table, write_table
 
 
@@ -52,6 +52,8 @@ def rows_to_parts(rows: list[list], mapping: dict[int, str]) -> list[Part]:
         for key, value in values.items():
             if str(value).strip() != "":
                 part.set(key, value)
+        if not part.thickness:  # no thickness column: 't3.2 x 300 x 150' in the size
+            part.thickness = parse_thickness(part.spec, plain_number=False)
         parts.append(part)
     return parts
 

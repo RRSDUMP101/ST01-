@@ -23,6 +23,9 @@ a = Analysis(
     hiddenimports=["ezdxf.addons.odafc", "openpyxl", "xlrd", "gspread", "google_auth_oauthlib.flow"],
     excludes=["tkinter", "matplotlib", "PySide6.QtWebEngineCore", "PySide6.Qt3DCore"],
 )
+if sys.platform == "darwin":
+    # OpenSSL's legacy provider (MD4, DES ...) is not used and the runner's copy needs macOS 15
+    a.binaries = [b for b in a.binaries if "ossl-modules" not in b[0].replace("\\", "/")]
 pyz = PYZ(a.pure)
 ICON = str(ROOT / "packaging" / ("app.icns" if sys.platform == "darwin" else "app.ico"))
 if os.environ.get("PARTLIST_ONEFILE") == "1":

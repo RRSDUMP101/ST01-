@@ -25,6 +25,7 @@ import tempfile
 import unicodedata
 from collections import Counter
 from dataclasses import dataclass, field
+from functools import cached_property
 from glob import glob
 from pathlib import Path
 
@@ -251,11 +252,17 @@ class Profile:
     cut_length: float = 0
     info: dict = field(default_factory=dict)  # read from its labels: part_no, name, thickness, material, qty
 
-    @property
-    def bbox(self) -> tuple[float, float, float, float]:
+    @cached_property
+    def bbox(self) -> tuple[float, float, float, float]:  # points never change once the loop is built
         xs = [p[0] for p in self.points]
         ys = [p[1] for p in self.points]
         return min(xs), min(ys), max(xs), max(ys)
+
+    @cached_property
+    def polygon(self) -> list:
+        from ezdxf.math import Vec2
+
+        return [Vec2(p) for p in self.points]
 
     @property
     def size(self) -> tuple[float, float]:
@@ -690,24 +697,23 @@ def _build_profiles(edge_entities, closed_paths, scale: float) -> list[Profile]:
 
 
 def _inside(inner: Profile, outer: Profile) -> bool:
-    from ezdxf.math import Vec2, is_point_in_polygon_2d
-
     ix0, iy0, ix1, iy1 = inner.bbox
     ox0, oy0, ox1, oy1 = outer.bbox
     if ix0 < ox0 or iy0 < oy0 or ix1 > ox1 or iy1 > oy1 or inner.area >= outer.area:
         return False
-    poly = [Vec2(p) for p in outer.points]
+    from ezdxf.math import Vec2, is_point_in_polygon_2d
+
     probe = inner.points[: max(1, min(8, len(inner.points)))]
-    return all(is_point_in_polygon_2d(Vec2(pt), poly) >= 0 for pt in probe)
+    return all(is_point_in_polygon_2d(Vec2(pt), outer.polygon) >= 0 for pt in probe)
 
 
 def _point_in(profile: Profile, x: float, y: float) -> bool:
-    from ezdxf.math import Vec2, is_point_in_polygon_2d
-
     x0, y0, x1, y1 = profile.bbox
     if not (x0 <= x <= x1 and y0 <= y <= y1):
         return False
-    return is_point_in_polygon_2d(Vec2(x, y), [Vec2(p) for p in profile.points]) > 0
+    from ezdxf.math import Vec2, is_point_in_polygon_2d
+
+    return is_point_in_polygon_2d(Vec2(x, y), profile.polygon) > 0
 
 
 def _classify_profiles(data: DrawingData) -> None:
@@ -768,6 +774,39 @@ def _bbox_gap(bbox: tuple[float, float, float, float], t: TextItem) -> float:
     return math.hypot(dx, dy)
 
 
+class _BoxGrid:
+    """Bounding boxes in a uniform grid, to find the parts near a text without measuring all of them."""
+
+    def __init__(self, boxes: dict[int, tuple[float, float, float, float]]):
+        sizes = sorted(max(x1 - x0, y1 - y0) for x0, y0, x1, y1 in boxes.values())
+        self.cell = max(sizes[len(sizes) // 2], sizes[-1] / 64, 1e-6)  # a box covers at most 65 x 65 cells
+        self.ids = set(boxes)
+        self.cells: dict[tuple[int, int], list[int]] = {}
+        for i, box in boxes.items():
+            for key in self._keys(*self._span(*box)):
+                self.cells.setdefault(key, []).append(i)
+
+    def _span(self, x0: float, y0: float, x1: float, y1: float) -> tuple[int, int, int, int]:
+        c = self.cell
+        return math.floor(x0 / c), math.floor(y0 / c), math.floor(x1 / c), math.floor(y1 / c)
+
+    @staticmethod
+    def _keys(gx0: int, gy0: int, gx1: int, gy1: int):
+        for gx in range(gx0, gx1 + 1):
+            for gy in range(gy0, gy1 + 1):
+                yield gx, gy
+
+    def near(self, x0: float, y0: float, x1: float, y1: float) -> set[int]:
+        """Every box that may touch the area (and some that do not)."""
+        gx0, gy0, gx1, gy1 = self._span(x0, y0, x1, y1)
+        if (gx1 - gx0 + 1) * (gy1 - gy0 + 1) > len(self.ids):  # a huge text over small parts: check them all
+            return set(self.ids)
+        out: set[int] = set()
+        for key in self._keys(gx0, gy0, gx1, gy1):
+            out.update(self.cells.get(key, ()))
+        return out
+
+
 def _label_profiles(data: DrawingData) -> None:
     """Give every text near a flat pattern to that part (inside it, or within LABEL_DISTANCE text heights)
     and read its code (RRS-T-001), name (เฟรมบน), thickness (t3 / Thickness=3.00 / หนา 3 มิล), material, qty."""
@@ -776,6 +815,7 @@ def _label_profiles(data: DrawingData) -> None:
     if not outers:
         return
     boxes = {i: profiles[i].bbox for i in outers}
+    grid = _BoxGrid(boxes)
     containers = [p for p in profiles if p.is_container]
     part_frames = {i: {c for c, frame in enumerate(containers) if _point_in(frame, *profiles[i].points[0])}
                    for i in outers}
@@ -783,12 +823,16 @@ def _label_profiles(data: DrawingData) -> None:
     for t in data.texts:
         if t.title or not t.text:
             continue
-        inside = [i for i in outers if _point_in(profiles[i], t.x, t.y)]
+        limit = LABEL_DISTANCE * max(t.height, 1e-6)
+        found = grid.near(t.left - limit, t.y - t.height / 2 - limit, t.right + limit, t.y + t.height / 2 + limit)
+        if not found:
+            continue
+        inside = [i for i in found if _point_in(profiles[i], t.x, t.y)]
         if inside:
-            owner, gap = min(inside, key=lambda i: profiles[i].area), 0.0
+            owner, gap = min(inside, key=lambda i: (profiles[i].area, i)), 0.0
         else:
-            gap, owner = min((_bbox_gap(boxes[i], t), i) for i in outers)
-            if gap > LABEL_DISTANCE * max(t.height, 1e-6):
+            gap, owner = min((_bbox_gap(boxes[i], t), i) for i in found)
+            if gap > limit:
                 continue
             frames = {c for c, frame in enumerate(containers) if _point_in(frame, t.x, t.y)}
             if not frames <= part_frames[owner]:  # a title block / table cell next to the part

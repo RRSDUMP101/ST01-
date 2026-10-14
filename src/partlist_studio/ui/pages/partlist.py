@@ -151,7 +151,9 @@ class PartListPage(QWidget):
 
         dialog = ThicknessDialog(self.state.partlist.parts, self._selected_rows(),
                                  self.state.settings.default_thickness, self)
-        if not dialog.exec():
+        accepted = dialog.exec()
+        dialog.deleteLater()
+        if not accepted:
             return
         self.model.densities = self.state.settings.densities
         changed = dialog.apply(self.model.densities)

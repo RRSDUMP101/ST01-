@@ -391,10 +391,10 @@ class ThicknessDialog(QDialog):
         lay.addWidget(QLabel("<b>ความหนา</b>"))
         self.action = QButtonGroup(self)
         row = QHBoxLayout()
-        set_rb = QRadioButton("กำหนดเป็น")
-        set_rb.setChecked(True)
-        self.action.addButton(set_rb, 0)
-        row.addWidget(set_rb)
+        self.set_rb = QRadioButton("กำหนดเป็น")
+        self.set_rb.setChecked(True)
+        self.action.addButton(self.set_rb, 0)
+        row.addWidget(self.set_rb)
         self.value = QDoubleSpinBox()
         self.value.setRange(0, 100)
         self.value.setDecimals(2)
@@ -403,19 +403,12 @@ class ThicknessDialog(QDialog):
         self.value.setSpecialValueText("ไม่ระบุ")
         self.value.setValue(value)
         row.addWidget(self.value)
-        common = QComboBox()
-        common.addItem("ค่าที่ใช้บ่อย…", 0.0)
+        self.common = QComboBox()
+        self.common.addItem("ค่าที่ใช้บ่อย…", 0.0)
         for v in COMMON_THICKNESS:
-            common.addItem(f"{v:g} mm", v)
-
-        def pick(i: int) -> None:
-            if common.itemData(i):
-                self.value.setValue(common.itemData(i))
-                set_rb.setChecked(True)
-            common.setCurrentIndex(0)
-
-        common.activated.connect(pick)
-        row.addWidget(common)
+            self.common.addItem(f"{v:g} mm", v)
+        self.common.activated.connect(self._pick_common)
+        row.addWidget(self.common)
         row.addStretch(1)
         lay.addLayout(row)
         drawn = sum(1 for p in parts if p.drawing_thickness)
@@ -427,6 +420,12 @@ class ThicknessDialog(QDialog):
         hint.setObjectName("Hint")
         lay.addWidget(hint)
         lay.addWidget(_buttons(self, "ปรับความหนา"))
+
+    def _pick_common(self, index: int) -> None:
+        if self.common.itemData(index):
+            self.value.setValue(self.common.itemData(index))
+            self.set_rb.setChecked(True)
+        self.common.setCurrentIndex(0)
 
     def _plates(self) -> list[int]:
         return [r for r, p in enumerate(self.parts) if p.outline or p.thickness or p.drawing_thickness]

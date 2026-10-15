@@ -10,6 +10,7 @@ from PySide6.QtCore import QObject, QSettings, QStandardPaths, Signal
 from ..core import stock as stock_mod
 from ..core.company_files import ModelBOM
 from ..core.dwg_io import DEFAULT_DENSITIES, DrawingData, find_converter
+from ..core.laser import CutQueue, FlatLibrary, LaserParams
 from ..core.models import PartList
 from ..core.movements import Ledger, StockDoc
 from ..core.production import Job, RawUse
@@ -84,6 +85,17 @@ class Settings:
     def replenish(self, p: ReplenishParams) -> None:
         self.set("stock/replenish", json.dumps(p.__dict__))
 
+    @property
+    def laser(self) -> LaserParams:
+        try:
+            return LaserParams.from_dict(json.loads(self.get("laser/params", "") or "{}"))
+        except ValueError:
+            return LaserParams()
+
+    @laser.setter
+    def laser(self, p: LaserParams) -> None:
+        self.set("laser/params", json.dumps(p.to_dict(), ensure_ascii=False))
+
 
 class AppState(QObject):
     partlist_changed = Signal()  # rows or job info changed
@@ -94,6 +106,7 @@ class AppState(QObject):
     xref_changed = Signal()
     jobs_changed = Signal()
     ledger_changed = Signal()
+    laser_changed = Signal()  # flat pattern library or cut programs changed
     message = Signal(str)
 
     def __init__(self, data_dir: str | Path | None = None):
@@ -108,6 +121,8 @@ class AppState(QObject):
         self.ledger = Ledger()
         self.jobs: list[Job] = []
         self.raw_uses: list[RawUse] = []
+        self.flats = FlatLibrary()  # คลังรูปคลี่: flat pattern of every part code from the drawings
+        self.cut_queue = CutQueue()  # laser cut programs
         self.requirements: list[RequirementLine] = []
         self.drawing_cache: dict[str, DrawingData] = {}
         self.path: str = ""
@@ -147,6 +162,8 @@ class AppState(QObject):
         self.jobs = [Job.from_dict(j) for j in data.get("jobs", [])]
         self.raw_uses = [RawUse(**{k: v for k, v in r.items() if k in RawUse.__dataclass_fields__})
                          for r in data.get("raw_uses", [])]
+        self.flats = FlatLibrary.from_dict(data.get("flats", {}))
+        self.cut_queue = CutQueue.from_dict(data.get("cut_queue", {}))
         self._merge_stock()
 
     def save_library(self) -> None:
@@ -158,6 +175,8 @@ class AppState(QObject):
             "ledger": self.ledger.to_dict(),
             "jobs": [j.to_dict() for j in self.jobs],
             "raw_uses": [r.__dict__ for r in self.raw_uses],
+            "flats": self.flats.to_dict(),
+            "cut_queue": self.cut_queue.to_dict(),
         }
         (self.data_dir() / "library.json").write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
 
@@ -256,6 +275,10 @@ class AppState(QObject):
     def save_jobs(self) -> None:
         self.save_library()
         self.jobs_changed.emit()
+
+    def save_laser(self) -> None:
+        self.save_library()
+        self.laser_changed.emit()
 
     def mark_dirty(self) -> None:
         self.dirty = True

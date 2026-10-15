@@ -42,6 +42,7 @@ class NestPart:
     net_area: float = 0  # mm² of one piece (holes taken out); 0 = width × height
     weight: float = 0  # kg of one piece
     outline: list = field(default_factory=list)  # [outer, hole, hole ...] in mm, origin at the bbox corner
+    job: str = ""  # SO / job the pieces are cut for ("" = from the Part List)
 
     @property
     def area(self) -> float:

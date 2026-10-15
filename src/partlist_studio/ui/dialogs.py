@@ -176,7 +176,8 @@ class DrawingImportDialog(QDialog):
                                           ("material", "วัสดุ"), ("thickness", "ความหนา (mm)"),
                                           ("labels", "ป้ายที่ชิ้นงาน"), ("qty", "จำนวน"), ("revision", "Rev."),
                                           ("bom", "ตาราง BOM"), ("profiles", "รูปคลี่ที่พบ"),
-                                          ("blocks", "บล็อกมาตรฐาน"), ("warn", "หมายเหตุ")]):
+                                          ("open", "เส้นไม่ปิดเป็นวง"), ("blocks", "บล็อกมาตรฐาน"),
+                                          ("warn", "หมายเหตุ")]):
             name = QLabel(label)
             name.setObjectName("Hint")
             value = QLabel("-")
@@ -315,6 +316,9 @@ class DrawingImportDialog(QDialog):
             if data.bom else "ไม่พบ")
         self.info_labels["profiles"].setText(
             f"{len(outers)} ชิ้น · รู/ช่อง {sum(len(p.holes) for p in outers)}" if outers else "ไม่พบ")
+        self.info_labels["open"].setText(
+            f"{data.open_chains} เส้น – วงกลมแดงในภาพ (เส้นตัดต่อไม่สนิท หรือเส้นพับ/เส้นช่วย: ย้ายไปเลเยอร์อื่น) "
+            "เลเซอร์ตัดเส้นเหล่านี้เป็นชิ้นงานไม่ได้" if data.open_chains else "ไม่มี")
         self.info_labels["blocks"].setText(", ".join(f"{k} ×{v}" for k, v in data.blocks.most_common(6)) or "-")
         self.info_labels["warn"].setText("\n".join(data.warnings) or "-")
 

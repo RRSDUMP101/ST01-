@@ -58,6 +58,10 @@ STATUS_COLORS = {
     "เหมือนเดิม": "#B0B8C4",
     "ร่าง": "#8A96A8",
     "บันทึกแล้ว": "#2E9D5B",
+    # laser queue / checks before cutting
+    "กำลังตัด": "#E08A1E",
+    "ตัดแล้ว": "#2E9D5B",
+    "ต้องแก้": "#D64545",
 }
 
 ERROR_BG = QColor("#FDECEC")

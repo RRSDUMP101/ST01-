@@ -308,6 +308,8 @@ class DrawingData:
     note_qty: float = 0  # the one quantity written in the general notes ('16 ชิ้น'), 0 = none or several
     note_qty_each: bool = False  # written as 'อย่างละ N ชิ้น': for every part
     note_qty_text: str = ""
+    open_chains: int = 0  # cut lines that do not close into a loop (a laser cannot cut them as a part)
+    open_examples: list = field(default_factory=list)  # (x, y) where they start (first 300), mm
 
     @property
     def file_name(self) -> str:
@@ -369,7 +371,8 @@ def read_drawing(path: str | Path, converter: Converter | None = None, cut_layer
     _title_from_attributes(data)
     _title_from_texts(data, texts)
     _find_bom(data, tables, texts)
-    data.profiles = _build_profiles(edge_entities, closed_paths, scale)
+    data.profiles, open_chains = _build_profiles(edge_entities, closed_paths, scale)
+    data.open_chains, data.open_examples = len(open_chains), open_chains[:300]
     _classify_profiles(data)
     _label_profiles(data)
     data.note_qty, data.note_qty_each, data.note_qty_text = _note_qty(data.notes)
@@ -507,8 +510,9 @@ def _is_closed(entity, p) -> bool:
     kind = entity.dxftype()
     if kind == "CIRCLE":
         return True
-    if kind in ("LWPOLYLINE", "POLYLINE"):
-        return bool(entity.closed) or (len(p) > 0 and p.start.isclose(p.end, abs_tol=1e-6))
+    if kind in ("LWPOLYLINE", "POLYLINE"):  # POLYLINE (R12 files) says is_closed, LWPOLYLINE closed
+        closed = entity.is_closed if kind == "POLYLINE" else entity.closed
+        return bool(closed) or (len(p) > 0 and p.start.isclose(p.end, abs_tol=1e-6))
     if kind == "ELLIPSE":
         return math.isclose(abs(entity.dxf.end_param - entity.dxf.start_param), math.tau, abs_tol=1e-6)
     if kind == "SPLINE":
@@ -691,8 +695,10 @@ def _perimeter(points: list[tuple[float, float]], closed: bool = True) -> float:
     return sum(math.dist(a, b) for a, b in zip(pts, pts[1:]))
 
 
-def _build_profiles(edge_entities, closed_paths, scale: float) -> list[Profile]:
+def _build_profiles(edge_entities, closed_paths, scale: float) -> tuple[list[Profile], list[tuple[float, float]]]:
+    """Closed loops of the cut lines, and the start point of every chain of lines that does not close."""
     profiles: list[Profile] = []
+    open_chains: list[tuple[float, float]] = []
     for p, layer in closed_paths:
         pts = _polygon(p, scale)
         if len(pts) >= 3:
@@ -710,9 +716,11 @@ def _build_profiles(edge_entities, closed_paths, scale: float) -> list[Profile]:
                     layer = payload.dxf.layer if payload is not None else ""
                     if len(pts) >= 3:
                         profiles.append(Profile(pts, _area(pts), _perimeter(pts), layer))
+                elif sum(e.length for e in chain) * scale >= 5.0:  # a gap at a corner, a line drawn short
+                    open_chains.append((round(chain[0].start.x * scale, 1), round(chain[0].start.y * scale, 1)))
         except Exception:  # noqa: BLE001 - chaining is best effort
             pass
-    return [p for p in profiles if p.area > 1.0]  # drop specks (< 1 mm2)
+    return [p for p in profiles if p.area > 1.0], open_chains  # drop specks (< 1 mm2)
 
 
 def _inside(inner: Profile, outer: Profile) -> bool:
@@ -1158,10 +1166,11 @@ def set_part_thickness(part: Part, thickness: float, densities: dict[str, float]
 
 
 def profile_outline(data: DrawingData, prof: Profile) -> list[list[tuple[float, float]]]:
-    """Outer loop + holes moved to the origin of the bounding box (mm, 0.1 mm) - kept on the part for nesting."""
+    """Outer loop + holes moved to the origin of the bounding box (mm, 0.01 mm) - kept on the part for nesting
+    and for the laser files (arcs are flattened to within 0.05 mm, circles are written back as circles)."""
     x0, y0, _x1, _y1 = prof.bbox
     loops = [prof.points] + [data.profiles[h].points for h in prof.holes]
-    return [[(round(x - x0, 1), round(y - y0, 1)) for x, y in loop] for loop in loops]
+    return [[(round(x - x0, 2), round(y - y0, 2)) for x, y in loop] for loop in loops]
 
 
 def _fmt(value: float) -> str:

@@ -274,3 +274,55 @@ def test_production_documents_nesting_minmax(window, app, monkeypatch):
 
     again = AppState(data_dir=state.data_dir())
     assert again.jobs[0].job_no == "SO-T1" and again.ledger.docs[0].doc_no == state.ledger.docs[0].doc_no
+
+
+def test_laser_page_from_jobs_to_cut(window, app, monkeypatch, tmp_path):
+    from PySide6.QtWidgets import QFileDialog, QMessageBox
+
+    from partlist_studio.core import dwg_io, laser, production
+    from partlist_studio.ui.pages import nesting as page_mod
+
+    state = window.state
+    data = dwg_io.read_drawing(SAMPLES / "RRS-T-SET_frame_parts.dxf")
+    parts = [c.part for c in dwg_io.drawing_to_candidates(data)]
+    assert state.flats.add_parts(parts) == 5
+    state.jobs.append(production.job_from_parts("SO6910-020", parts, 2, None, False))
+    state.save_jobs()
+    page = window.pages["nesting"]
+    page.source.setCurrentIndex(page.source.findData(page_mod.SRC_JOBS))
+    assert page.jobs.count() == 1 and page.jobs.item(0).checkState().name == "Checked"
+    page.run()
+    assert page.groups and page.make_btn.isEnabled()
+    page.make_programs()
+    queue = state.cut_queue
+    assert queue.programs and page.programs.rowCount() == len(queue.open_programs())
+    page.run()  # everything is in the queue now: nothing left to plan
+    assert not page.groups
+    monkeypatch.setattr(QFileDialog, "getExistingDirectory", lambda *a, **k: str(tmp_path))
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.No)
+    page.export_package(False)
+    [folder] = list(tmp_path.glob("LaserPackage_*"))
+    assert (folder / "ใบสั่งตัดเลเซอร์.xlsx").is_file() and list((folder / "programs").rglob("*.dxf"))
+    t3 = next(p for p in queue.programs if p.thickness == 3)
+    page.programs.selectRow(page._programs.index(t3))
+    monkeypatch.setattr(page_mod.CutDialog, "exec", lambda self: 1)
+    page.record_cut()
+    job = state.jobs[-1]
+    assert t3.status == laser.ST_DONE and job.parts[0].status_text == "รอพับ 32"
+    assert any(d.doc_type == "PD" and t3.no in d.remark for d in state.ledger.docs)
+    from partlist_studio.ui.state import AppState
+
+    again = AppState(data_dir=state.data_dir())  # queue and library are saved
+    assert again.cut_queue.find(t3.no).status == laser.ST_DONE and again.flats.get("RRS-T-001")
+
+
+def test_laser_settings_dialog(app):
+    from partlist_studio.core import laser
+    from partlist_studio.ui.pages.nesting import LaserSettingsDialog
+
+    dialog = LaserSettingsDialog(laser.LaserParams())
+    row = next(r for r in range(dialog.speeds.rowCount()) if dialog.speeds.item(r, 0).text() == "3")
+    dialog.speeds.item(row, 1).setText("3800")
+    dialog.mark.setChecked(True)
+    p = dialog.result_params()
+    assert p.speed("STEEL", 3) == 3800 and p.mark_codes and p.speed("SUS", 3) == 4500

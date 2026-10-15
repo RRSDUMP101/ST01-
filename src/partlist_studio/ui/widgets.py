@@ -201,6 +201,16 @@ class DrawingPreview(QGraphicsView):
             poly = QPolygonF([QPointF(x, -y) for x, y in prof.points])
             brush = QBrush(QColor(242, 140, 40, 45)) if is_outer else QBrush(Qt.NoBrush)
             scene.addPolygon(poly, cut_pen if is_outer else hole_pen, brush)
+        # cut lines that do not close into a loop: a laser cannot cut them as a part - mark where they start
+        marks = getattr(data, "open_examples", None) or []
+        if marks:
+            rect = scene.itemsBoundingRect()
+            size = max(rect.width(), rect.height()) * 0.006 or 5
+            mark_pen = QPen(QColor("#FF4D4F"))
+            mark_pen.setCosmetic(True)
+            mark_pen.setWidthF(2.0)
+            for x, y in marks:
+                scene.addEllipse(x - size, -y - size, 2 * size, 2 * size, mark_pen)
         text_color = QColor("#E6EDF6")
         for item in data.texts[:600]:
             t = scene.addSimpleText(item.text)

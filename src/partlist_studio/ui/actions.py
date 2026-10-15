@@ -93,18 +93,23 @@ class Actions:
         settings.default_thickness = dialog.default_thickness
         settings.thickness_mode = dialog.thickness_mode
         pl = self.state.partlist
-        added = 0
+        added = flats = 0
         for data, parts in dialog.selected_parts():
             self.state.drawing_cache[data.source_path or data.path] = data
             record = dwg_io.drawing_record(data, len(parts), parts)
             pl.drawings = [d for d in pl.drawings if d.path != record.path] + [record]
             pl.parts.extend(parts)
             added += len(parts)
+            # คลังรูปคลี่: the flat pattern of every coded part, for laser cutting from the production jobs
+            flats += self.state.flats.add_parts(parts, record.drawing_no, record.revision, record.file_name)
             if dialog.update_info.isChecked():
                 self._fill_info_from_title(data)
         pl.renumber()
+        if flats:
+            self.state.save_laser()
         self.state.mark_dirty()
-        self.state.notify(f"เพิ่ม {added} รายการจากแบบ {len(drawings)} ไฟล์")
+        self.state.notify(f"เพิ่ม {added} รายการจากแบบ {len(drawings)} ไฟล์"
+                          + (f" · บันทึกรูปคลี่ {flats} รหัสเข้าคลังรูปคลี่ (ใช้ตัดเลเซอร์)" if flats else ""))
 
     def _fill_info_from_title(self, data) -> None:
         info, tb = self.state.partlist.info, data.title_block

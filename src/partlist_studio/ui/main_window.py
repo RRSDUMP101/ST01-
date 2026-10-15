@@ -32,7 +32,7 @@ NAV = [
     ("parts", "☰   Part List"),
     ("models", "▣   แบบกระบะ"),
     ("production", "⚒   งานผลิต (SO)"),
-    ("nesting", "▦   วางแผนตัดเหล็ก"),
+    ("nesting", "✂   ตัดเหล็ก / เลเซอร์"),
     ("stock", "▤   สโตร์ / คลังสินค้า"),
     ("movements", "⇄   เบิก / รับ สต็อก"),
     ("express", "₿   Express"),
@@ -163,7 +163,8 @@ class MainWindow(QMainWindow):
         work.addAction("ประวัติการเคลื่อนไหวสินค้า", lambda: (self.go("movements"),
                                                              self.pages["movements"].tabs.setCurrentIndex(1)))
         work.addSeparator()
-        work.addAction("วางแผนตัดแผ่นเหล็ก", lambda: (self.go("nesting"), self.pages["nesting"].run()))
+        work.addAction("วางแผนตัดแผ่นเหล็ก / เลเซอร์", lambda: (self.go("nesting"), self.pages["nesting"].run()))
+        work.addAction("คิวเลเซอร์ (โปรแกรมตัด)", lambda: (self.go("nesting"), self.pages["nesting"].tabs.setCurrentIndex(2)))
         work.addAction("Min / Max & เตือนสั่งซื้อ", lambda: (self.go("stock"), self.pages["stock"].tabs.setCurrentIndex(2),
                                                            self.pages["stock"].replenish.run()))
         work.addAction("เทียบ Rev. แบบ / Part List…", self.compare_revisions)

@@ -18,7 +18,7 @@ INFO_FIELDS = [
 
 FLOW = [
     ("1", "แบบ / Part List", "DWG/DXF จาก ZWCAD หรือแบบกระบะ → เลือกรุ่นย่อย ได้รหัส Express"),
-    ("2", "ตรวจวัตถุดิบ + แผนตัด", "เทียบสต็อก × จำนวนคัน · จำนวนแผ่นจริงจากรูปคลี่"),
+    ("2", "ตรวจวัตถุดิบ + ตัดเลเซอร์", "เทียบสต็อก × จำนวนคัน · แผนตัดจากรูปคลี่ → ไฟล์ DXF + คิวเลเซอร์"),
     ("3", "เปิดงานผลิต (SO)", "ติดตาม รอตัด → รอพับ → รอเชื่อม → เสร็จ รายชิ้น"),
     ("4", "เบิก / รับ สต็อก", "PD วัตถุดิบ · PD ชิ้นส่วน · FR รับชิ้นงานเสร็จ → คีย์ Express"),
     ("5", "สั่งซื้อ / ส่งต่อ", "Min/Max เตือนสั่งซื้อ · Google Sheet · Excel"),
@@ -134,6 +134,7 @@ class DashboardPage(QWidget):
         state.jobs_changed.connect(self.refresh_work)
         state.ledger_changed.connect(self.refresh_work)
         state.stock_changed.connect(self.refresh_work)
+        state.laser_changed.connect(self.refresh_work)
         self.refresh()
         self.refresh_work()
 
@@ -150,6 +151,7 @@ class DashboardPage(QWidget):
                 for step in p.waiting():
                     waiting[step] = waiting.get(step, 0) + 1
         drafts = [d for d in st.ledger.docs if d.status == "ร่าง"]
+        cut = st.cut_queue.open_programs()
         no_express = [d for d in st.ledger.docs if d.status == "บันทึกแล้ว" and not d.express_no]
         lines = compute(st.stock, st.settings.replenish, st.ledger.daily_out(), models=st.models) if st.stock.items else []
         order = sum(1 for x in lines if x.status == RS_ORDER)
@@ -157,6 +159,8 @@ class DashboardPage(QWidget):
                                                           if overdue else ""),
                 "รอผลิต: " + (" · ".join(f"รอ{k} {v}" for k, v in waiting.items()) or "-"),
                 f"ผลิตเสร็จรอปิดงาน {sum(1 for j in open_jobs if j.status == JOB_DONE)}",
+                f"คิวเลเซอร์ {len(cut)} โปรแกรม · {sum(p.left_sheets for p in cut)} แผ่น · "
+                f"~{sum(p.minutes * p.left_sheets for p in cut) / 60:.1f} ชม.",
                 f"เอกสารร่าง {len(drafts)} · บันทึกแล้วยังไม่ใส่เลขที่ Express {len(no_express)}",
                 f"<span style='color:{'#D64545' if order else theme.MUTED}'>ต่ำกว่า Min ต้องสั่งซื้อ {order} รายการ</span>"]
         self.work_label.setText("<br>".join(bits))

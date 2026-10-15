@@ -32,6 +32,7 @@
 รายละเอียดการวิเคราะห์ระบบ DWG ↔ สโตร์ ↔ ผลิต: [docs/DWG_INTEGRATION.md](docs/DWG_INTEGRATION.md)
 การเชื่อม Express / Google Sheet / ไฟล์ Excel ของบริษัท: [docs/EXPRESS_INTEGRATION.md](docs/EXPRESS_INTEGRATION.md)
 การออกแบบหน้าจอ: [docs/UI_DESIGN.md](docs/UI_DESIGN.md)
+ข้อเสนอระบบสต็อกชิ้นส่วนรอประกอบ + การผลิตถึงประกอบ (กลุ่มประกอบ, ใบงาน QR, ความพร้อมประกอบ): [docs/STOCK_PRODUCTION_DESIGN.md](docs/STOCK_PRODUCTION_DESIGN.md)
 
 ## ติดตั้ง / รัน
 

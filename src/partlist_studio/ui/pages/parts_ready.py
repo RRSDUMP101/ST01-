@@ -51,6 +51,7 @@ class PartsReadyTab(QWidget):
         self.rows: list[PartStock] = []
         self.shown: list[PartStock] = []
         self._stale = True
+        self._own_edit = False  # a location typed in the table: the table already shows it
         lay = QVBoxLayout(self)
         lay.setContentsMargins(12, 12, 12, 12)
         top = QHBoxLayout()
@@ -109,6 +110,8 @@ class PartsReadyTab(QWidget):
             self.refresh()
 
     def _changed(self) -> None:
+        if self._own_edit:
+            return
         self._stale = True
         if self.isVisible():
             self.refresh()
@@ -181,7 +184,11 @@ class PartsReadyTab(QWidget):
         row = self.shown[cell.row()]
         self.state.catalog.set_location(row.code, cell.text())
         row.location = cell.text().strip()
-        self.state.save_catalog()
+        self._own_edit = True  # keep the table (and the cell being typed in) as it is
+        try:
+            self.state.save_catalog()
+        finally:
+            self._own_edit = False
 
     def set_group(self) -> None:
         rows = self._selected()

@@ -353,8 +353,10 @@ def test_parts_ready_tab_readiness_tickets_and_scan(window, app, monkeypatch, tm
     tab.search.setText(qr.item_payload("RRS-A-102-L-80", "x"))  # a scanned shelf label
     assert tab.table.rowCount() == 1 and tab.table.item(0, 1).text() == "RRS-A-102-L-80"
     tab.search.clear()
-    tab.table.item(0, catalog.PART_STOCK_HEADERS.index("ตำแหน่ง")).setText("P-FRONT-01")  # edit in the table
-    assert state.catalog.location_of("RRS-T-024-L-84") == "P-FRONT-01"
+    cell = tab.table.item(0, catalog.PART_STOCK_HEADERS.index("ตำแหน่ง"))
+    cell.setText("P-FRONT-01")  # typed in the table: saved, and the table is not rebuilt under the user
+    assert state.catalog.location_of("RRS-T-024-L-84") == "P-FRONT-01" and tab.shown[0].location == "P-FRONT-01"
+    assert tab.table.item(0, catalog.PART_STOCK_HEADERS.index("ตำแหน่ง")) is cell
     tab.table.selectRow(0)
     monkeypatch.setattr(QInputDialog, "getItem", lambda *a, **k: ("FIX – หู / ตัวยึด / ล็อก", True))
     tab.set_group()

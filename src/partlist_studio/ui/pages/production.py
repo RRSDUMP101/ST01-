@@ -432,7 +432,7 @@ class ProductionPage(QWidget):
             return
         indexes = [r for r in selected_rows(self.parts) if r < len(job.parts)] or None
         tickets = job_tickets(job, indexes, self.state.catalog, self.state.stock, self.state.flats,
-                              self.state.cut_queue.programs)
+                              self.state.cut_queue.programs, self.state.xref_lookup)
         if not tickets:
             self.actions.error("ไม่มีใบงาน", "งานนี้ไม่มีชิ้นที่ต้องผลิต (ใช้จากสต็อกทั้งหมด)")
             return

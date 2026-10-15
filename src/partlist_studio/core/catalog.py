@@ -433,7 +433,7 @@ def _thai_date(iso: str) -> str:
 
 
 def job_tickets(job, indexes: list[int] | None = None, catalog: Catalog | None = None, stock: StockList | None = None,
-                flats=None, programs=None) -> list[Ticket]:
+                flats=None, programs=None, xref_lookup=None) -> list[Ticket]:
     """One ticket per part of the job (default: the parts the job makes), with the QR, the route and where it goes."""
     from .laser import job_key
     from .qr import ticket_payload
@@ -450,7 +450,7 @@ def job_tickets(job, indexes: list[int] | None = None, catalog: Catalog | None =
             continue
         p = job.parts[i]
         item = find(p.code)
-        flat = flats.get(p.code) if (flats is not None and p.code) else None
+        flat = flats.get(p.code, xref_lookup) if (flats is not None and p.code) else None
         material = ""
         if flat is not None:
             material = " ".join(x for x in (flat.material, f"t{flat.thickness:g}" if flat.thickness else "") if x)

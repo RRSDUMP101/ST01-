@@ -8,8 +8,9 @@ from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDialog,
                                QGridLayout, QHBoxLayout, QHeaderView, QLabel, QListWidget, QListWidgetItem, QSpinBox,
                                QSplitter, QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget)
 
-from ..core.dwg_io import (THICKNESS_MODES, THK_DEFAULT, THK_FROM_BOM, THK_FROM_PART, THK_MANUAL, THK_MISSING,
-                           CandidatePart, DrawingData, drawing_to_candidates, resolve_thickness, set_part_thickness)
+from ..core.dwg_io import (QTY_DEFAULT, QTY_MANUAL, THICKNESS_MODES, THK_DEFAULT, THK_FROM_BOM, THK_FROM_PART,
+                           THK_MANUAL, THK_MISSING, CandidatePart, DrawingData, drawing_to_candidates,
+                           resolve_thickness, set_part_thickness)
 from ..core.models import COLUMN_KEYS, COLUMN_LABELS, COMMON_THICKNESS, NUMERIC_COLUMNS, Part, to_number
 from ..core.mapping import auto_map
 from ..core.partlist_io import TableImport
@@ -118,6 +119,11 @@ CAND_COLUMNS = ["part_no", "drawing_no", "name", "material", "spec", "thickness"
                 "remark"]
 SOURCE_LABEL = {"bom": "ตาราง BOM", "profile": "รูปคลี่", "title": "Title Block", "block": "บล็อกมาตรฐาน"}
 THK_SOURCE_COL = "_thk_source"
+QTY_SOURCE_COL = "_qty_source"
+
+
+def qty_color(source: str) -> QColor | None:
+    return theme.WARN_BG if source in (QTY_DEFAULT, QTY_MANUAL) else None
 
 
 def thickness_color(source: str) -> QColor | None:
@@ -130,7 +136,7 @@ def thickness_color(source: str) -> QColor | None:
 
 class DrawingImportDialog(QDialog):
     """Review what was found in each drawing, tick the rows to add to the Part List.
-    Code, name and thickness come from the labels of each flat pattern; the thickness can be set here."""
+    Code, name, thickness and quantity come from the labels of each flat pattern; the thickness can be set here."""
 
     def __init__(self, drawings: list[DrawingData], densities: dict[str, float], parent=None,
                  default_thickness: float = 0, thickness_mode: str = "drawing"):
@@ -227,7 +233,8 @@ class DrawingImportDialog(QDialog):
         self.tabs = QTabWidget()
         self.columns = ["_check", "_source"] + CAND_COLUMNS
         self.columns.insert(self.columns.index("thickness") + 1, THK_SOURCE_COL)
-        labels = {"_check": "เพิ่ม", "_source": "ที่มา", THK_SOURCE_COL: "ความหนาจาก"}
+        self.columns.insert(self.columns.index("qty") + 1, QTY_SOURCE_COL)
+        labels = {"_check": "เพิ่ม", "_source": "ที่มา", THK_SOURCE_COL: "ความหนาจาก", QTY_SOURCE_COL: "จำนวนจาก"}
         self.table = QTableWidget()
         self.table.setColumnCount(len(self.columns))
         self.table.setHorizontalHeaderLabels([labels.get(k) or COLUMN_LABELS[k] for k in self.columns])
@@ -298,9 +305,10 @@ class DrawingImportDialog(QDialog):
         self.info_labels["labels"].setText(
             f"รหัส {sum(1 for p in outers if p.info.get('part_no'))} · ชื่อ "
             f"{sum(1 for p in outers if p.info.get('name') or p.info.get('label_name'))} · ความหนา "
-            f"{sum(1 for p in outers if p.info.get('thickness'))} จาก {len(outers)} ชิ้น" if labelled else
-            ("ไม่พบ (เขียน รหัส / ชื่อ / t3 ไว้ใน หรือติดกับรูปคลี่แต่ละชิ้น)" if outers else "-"))
-        self.info_labels["qty"].setText(tb.get("qty", "-"))
+            f"{sum(1 for p in outers if p.info.get('thickness'))} · จำนวน "
+            f"{sum(1 for p in outers if p.info.get('qty'))} จาก {len(outers)} ชิ้น" if labelled else
+            ("ไม่พบ (เขียน รหัส / ชื่อ / t3 / 16 ชิ้น ไว้ใน หรือติดกับรูปคลี่แต่ละชิ้น)" if outers else "-"))
+        self.info_labels["qty"].setText(self._qty_info(data))
         self.info_labels["revision"].setText(tb.get("revision", "-"))
         self.info_labels["bom"].setText(
             f"{len(data.bom.data_rows)} แถว ({'ACAD_TABLE' if data.bom_source == 'table' else 'เส้น + ข้อความ'})"
@@ -332,6 +340,17 @@ class DrawingImportDialog(QDialog):
         self._loading = False
         self._refresh_preview()
 
+    @staticmethod
+    def _qty_info(data: DrawingData) -> str:
+        bits = [f"Title Block {data.title_block['qty']}"] if data.title_block.get("qty") else []
+        if data.note_qty:
+            outers = len(data.outer_profiles)
+            used = data.note_qty_each or outers <= 1
+            bits.append(f"หมายเหตุ “{data.note_qty_text}” → " + (
+                ("ทุกชิ้นที่ไม่มีจำนวนของตัวเอง" if outers > 1 else "ชิ้นนี้") if used else
+                "ไม่ได้อยู่ติดชิ้นใด แบบนี้มีหลายชิ้นจึงไม่ได้ใช้ (ถ้าเป็นของทุกชิ้น ให้เขียน “อย่างละ …” หรือแก้ในคอลัมน์จำนวน)"))
+        return " · ".join(bits) or "-"
+
     def _fill_row(self, r: int, cand: CandidatePart) -> None:
         loading, self._loading = self._loading, True
         for key in CAND_COLUMNS:
@@ -356,6 +375,19 @@ class DrawingImportDialog(QDialog):
         elif cand.part.drawing_thickness and cand.part.drawing_thickness != cand.part.thickness:
             src.setToolTip(f"ในแบบเขียนไว้ {cand.part.drawing_thickness:g} mm")
         self.table.setItem(r, self._col(THK_SOURCE_COL), src)
+        qsrc = QTableWidgetItem(cand.qty_source)
+        qsrc.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+        if cand.qty_text:
+            qsrc.setToolTip(f"อ่านจากข้อความ “{cand.qty_text}”")
+        elif cand.qty_source == QTY_DEFAULT:
+            qsrc.setToolTip("แบบไม่ได้เขียนจำนวนของชิ้นนี้ (เช่น 16 ชิ้น) – ตรวจ/พิมพ์จำนวนในช่อง จำนวน")
+        elif cand.qty_source == QTY_MANUAL and cand.part.drawing_qty:
+            qsrc.setToolTip(f"ในแบบเขียนไว้ {cand.part.drawing_qty:g}")
+        color = qty_color(cand.qty_source)
+        if color is not None:
+            qsrc.setBackground(color)
+            self.table.item(r, self._col("qty")).setBackground(color)
+        self.table.setItem(r, self._col(QTY_SOURCE_COL), qsrc)
         self._loading = loading
 
     def _store_row(self, r: int, cand: CandidatePart, skip: str = "") -> None:
@@ -387,6 +419,13 @@ class DrawingImportDialog(QDialog):
             self._set_thickness(cand, to_number(item.text()), THK_MANUAL)
             self._fill_row(r, cand)
             self._refresh_preview()
+        elif col == self._col("qty"):
+            self._store_row(r, cand)
+            if cand.part.qty != (cand.part.drawing_qty or 1) or cand.qty_source == QTY_MANUAL:
+                cand.qty_source, cand.qty_text = QTY_MANUAL, ""
+                cand.part.qty_source = QTY_MANUAL + (f" (ในแบบ {cand.part.drawing_qty:g})"
+                                                     if cand.part.drawing_qty else "")
+            self._fill_row(r, cand)
         elif col == self._col("material") and cand.part.thickness:
             self._store_row(r, cand)
             set_part_thickness(cand.part, cand.part.thickness, self.densities)  # weigh with the new density

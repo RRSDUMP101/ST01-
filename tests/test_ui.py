@@ -101,6 +101,13 @@ def test_drawing_dialog_thickness(app):
     assert [c.part.part_no for c in cands] == [f"RRS-T-00{i}" for i in range(1, 6)]
     assert dialog.table.item(0, dialog._col("name")).text() == "เฟรมบน"
     assert dialog.table.item(0, col).text() == "3"
+    qcol, qsrc = dialog._col("qty"), dialog._col("_qty_source")
+    assert dialog.table.item(0, qcol).text() == "16"
+    assert dialog.table.item(0, qsrc).text() == dwg_io.QTY_FROM_PART
+    assert dialog.table.item(3, qsrc).text() == dwg_io.QTY_DEFAULT
+    dialog.table.item(3, qcol).setText("6")  # typed in the table
+    assert cands[3].part.qty == 6 and cands[3].qty_source == dwg_io.QTY_MANUAL
+    assert dialog.table.item(3, qsrc).text() == dwg_io.QTY_MANUAL
     w = cands[0].part.weight
     dialog.table.item(0, col).setText("6")  # typed in the table
     assert cands[0].part.thickness == 6 and cands[0].thickness_source == dwg_io.THK_MANUAL
@@ -121,6 +128,7 @@ def test_drawing_dialog_thickness(app):
     dialog.accept()
     [(_d, parts)] = dialog.selected_parts()
     assert [p.thickness for p in parts] == [3, 3.2, 4, 2, 2.3]
+    assert [p.qty for p in parts] == [16, 2, 4, 6, 1]
     assert dialog.thickness_mode == "drawing" and dialog.default_thickness == 5
 
 
@@ -131,9 +139,18 @@ def test_partlist_thickness_edit_and_dialog(window, app):
 
     state = window.state
     data = dwg_io.read_drawing(SAMPLES / "RRS-T-SET_frame_parts.dxf")
-    state.partlist.parts.extend(c.part for c in dwg_io.drawing_to_candidates(data))
+    parts = [c.part for c in dwg_io.drawing_to_candidates(data)]
+    state.partlist.parts.extend(parts)
+    state.partlist.drawings.append(dwg_io.drawing_record(data, len(parts), parts))
     state.mark_dirty()
+    register = window.pages["drawings"].table
+    headers = [register.horizontalHeaderItem(c).text() for c in range(register.columnCount())]
+    assert register.item(0, headers.index("จำนวนชิ้น")).text() == "24"
     page = window.pages["parts"]
+    from PySide6.QtCore import Qt
+
+    tip = page.model.data(page.model.index(0, COLUMN_KEYS.index("qty")), Qt.ToolTipRole)
+    assert "16 ชิ้น" in tip
     part = state.partlist.parts[0]
     w = part.weight
     assert page.model.setData(page.model.index(0, COLUMN_KEYS.index("thickness")), "4.5")

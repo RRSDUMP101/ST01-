@@ -79,7 +79,13 @@ DRAWING_KEYS = {key for key in TITLE_TAGS if key not in PART_LABEL_KEYS}
 
 # Part codes written on a flat pattern: RRS-T-001, RRS-TB-001, STD-M10-30 (letters, then dash groups, some digit).
 _CODE_RE = re.compile(r"(?<![\w-])([A-Za-z]{2,6}(?:-[A-Za-z0-9]+){1,6})(?![\w-])")
-_QTY_RE = re.compile(r"(?:\bqty|\bq'ty|จำนวน)\s*[:=.]?\s*(\d+)|(\d+)\s*(?:ชิ้น|pcs?\b|ea\b)", re.IGNORECASE)
+_NUM = r"(\d{1,3}(?:,\d{3})+|\d+)"
+# Quantity of a part: '16 ชิ้น', '16ชิ้น', 'จำนวน 16', 'QTY: 4', '8 pcs', '1,000 ชิ้น' (Thai digits '๑๖ ชิ้น' too).
+_QTY_RE = re.compile(rf"(?:\bqty|\bq'ty|จำนวน)\s*[:=.]?\s*{_NUM}|{_NUM}\s*(?:ชิ้น|pcs?\b|ea\b)", re.IGNORECASE)
+# 'อย่างละ 2 ชิ้น' / '2 pcs each': the note is meant for every part it stands next to, not only the nearest.
+_EACH_RE = re.compile(r"อย่างละ|\beach\b", re.IGNORECASE)
+# Words around a quantity that are not part of a name: 'อย่างละ 2 ชิ้น', 'รวม 16 ชิ้น'.
+_QTY_WORDS_RE = re.compile(r"อย่างละ|ทั้งหมด|จำนวน|รวม|\beach\b|\btotal\b", re.IGNORECASE)
 # Bend notes from sheet-metal programs: '90.0', '-90.0', 'UP 90° R 0', 'DOWN 45°'.
 _BEND_RE = re.compile(r"^(?:up|down|ขึ้น|ลง)?\s*-?\d+(?:\.\d+)?\s*°?(?:\s*r\s*[\d.]+)?$", re.IGNORECASE)
 # A text this many text heights away from a flat pattern is still its label.
@@ -92,6 +98,14 @@ THK_DEFAULT = "ค่าเริ่มต้น"
 THK_MANUAL = "กำหนดเอง"
 THK_MISSING = "ไม่พบในแบบ"
 THICKNESS_MODES = {"drawing": "ตามแบบ (ถ้าแบบไม่ระบุ ใช้ค่าเริ่มต้น)", "fixed": "กำหนดเองทุกชิ้น (ไม่ใช้ค่าในแบบ)"}
+
+QTY_FROM_PART = "แบบ (ป้ายที่ชิ้นงาน)"
+QTY_FROM_NOTE = "แบบ (หมายเหตุในแบบ)"
+QTY_FROM_TITLE = "แบบ (Title Block)"
+QTY_FROM_BOM = "แบบ (ตาราง BOM)"
+QTY_FROM_BLOCKS = "แบบ (นับบล็อก)"
+QTY_DEFAULT = "ไม่ระบุในแบบ (ใช้ 1)"
+QTY_MANUAL = "กำหนดเอง"
 
 # "MATERIAL : SS400", "THK. 3.2", "วัสดุ: SUS304" written as plain text.
 _KEY_VALUE_RE = re.compile(r"^\s*([A-Za-z\u0E00-\u0E7F][\w\u0E00-\u0E7F .]*?)\s*[:=]\s*(.+?)\s*$")
@@ -290,6 +304,10 @@ class DrawingData:
     layers: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     inserts: list[list[TextItem]] = field(default_factory=list)  # attribute texts of each block with attributes
+    notes: list[TextItem] = field(default_factory=list)  # texts next to no flat pattern (general notes)
+    note_qty: float = 0  # the one quantity written in the general notes ('16 ชิ้น'), 0 = none or several
+    note_qty_each: bool = False  # written as 'อย่างละ N ชิ้น': for every part
+    note_qty_text: str = ""
 
     @property
     def file_name(self) -> str:
@@ -354,6 +372,7 @@ def read_drawing(path: str | Path, converter: Converter | None = None, cut_layer
     data.profiles = _build_profiles(edge_entities, closed_paths, scale)
     _classify_profiles(data)
     _label_profiles(data)
+    data.note_qty, data.note_qty_each, data.note_qty_text = _note_qty(data.notes)
     if not data.bom and not data.outer_profiles and not data.title_block:
         data.warnings.append("ไม่พบ Title Block, ตาราง BOM หรือรูปคลี่ชิ้นงานในไฟล์นี้")
     return data
@@ -813,6 +832,7 @@ def _label_profiles(data: DrawingData) -> None:
     profiles = data.profiles
     outers = [i for i, p in enumerate(profiles) if p.is_outer]
     if not outers:
+        data.notes = [t for t in data.texts if t.text and not t.title]
         return
     boxes = {i: profiles[i].bbox for i in outers}
     grid = _BoxGrid(boxes)
@@ -820,26 +840,50 @@ def _label_profiles(data: DrawingData) -> None:
     part_frames = {i: {c for c, frame in enumerate(containers) if _point_in(frame, *profiles[i].points[0])}
                    for i in outers}
     near: dict[int, list[tuple[float, TextItem]]] = {i: [] for i in outers}
+    data.notes = []
     for t in data.texts:
         if t.title or not t.text:
             continue
-        limit = LABEL_DISTANCE * max(t.height, 1e-6)
-        found = grid.near(t.left - limit, t.y - t.height / 2 - limit, t.right + limit, t.y + t.height / 2 + limit)
-        if not found:
-            continue
-        inside = [i for i in found if _point_in(profiles[i], t.x, t.y)]
-        if inside:
-            owner, gap = min(inside, key=lambda i: (profiles[i].area, i)), 0.0
-        else:
-            gap, owner = min((_bbox_gap(boxes[i], t), i) for i in found)
-            if gap > limit:
-                continue
-            frames = {c for c, frame in enumerate(containers) if _point_in(frame, t.x, t.y)}
-            if not frames <= part_frames[owner]:  # a title block / table cell next to the part
-                continue
-        near[owner].append((gap, t))
+        owners = _owners(t, grid, boxes, profiles, containers, part_frames)
+        if not owners:
+            data.notes.append(t)
+        for gap, i in owners:
+            near[i].append((gap, t))
     for i, items in near.items():
         profiles[i].info = read_labels(items)
+
+
+def _owners(t: TextItem, grid: _BoxGrid, boxes, profiles: list[Profile], containers: list[Profile],
+            part_frames: dict[int, set[int]]) -> list[tuple[float, int]]:
+    """(gap, part) the text labels: the part it is written in, else the nearest part within LABEL_DISTANCE
+    text heights - every such part for 'อย่างละ 2 ชิ้น'. [] = a general note of the drawing."""
+    limit = LABEL_DISTANCE * max(t.height, 1e-6)
+    found = grid.near(t.left - limit, t.y - t.height / 2 - limit, t.right + limit, t.y + t.height / 2 + limit)
+    if not found:
+        return []
+    inside = [i for i in found if _point_in(profiles[i], t.x, t.y)]
+    if inside:
+        return [(0.0, min(inside, key=lambda i: (profiles[i].area, i)))]
+    close = sorted((gap, i) for i in found if (gap := _bbox_gap(boxes[i], t)) <= limit)
+    if not close:
+        return []
+    frames = {c for c, frame in enumerate(containers) if _point_in(frame, t.x, t.y)}
+    close = [(gap, i) for gap, i in close if frames <= part_frames[i]]  # not a title block cell next to a part
+    return close if _EACH_RE.search(t.text) else close[:1]
+
+
+def parse_qty(text) -> float:
+    """'16 ชิ้น', '16ชิ้น', 'จำนวน 16', 'QTY: 4', '8 pcs', '1,000 ชิ้น' -> the quantity; 0 when the text gives none."""
+    match = _QTY_RE.search("" if text is None else str(text))
+    return to_number(match.group(1) or match.group(2)) if match else 0
+
+
+def _note_qty(notes: list[TextItem]) -> tuple[float, bool, str]:
+    """The quantity of the general notes when they give just one: (qty, written as 'อย่างละ', the text)."""
+    found = [(q, bool(_EACH_RE.search(t.text)), t.text) for t in notes if (q := parse_qty(t.text))]
+    if not found or len({q for q, _each, _text in found}) > 1:
+        return 0, False, ""
+    return found[0][0], any(each for _q, each, _text in found), found[0][2]
 
 
 def _name_text(text: str) -> str:
@@ -871,6 +915,8 @@ def read_labels(items: list[tuple[float, TextItem]]) -> dict:
                 value = parse_thickness(value)
             elif key == "qty":
                 value = to_number(value)
+                if value and "qty" not in info:
+                    info["qty_text"] = f"QTY = {text}" if t.key else text  # an attribute holds the number only
             elif key == "material" and value.isdigit():
                 continue  # 'Material=1' from sheet-metal exports
             elif key == "part_no" and _CODE_RE.fullmatch(value):
@@ -887,15 +933,18 @@ def read_labels(items: list[tuple[float, TextItem]]) -> dict:
         thickness = parse_thickness(rest, plain_number=False)
         if thickness:
             info.setdefault("thickness", thickness)
-        qty = _QTY_RE.search(rest)
-        if qty:
-            info.setdefault("qty", to_number(qty.group(1) or qty.group(2)))
+        qty = parse_qty(rest)
+        if qty and "qty" not in info:
+            info["qty"], info["qty_text"] = qty, text
         if code:  # 'RRS-T-001 เฟรมบน t3': the rest of the code's text is the name
             name = _name_text(_QTY_RE.sub(" ", strip_thickness(rest)))
             rank = 0
-        else:  # a note with a thickness or a quantity is not a name ('หนา 9มิล 4 ชิ้น')
-            name = "" if thickness or qty else _name_text(text)
-            rank = 1
+        elif thickness:  # a note with a thickness is not a name ('หนา 9มิล 4 ชิ้น', '3 มิล 1 ชิ้น แก้ความยาว')
+            name, rank = "", 1
+        elif qty:  # 'ขาจับ 16 ชิ้น' -> 'ขาจับ', used when no other text names the part
+            name, rank = _name_text(_QTY_WORDS_RE.sub(" ", _QTY_RE.sub(" ", text))), 2
+        else:
+            name, rank = _name_text(text), 1
         if name:
             names.append((rank, gap, -t.height, name, t.x, t.y))
     if "name" not in info and names:
@@ -933,6 +982,31 @@ class CandidatePart:
     profile_index: int | None = None
     selected: bool = True
     thickness_source: str = ""  # THK_FROM_PART, THK_FROM_TITLE, THK_DEFAULT, THK_MANUAL ... ("" = not a plate)
+    qty_source: str = ""  # QTY_FROM_PART, QTY_FROM_NOTE, QTY_FROM_TITLE, QTY_FROM_BOM, QTY_DEFAULT, QTY_MANUAL
+    qty_text: str = ""  # the text of the drawing the quantity was read from ('16 ชิ้น')
+
+    def set_qty(self, qty: float, source: str, text: str = "") -> None:
+        """Quantity read from the drawing; the part keeps it (drawing_qty) and where it came from (qty_source)."""
+        self.part.qty = qty
+        self.part.drawing_qty = 0 if source == QTY_DEFAULT else qty
+        self.part.qty_source = qty_source_text(source, text)
+        self.qty_source, self.qty_text = source, text
+
+
+def qty_source_text(source: str, text: str = "") -> str:
+    return f"{source}: “{text}”" if text else source
+
+
+def resolve_qty(own: float, note: float = 0, title: float = 0) -> tuple[float, str]:
+    """(quantity, where it came from): written next to the part ('16 ชิ้น'), in a general note of the drawing,
+    QTY of the title block - else 1."""
+    if own:
+        return own, QTY_FROM_PART
+    if note:
+        return note, QTY_FROM_NOTE
+    if title:
+        return title, QTY_FROM_TITLE
+    return 1, QTY_DEFAULT
 
 
 def resolve_thickness(own: float, drawing: float, default: float = 0,
@@ -954,11 +1028,20 @@ def drawing_to_candidates(data: DrawingData, densities: dict[str, float] | None 
                           include_blocks: bool = False, default_thickness: float = 0,
                           thickness_mode: str = "drawing") -> list[CandidatePart]:
     """Propose Part List rows from a drawing. The user reviews them before they are added.
-    Each flat pattern takes its code / name / thickness from its own labels first, then from the title block."""
+    Each flat pattern takes its code / name / thickness / quantity from its own labels first, then from the
+    general notes ('อย่างละ 2 ชิ้น' for every part, '16 ชิ้น' for a drawing of one part), then from the title block."""
     tb = data.title_block
     drawing_no = tb.get("drawing_no") or Path(data.file_name).stem
     material = tb.get("material", "")
+    title_qty = to_number(tb.get("qty", 0))
     candidates: list[CandidatePart] = []
+
+    def qty_text(source: str, lab: dict) -> str:
+        if source == QTY_FROM_PART:
+            return lab.get("qty_text", "")
+        if source == QTY_FROM_NOTE:
+            return data.note_qty_text
+        return f"QTY {tb['qty']}" if source == QTY_FROM_TITLE else ""
 
     if data.bom:
         for part in data.bom.to_parts():
@@ -967,6 +1050,7 @@ def drawing_to_candidates(data: DrawingData, densities: dict[str, float] | None 
                 part.material = material
             own = part.thickness or parse_thickness(part.spec, plain_number=False)
             cand = CandidatePart(part, "bom")
+            cand.set_qty(part.qty, QTY_FROM_BOM)
             if own:  # plate rows only - bolts and bought parts have no thickness
                 part.drawing_thickness = own
                 value, source = resolve_thickness(own, 0, default_thickness, thickness_mode)
@@ -991,7 +1075,6 @@ def drawing_to_candidates(data: DrawingData, densities: dict[str, float] | None 
                 material=mat,
                 spec=plate_spec(thickness, w, h),
                 thickness=thickness,
-                qty=lab.get("qty") or ((to_number(tb.get("qty", 1)) or 1) if single else 1),
                 process="ตัด/พับ",
                 remark=f"พื้นที่สุทธิ {prof.net_area / 1e6:.4f} m² · ระยะตัด {prof.cut_length:,.0f} mm"
                        f" · รู {len(prof.holes)}",
@@ -1000,21 +1083,29 @@ def drawing_to_candidates(data: DrawingData, densities: dict[str, float] | None 
             if thickness:
                 part.weight = plate_weight(prof.net_area, thickness, density_for(mat, densities))
             part.outline = profile_outline(data, prof)
-            candidates.append(CandidatePart(part, "profile", profile_index=i, thickness_source=source))
+            cand = CandidatePart(part, "profile", profile_index=i, thickness_source=source)
+            qty, qty_source = resolve_qty(to_number(lab.get("qty", 0)),
+                                          data.note_qty if (single or data.note_qty_each) else 0,
+                                          title_qty if single else 0)
+            cand.set_qty(qty, qty_source, qty_text(qty_source, lab))
+            candidates.append(cand)
         candidates.sort(key=lambda c: (not c.part.part_no, c.part.part_no))  # by code, uncoded parts last
     elif not data.bom and (tb.get("name") or tb.get("part_no")):
         thickness, source = resolve_thickness(0, data.thickness, default_thickness, thickness_mode)
         part = Part(part_no=tb.get("part_no", ""), drawing_no=drawing_no, name=tb.get("name", ""),
-                    material=material, spec=f"t{_fmt(thickness)}" if thickness else "", thickness=thickness,
-                    qty=to_number(tb.get("qty", 1)) or 1)
+                    material=material, spec=f"t{_fmt(thickness)}" if thickness else "", thickness=thickness)
         part.drawing_thickness = data.thickness
-        candidates.append(CandidatePart(part, "title", thickness_source=source))
+        cand = CandidatePart(part, "title", thickness_source=source)
+        qty, qty_source = resolve_qty(0, data.note_qty, title_qty)
+        cand.set_qty(qty, qty_source, qty_text(qty_source, {}))
+        candidates.append(cand)
 
     if include_blocks:
         for name, count in sorted(data.blocks.items()):
-            candidates.append(CandidatePart(
-                Part(name=name, drawing_no=drawing_no, qty=count, process="ซื้อสำเร็จ", unit="ตัว"),
-                "block", selected=False))
+            cand = CandidatePart(Part(name=name, drawing_no=drawing_no, process="ซื้อสำเร็จ", unit="ตัว"),
+                                 "block", selected=False)
+            cand.set_qty(count, QTY_FROM_BLOCKS)
+            candidates.append(cand)
     return candidates
 
 
@@ -1092,6 +1183,7 @@ def drawing_record(data: DrawingData, part_count: int, parts: list[Part] | None 
         thickness=", ".join(_fmt(t) for t in thicknesses) if thicknesses else
         (_fmt(data.thickness) if data.thickness else ""),
         part_count=part_count,
+        pieces=round(sum(p.qty for p in parts or [])),
     )
 
 

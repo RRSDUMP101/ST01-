@@ -58,6 +58,8 @@ class Part:
     image: str = ""  # picture of the part (from the company Parts List workbook), not a table column
     outline: list = field(default_factory=list)  # flat pattern from the drawing: [outer, hole, ...] in mm (nesting)
     drawing_thickness: float = 0  # thickness the drawing gave (kept so "ตามแบบ" can undo a manual value)
+    drawing_qty: float = 0  # quantity the drawing gave ('16 ชิ้น'), 0 = it gave none
+    qty_source: str = ""  # where the quantity came from: 'แบบ (ป้ายที่ชิ้นงาน): “16 ชิ้น”'
 
     def get(self, key: str):
         return getattr(self, key)
@@ -80,6 +82,8 @@ class Part:
         part.image = str(data.get("image", "") or "")
         part.outline = [[(float(x), float(y)) for x, y in loop] for loop in data.get("outline") or []]
         part.drawing_thickness = to_number(data.get("drawing_thickness", 0))
+        part.drawing_qty = to_number(data.get("drawing_qty", 0))
+        part.qty_source = str(data.get("qty_source", "") or "")
         return part
 
 
@@ -110,6 +114,7 @@ class DrawingRecord:
     material: str = ""
     thickness: str = ""
     part_count: int = 0
+    pieces: int = 0  # sum of the quantities of its parts (ชิ้น)
     imported: str = field(default_factory=lambda: date.today().isoformat())
     status: str = "รอตรวจ"
 

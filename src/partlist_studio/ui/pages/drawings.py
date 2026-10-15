@@ -12,7 +12,7 @@ from ...core import dwg_io
 from ..state import AppState
 from ..widgets import Card, DrawingPreview, PageHeader, button, run_async
 
-REG_COLUMNS = ["ไฟล์", "เลขที่แบบ", "ชื่อแบบ", "Rev.", "วัสดุ", "หนา", "รายการ", "นำเข้าเมื่อ", "สถานะแบบ"]
+REG_COLUMNS = ["ไฟล์", "เลขที่แบบ", "ชื่อแบบ", "Rev.", "วัสดุ", "หนา", "รายการ", "จำนวนชิ้น", "นำเข้าเมื่อ", "สถานะแบบ"]
 DRAWING_STATUSES = ["รอตรวจ", "อนุมัติแล้ว", "แก้ไข", "ยกเลิก"]
 
 
@@ -83,7 +83,7 @@ class DrawingsPage(QWidget):
         self.table.setRowCount(len(drawings))
         for r, d in enumerate(drawings):
             values = [d.file_name, d.drawing_no, d.title, d.revision, d.material, d.thickness, str(d.part_count),
-                      d.imported]
+                      str(d.pieces) if d.pieces else "", d.imported]
             for c, text in enumerate(values):
                 item = QTableWidgetItem(text)
                 if c == 0:

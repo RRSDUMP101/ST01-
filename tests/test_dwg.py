@@ -165,19 +165,28 @@ def test_code_name_thickness_per_flat_pattern():
     rows = {c.part.part_no: c for c in dwg_io.drawing_to_candidates(data)}
     got = {code: (c.part.name, c.part.thickness, c.thickness_source, c.part.qty) for code, c in rows.items()}
     assert got == {
-        "RRS-T-001": ("เฟรมบน", 3, dwg_io.THK_FROM_PART, 1),  # three texts under the part
+        "RRS-T-001": ("เฟรมบน", 3, dwg_io.THK_FROM_PART, 16),  # four texts under the part, '16 ชิ้น'
         "RRS-T-002": ("เฟรมล่าง", 3.2, dwg_io.THK_FROM_PART, 2),  # one combined text inside it
-        "RRS-T-003": ("แผ่นปิดข้าง", 4, dwg_io.THK_FROM_PART, 1),  # PART_NO / NAME / THK attributes
+        "RRS-T-003": ("แผ่นปิดข้าง", 4, dwg_io.THK_FROM_PART, 4),  # PART_NO / NAME / THK / QTY attributes
         "RRS-T-004": ("ขาจับ", 2, dwg_io.THK_FROM_PART, 1),  # Thickness=2.00 note
         "RRS-T-005": ("ฝาปิดท้าย", 2.3, dwg_io.THK_FROM_TITLE, 1),  # nothing on the part: THK of the title block
     }
+    assert {code: (c.qty_source, c.qty_text) for code, c in rows.items()} == {
+        "RRS-T-001": (dwg_io.QTY_FROM_PART, "16 ชิ้น"),
+        "RRS-T-002": (dwg_io.QTY_FROM_PART, "RRS-T-002 เฟรมล่าง t3.2 2 ชิ้น"),
+        "RRS-T-003": (dwg_io.QTY_FROM_PART, "QTY = 4"),
+        "RRS-T-004": (dwg_io.QTY_DEFAULT, ""),  # no quantity written: 1, flagged
+        "RRS-T-005": (dwg_io.QTY_DEFAULT, ""),
+    }
+    assert rows["RRS-T-001"].part.drawing_qty == 16 and rows["RRS-T-004"].part.drawing_qty == 0
+    assert rows["RRS-T-001"].part.qty_source == "แบบ (ป้ายที่ชิ้นงาน): “16 ชิ้น”"
     p1 = rows["RRS-T-001"].part
     assert p1.spec == "t3 x 150 x 60" and p1.drawing_thickness == 3
     assert p1.weight == pytest.approx(dwg_io.outline_net_area(p1.outline) * 3 * 7.85e-6, abs=2e-3)
     # the label block of RRS-T-003 is not the title block
     assert data.title_block["drawing_no"] == "RRS-T-SET" and data.title_block["name"] == "ชุดเฟรมกระบะ"
     record = dwg_io.drawing_record(data, 5, [c.part for c in rows.values()])
-    assert record.thickness == "2, 2.3, 3, 3.2, 4"
+    assert record.thickness == "2, 2.3, 3, 3.2, 4" and record.pieces == 16 + 2 + 4 + 1 + 1
 
 
 def test_thickness_rule_fixed_and_default(tmp_path):
@@ -250,3 +259,54 @@ def test_thickness_column_and_old_files(tmp_path):
     pl.save(tmp_path / "x.rrspl")
     back = PartList.load(tmp_path / "x.rrspl").parts[0]
     assert (back.thickness, back.drawing_thickness) == (2.5, 3)
+
+
+# --------------------------------------------------------------------------
+# Quantity: '16 ชิ้น' next to a part, 'อย่างละ 2 ชิ้น', general notes
+# --------------------------------------------------------------------------
+@pytest.mark.parametrize("text, qty", [("16 ชิ้น", 16), ("16ชิ้น", 16), ("จำนวน 16 ชิ้น", 16), ("QTY: 4", 4),
+                                       ("1,000 ชิ้น", 1000), ("๑๖ ชิ้น", 16), ("8 pcs", 8), ("หนา 9มิล 4 ชิ้น", 4),
+                                       ("M10 2 ชิ้น", 2), ("ชิ้นที่ 3", 0), ("หนา 3 มิล", 0), ("", 0), (None, 0)])
+def test_parse_qty(text, qty):
+    assert dwg_io.parse_qty(text) == qty
+
+
+def _read(tmp_path, parts, texts):
+    import ezdxf
+
+    doc = ezdxf.new()
+    msp = doc.modelspace()
+    for x0, y0, w, h in parts:
+        msp.add_lwpolyline([(x0, y0), (x0 + w, y0), (x0 + w, y0 + h), (x0, y0 + h)], close=True)
+    for value, x, y in texts:
+        msp.add_text(value, height=5).set_placement((x, y))
+    path = tmp_path / "qty.dxf"
+    doc.saveas(path)
+    data = dwg_io.read_drawing(path)
+    return data, [(c.part.qty, c.qty_source) for c in dwg_io.drawing_to_candidates(data)]
+
+
+def test_qty_next_to_each_part(tmp_path):
+    two = [(0, 0, 100, 50), (120, 0, 100, 50)]
+    _d, got = _read(tmp_path, two, [("16 ชิ้น", 0, -10), ("ขาจับ 4 ชิ้น", 120, -10)])
+    assert got == [(16, dwg_io.QTY_FROM_PART), (4, dwg_io.QTY_FROM_PART)]
+    data, _got = _read(tmp_path, two, [("ขาจับ 4 ชิ้น", 120, -10)])
+    assert [c.part.name for c in dwg_io.drawing_to_candidates(data)] == ["ชิ้นที่ 1", "ขาจับ"]
+    # 'อย่างละ' between two parts: both get it (not only the nearest)
+    data, got = _read(tmp_path, two, [("หนา 6 มิล อย่างละ 2 ชิ้น", 60, 60)])
+    assert got == [(2, dwg_io.QTY_FROM_PART)] * 2
+    assert [c.part.thickness for c in dwg_io.drawing_to_candidates(data)] == [6, 6]
+
+
+def test_qty_from_general_notes(tmp_path):
+    one, two = [(0, 0, 100, 50)], [(0, 0, 100, 50), (200, 0, 100, 50)]
+    _d, got = _read(tmp_path, one, [("16 ชิ้น", 400, 400)])  # one part: a note anywhere is its quantity
+    assert got == [(16, dwg_io.QTY_FROM_NOTE)]
+    _d, got = _read(tmp_path, two, [("อย่างละ 3 ชิ้น", 600, 400)])  # 'each': every part
+    assert got == [(3, dwg_io.QTY_FROM_NOTE)] * 2
+    _d, got = _read(tmp_path, two, [("8 ชิ้น", 0, -10), ("อย่างละ 3 ชิ้น", 600, 400)])  # its own label wins
+    assert got == [(8, dwg_io.QTY_FROM_PART), (3, dwg_io.QTY_FROM_NOTE)]
+    data, got = _read(tmp_path, two, [("16 ชิ้น", 600, 400)])  # several parts: which one? not guessed
+    assert got == [(1, dwg_io.QTY_DEFAULT)] * 2 and (data.note_qty, data.note_qty_each) == (16, False)
+    data, got = _read(tmp_path, one, [("16 ชิ้น", 400, 400), ("8 ชิ้น", 400, 300)])  # two different notes
+    assert got == [(1, dwg_io.QTY_DEFAULT)] and data.note_qty == 0

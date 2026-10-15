@@ -39,6 +39,14 @@ def validate_part(part: Part, duplicates: set[str]) -> tuple[str, str]:
     return "", ""
 
 
+def qty_tooltip(part: Part) -> str:
+    """Where the quantity came from: 'จำนวนจากแบบ: แบบ (ป้ายที่ชิ้นงาน): “16 ชิ้น”'."""
+    text = f"จำนวนจากแบบ: {part.qty_source}"
+    if part.drawing_qty and part.drawing_qty != part.qty:
+        text += f"\nในแบบ {part.drawing_qty:g} · ใน Part List {part.qty:g}"
+    return text
+
+
 _THUMBS: dict[str, QPixmap] = {}
 
 
@@ -122,7 +130,11 @@ class PartTableModel(QAbstractTableModel):
         if role == Qt.BackgroundRole and level:
             return theme.ERROR_BG if level == "error" else theme.WARN_BG
         if role == Qt.ToolTipRole:
-            return msg or (value if key == "remark" else None)
+            if msg:
+                return msg
+            if key == "qty" and part.qty_source:
+                return qty_tooltip(part)
+            return value if key == "remark" else None
         return None
 
     def flags(self, index):

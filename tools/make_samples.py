@@ -67,7 +67,7 @@ def side_panel():
 
 def frame_set():
     """Several flat patterns in one drawing, each labelled the way the drawing office writes it:
-    code + name + thickness as separate texts, one combined text, a label block with attributes,
+    code + name + thickness + quantity as separate texts, one combined text, a label block with attributes,
     a sheet-metal 'Thickness=' note - and one part with no thickness (takes THK of the title block)."""
     doc = ezdxf.new("R2010")
     doc.header["$INSUNITS"] = 4
@@ -78,7 +78,7 @@ def frame_set():
     _title_block(doc, msp, values={"DWG_NO": "RRS-T-SET", "TITLE": "ชุดเฟรมกระบะ", "MATERIAL": "SS400",
                                    "THK": "2.3", "QTY": "1", "REV": "A"})
     tag = doc.blocks.new("PART_TAG")
-    for i, attr in enumerate(("PART_NO", "NAME", "THK")):
+    for i, attr in enumerate(("PART_NO", "NAME", "THK", "QTY")):
         tag.add_attdef(attr, insert=(0, -i * 8), height=4, dxfattribs={"layer": "TEXT"})
 
     def plate(x0, y0, w, h, holes=2):
@@ -90,14 +90,14 @@ def frame_set():
     def text(value, x, y, height=5):
         msp.add_text(value, height=height, dxfattribs={"layer": "TEXT"}).set_placement((x, y))
 
-    plate(20, 200, 150, 60)  # 1: three texts under the part
-    for i, value in enumerate(("RRS-T-001", "เฟรมบน", "t=3")):
-        text(value, 20, 191 - i * 7)
+    plate(20, 200, 150, 60)  # 1: four texts under the part
+    for i, value in enumerate(("RRS-T-001", "เฟรมบน", "t=3", "16 ชิ้น")):
+        text(value, 20, 192 - i * 6)
     plate(200, 200, 180, 60, holes=3)  # 2: one text inside: code, name, thickness, quantity
     text("RRS-T-002 เฟรมล่าง t3.2 2 ชิ้น", 210, 226)
-    plate(20, 60, 100, 80)  # 3: label block with PART_NO / NAME / THK attributes
+    plate(20, 60, 100, 80)  # 3: label block with PART_NO / NAME / THK / QTY attributes
     ref = msp.add_blockref("PART_TAG", (130, 130), dxfattribs={"layer": "TEXT"})
-    ref.add_auto_attribs({"PART_NO": "RRS-T-003", "NAME": "แผ่นปิดข้าง", "THK": "4"})
+    ref.add_auto_attribs({"PART_NO": "RRS-T-003", "NAME": "แผ่นปิดข้าง", "THK": "4", "QTY": "4"})
     plate(200, 60, 100, 60, holes=1)  # 4: sheet-metal export note above the part
     text("RRS-T-004 ขาจับ", 200, 126)
     text("Thickness=2.00", 200, 134)

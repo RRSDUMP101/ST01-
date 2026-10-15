@@ -54,7 +54,7 @@ def main() -> int:
         if data.bom:
             parts = [p for p in parts if p.part_no != "RRS-TB-001"]  # detailed from its own drawing below
         state.partlist.parts.extend(parts)
-        state.partlist.drawings.append(dwg_io.drawing_record(data, len(parts)))
+        state.partlist.drawings.append(dwg_io.drawing_record(data, len(parts), parts))
         state.drawing_cache[data.path] = data
     for p in state.partlist.parts:
         if p.part_no == "RRS-TB-002":  # mirror part of RRS-TB-001, weight typed in by planning

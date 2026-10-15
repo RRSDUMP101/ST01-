@@ -7,7 +7,8 @@ import traceback
 from PySide6.QtCore import QObject, QPointF, QRectF, QRunnable, Qt, QThreadPool, Signal
 from PySide6.QtGui import QBrush, QColor, QPainter, QPainterPath, QPen, QPolygonF
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QFrame, QGraphicsScene, QGraphicsView, QHBoxLayout,
-                               QHeaderView, QLabel, QPushButton, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
+                               QHeaderView, QLabel, QPushButton, QStyle, QStyledItemDelegate, QTableWidget,
+                               QTableWidgetItem, QVBoxLayout, QWidget)
 
 from . import theme
 
@@ -61,6 +62,35 @@ def fill(t: QTableWidget, rows: list[list], status_col: int | None = None, data:
 
 def selected_rows(t: QTableWidget) -> list[int]:
     return sorted({i.row() for i in t.selectedIndexes()})
+
+
+class BarDelegate(QStyledItemDelegate):
+    """A table cell drawn as a progress bar: the value 0..1 is in BarDelegate.ROLE (green when complete)."""
+
+    ROLE = Qt.UserRole + 7
+
+    def paint(self, painter, option, index):  # Qt API
+        value = index.data(self.ROLE)
+        if value is None:
+            super().paint(painter, option, index)
+            return
+        value = max(0.0, min(1.0, float(value)))
+        painter.save()
+        if option.state & QStyle.State_Selected:
+            painter.fillRect(option.rect, option.palette.highlight())
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        bar = QRectF(option.rect.adjusted(6, 6, -6, -6))
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QColor("#E6EAF0"))
+        painter.drawRoundedRect(bar, 4, 4)
+        if value > 0:
+            done = QRectF(bar)
+            done.setWidth(max(8.0, bar.width() * value))
+            painter.setBrush(QColor("#2E9D5B" if value >= 1 else "#E08A1E"))
+            painter.drawRoundedRect(done, 4, 4)
+        painter.setPen(QColor("#FFFFFF" if value >= 0.55 else "#1B2430"))
+        painter.drawText(bar, Qt.AlignCenter, f"{value:.0%}")
+        painter.restore()
 
 
 class PageHeader(QWidget):

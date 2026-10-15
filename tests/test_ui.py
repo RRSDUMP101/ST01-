@@ -326,3 +326,63 @@ def test_laser_settings_dialog(app):
     dialog.mark.setChecked(True)
     p = dialog.result_params()
     assert p.speed("STEEL", 3) == 3800 and p.mark_codes and p.speed("SUS", 3) == 4500
+
+
+def test_parts_ready_tab_readiness_tickets_and_scan(window, app, monkeypatch, tmp_path):
+    from PySide6.QtWidgets import QInputDialog
+
+    from partlist_studio.core import catalog, production, qr
+    from partlist_studio.core.stock import StockItem, StockList
+
+    state = window.state
+    state.add_stock_source("Express", StockList(items=[
+        StockItem(code="RRS-T-024-L-84", name="บังอาย Champ 84(ซ้าย)", unit="ชิ้น", on_hand=4),
+        StockItem(code="RRS-A-102-L-80", name="เสาหลัง(ซ้าย) 80", unit="ต้น", on_hand=1),
+        StockItem(code="01-B00-0004", name="เหล็กแผ่นดำ 3.2 มม.", unit="แผ่น", on_hand=5)]))
+    job = production.job_from_parts("SO-R1", [], 3, None, False, title="คอกสูง 3 ราว")
+    job.parts = [production.JobPart("1", "RRS-T-024-L-84", "บังอาย Champ 84(ซ้าย)", 2, 6, from_stock=2,
+                                    route=["ตัด", "พับ"], done={"ตัด": 3}),
+                 production.JobPart("2", "RRS-A-102-L-80", "เสาหลัง(ซ้าย) 80", 1, 3, from_stock=3, route=[])]
+    state.jobs.append(job)
+    state.save_jobs()
+    stock_page = window.pages["stock"]
+    window.go("stock")
+    stock_page.tabs.setCurrentWidget(stock_page.ready)
+    tab = stock_page.ready
+    assert tab.table.rowCount() == 2 and tab.groups.count() == 3  # ทุกกลุ่ม, FRONT, POST
+    tab.search.setText(qr.item_payload("RRS-A-102-L-80", "x"))  # a scanned shelf label
+    assert tab.table.rowCount() == 1 and tab.table.item(0, 1).text() == "RRS-A-102-L-80"
+    tab.search.clear()
+    tab.table.item(0, catalog.PART_STOCK_HEADERS.index("ตำแหน่ง")).setText("P-FRONT-01")  # edit in the table
+    assert state.catalog.location_of("RRS-T-024-L-84") == "P-FRONT-01"
+    tab.table.selectRow(0)
+    monkeypatch.setattr(QInputDialog, "getItem", lambda *a, **k: ("FIX – หู / ตัวยึด / ล็อก", True))
+    tab.set_group()
+    assert state.catalog.group_of("RRS-T-024-L-84", "บังอาย") == "FIX" and tab.groups.count() == 3
+    monkeypatch.setattr(window.actions, "save_path", lambda caption, name, filters: str(tmp_path / name))
+    tab.print_labels()
+    assert (tmp_path / "ป้ายชั้นวาง.pdf").read_bytes()[:4] == b"%PDF"
+    tab.export()
+    assert (tmp_path / "ชิ้นส่วนพร้อมประกอบ_แยกกลุ่ม.xlsx").is_file()
+
+    prod = window.pages["production"]
+    window.go("production")
+    prod._select_job("SO-R1")
+    prod.tabs.setCurrentIndex(1)
+    assert prod.ready_groups.rowCount() == 2 and "พร้อมประกอบ" in prod.ready_label.text()
+    assert prod.ready_groups.item(0, 0).text() == "เสา / ซองเสา"  # FIX is listed after POST
+    prod.parts.clearSelection()
+    prod.print_tickets()  # nothing selected: every part the job makes
+    assert (tmp_path / "ใบงาน_SO-R1.pdf").read_bytes()[:4] == b"%PDF"
+    prod.export_kitting()
+    assert (tmp_path / "ใบจัดชุด_SO-R1.xlsx").is_file()
+    prod.scan.setText(qr.ticket_payload("SO-R1", 1, "RRS-T-024-L-84", 4))
+    prod.scanned()
+    assert prod.tabs.currentIndex() == 0 and [i.row() for i in prod.parts.selectionModel().selectedRows()] == [0]
+    prod.scan.setText("เสาหลัง")
+    prod.scanned()
+    assert [i.row() for i in prod.parts.selectionModel().selectedRows()] == [1]
+    from partlist_studio.ui.state import AppState
+
+    again = AppState(data_dir=state.data_dir())  # what was set by hand is saved
+    assert again.catalog.group_of("RRS-T-024-L-84") == "FIX" and again.catalog.location_of("RRS-T-024-L-84") == "P-FRONT-01"

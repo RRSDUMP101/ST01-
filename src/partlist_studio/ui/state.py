@@ -8,6 +8,7 @@ from pathlib import Path
 from PySide6.QtCore import QObject, QSettings, QStandardPaths, Signal
 
 from ..core import stock as stock_mod
+from ..core.catalog import Catalog
 from ..core.company_files import ModelBOM
 from ..core.dwg_io import DEFAULT_DENSITIES, DrawingData, find_converter
 from ..core.laser import CutQueue, FlatLibrary, LaserParams
@@ -107,6 +108,7 @@ class AppState(QObject):
     jobs_changed = Signal()
     ledger_changed = Signal()
     laser_changed = Signal()  # flat pattern library or cut programs changed
+    catalog_changed = Signal()  # assembly groups / shelf locations set by hand
     message = Signal(str)
 
     def __init__(self, data_dir: str | Path | None = None):
@@ -123,6 +125,7 @@ class AppState(QObject):
         self.raw_uses: list[RawUse] = []
         self.flats = FlatLibrary()  # คลังรูปคลี่: flat pattern of every part code from the drawings
         self.cut_queue = CutQueue()  # laser cut programs
+        self.catalog = Catalog()  # assembly group and shelf location set by hand per code
         self.requirements: list[RequirementLine] = []
         self.drawing_cache: dict[str, DrawingData] = {}
         self.path: str = ""
@@ -164,6 +167,7 @@ class AppState(QObject):
                          for r in data.get("raw_uses", [])]
         self.flats = FlatLibrary.from_dict(data.get("flats", {}))
         self.cut_queue = CutQueue.from_dict(data.get("cut_queue", {}))
+        self.catalog = Catalog.from_dict(data.get("catalog"))
         self._merge_stock()
 
     def save_library(self) -> None:
@@ -177,6 +181,7 @@ class AppState(QObject):
             "raw_uses": [r.__dict__ for r in self.raw_uses],
             "flats": self.flats.to_dict(),
             "cut_queue": self.cut_queue.to_dict(),
+            "catalog": self.catalog.to_dict(),
         }
         (self.data_dir() / "library.json").write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
 
@@ -279,6 +284,10 @@ class AppState(QObject):
     def save_laser(self) -> None:
         self.save_library()
         self.laser_changed.emit()
+
+    def save_catalog(self) -> None:
+        self.save_library()
+        self.catalog_changed.emit()
 
     def mark_dirty(self) -> None:
         self.dirty = True

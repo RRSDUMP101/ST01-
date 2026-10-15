@@ -5,21 +5,25 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QDate, Qt
+from PySide6.QtCore import QDate, QItemSelectionModel, Qt
 from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDateEdit, QDialog, QDialogButtonBox, QDoubleSpinBox,
                                QGridLayout, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QListWidget, QListWidgetItem,
                                QMenu, QMessageBox, QProgressBar, QSplitter, QTabWidget, QVBoxLayout, QWidget)
 
+from ...core.catalog import (KIT_HEADERS, READINESS_HEADERS, export_kitting, job_readiness, job_ready_pct,
+                             job_tickets, kitting_rows, readiness_rows)
 from ...core.production import (DONE, FROM_STOCK, JOB_CANCELLED, JOB_STATUSES, STEPS, LogEntry, export_status,
                                 job_documents, job_from_parts, wip_from_stock)
+from ...core.qr import parse_payload
 from ..state import AppState
-from ..widgets import PageHeader, StatusChipRow, button, fill, selected_rows, table
+from ..widgets import BarDelegate, PageHeader, StatusChipRow, button, fill, selected_rows, table
 
 PART_COLS = ["ลำดับ", "รหัส", "ชิ้นส่วน", "ต้องใช้", "ใช้จากสต็อก", "ต้องผลิต", "ขั้นตอน", *STEPS, "สถานะ",
              "รับเข้าแล้ว", "%"]
 STEP_COL0 = 7
 CHIPS = ["รอตัด", "รอพับ", "รอเหยียบปิด", "รอเชื่อม", "รอกลึง", "รอทำสี", DONE, FROM_STOCK]
+LINE_HEADERS = KIT_HEADERS[:-1]  # without the 'หยิบแล้ว' tick box of the printed picking list
 
 
 class ProductionPage(QWidget):
@@ -47,6 +51,11 @@ class ProductionPage(QWidget):
         left = QWidget()
         ll = QVBoxLayout(left)
         ll.setContentsMargins(0, 0, 8, 0)
+        self.scan = QLineEdit()
+        self.scan.setPlaceholderText("สแกนใบงาน (QR) / ค้นหารหัส แล้วกด Enter")
+        self.scan.setClearButtonEnabled(True)
+        self.scan.returnPressed.connect(self.scanned)
+        ll.addWidget(self.scan)
         self.show_closed = QCheckBox("แสดงงานที่ปิดแล้ว")
         self.show_closed.toggled.connect(self.refresh)
         ll.addWidget(self.show_closed)
@@ -93,6 +102,8 @@ class ProductionPage(QWidget):
                 ("เสร็จทั้งหมด ✓", self.finish, "แถวที่เลือก: ผ่านทุกขั้น", ""),
                 ("บันทึกจำนวน…", self.record_qty, "บันทึกจำนวนชิ้นที่ผ่านขั้นหนึ่ง", ""),
                 ("แก้ขั้นตอน…", self.edit_route, "ขั้นตอนการผลิตของแถวที่เลือก", ""),
+                ("พิมพ์ใบงาน (QR)…", self.print_tickets,
+                 "ใบงาน A6 ต่อชิ้นส่วน: QR รูปชิ้นงาน ขั้นตอน และที่เก็บ (แถวที่เลือก หรือทุกชิ้นที่ต้องผลิต)", ""),
                 ("สร้างใบเบิก/รับ (PD · FR)", self.make_documents,
                  "ร่าง PD วัตถุดิบ + PD จ่ายชิ้นส่วนประกอบ + FR รับชิ้นงานเสร็จ → ตรวจและบันทึกในหน้า เบิก/รับ สต็อก",
                  "accent")):
@@ -106,6 +117,7 @@ class ProductionPage(QWidget):
         self.parts = table(PART_COLS, [50, 170, 220, 60, 75, 65, 150] + [62] * len(STEPS) + [150, 75], editable=True)
         self.parts.itemChanged.connect(self._cell_edited)
         self.tabs.addTab(self.parts, "ชิ้นส่วน")
+        self.tabs.addTab(self._readiness_tab(), "ความพร้อมประกอบ")
         self.log = table(["เวลา", "รหัส", "ชิ้นส่วน", "ขั้น", "จำนวน", "หมายเหตุ"], [130, 170, 240, 80, 70])
         self.tabs.addTab(self.log, "บันทึกการทำงาน")
         self.wip = table(["รหัส", "รายการ", "รอขั้น", "จำนวน", "หมายเหตุ"], [140, 280, 90, 70])
@@ -117,6 +129,8 @@ class ProductionPage(QWidget):
 
         state.jobs_changed.connect(self.refresh)
         state.stock_changed.connect(self._show_wip)
+        state.stock_changed.connect(self._show_readiness)
+        state.catalog_changed.connect(self._show_readiness)
         self.refresh()
         self._show_wip()
 
@@ -154,6 +168,7 @@ class ProductionPage(QWidget):
             self.caption.setText("ยังไม่มีงาน – เปิดงานจากหน้า แบบกระบะ (สร้างงานผลิต) หรือจาก Part List ปัจจุบัน")
             self.parts.setRowCount(0)
             self.log.setRowCount(0)
+            self._show_readiness()
             return
         self.caption.setText(f"{job.job_no} · {job.title or job.model}" + (f" · {job.variant}" if job.variant else "")
                              + f" · {job.sets:g} คัน" + (f" · เอกสาร {', '.join(job.docs)}" if job.docs else ""))
@@ -190,6 +205,57 @@ class ProductionPage(QWidget):
                     item.setBackground(QBrush(QColor("#FFF8E1")))
         self.parts.blockSignals(False)
         fill(self.log, [[e.when.replace("T", " "), e.code, e.name, e.step, e.qty, e.note] for e in reversed(job.log)])
+        self._show_readiness()
+
+    def _readiness_tab(self) -> QWidget:
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        lay.setContentsMargins(0, 8, 0, 0)
+        row = QHBoxLayout()
+        self.ready_label = QLabel()
+        self.ready_label.setObjectName("CardTitle")
+        self.ready_label.setWordWrap(True)
+        row.addWidget(self.ready_label, 1)
+        b = button("ใบจัดชุด (Excel)…", "accent", "ใบหยิบชิ้นส่วนเข้าประกอบของงานนี้ แยกกลุ่ม พร้อมตำแหน่งเก็บ")
+        b.clicked.connect(self.export_kitting)
+        row.addWidget(b)
+        lay.addLayout(row)
+        split = QSplitter(Qt.Vertical)
+        self.ready_groups = table(READINESS_HEADERS, [170, 70, 70, 170, 70])
+        self._bars = BarDelegate(self.ready_groups)
+        self.ready_groups.setItemDelegateForColumn(3, self._bars)
+        self.ready_groups.itemSelectionChanged.connect(self._show_ready_lines)
+        split.addWidget(self.ready_groups)
+        self.ready_lines = table(LINE_HEADERS, [130, 150, 200, 60, 60, 50, 95])
+        split.addWidget(self.ready_lines)
+        split.setSizes([220, 380])
+        lay.addWidget(split, 1)
+        hint = QLabel("พร้อม = ใช้จากสต็อก + ผลิตผ่านครบทุกขั้น · ปล่อยประกอบชุดย่อยเมื่อกลุ่มนั้นครบ 100% · "
+                      "กลุ่มประกอบ/ตำแหน่งเก็บตั้งได้ในหน้า สโตร์ → ชิ้นส่วนพร้อมประกอบ")
+        hint.setObjectName("Hint")
+        hint.setWordWrap(True)
+        lay.addWidget(hint)
+        self._ready = []
+        return w
+
+    def _show_readiness(self) -> None:
+        job = self._job()
+        self._ready = job_readiness(job, self.state.catalog, self.state.stock) if job else []
+        if job is None:
+            self.ready_label.setText("ยังไม่มีงาน")
+        else:
+            done = sum(g.complete for g in self._ready)
+            self.ready_label.setText(f"{job.job_no} · พร้อมประกอบ {job_ready_pct(self._ready):.0%} · "
+                                     f"ครบ {done}/{len(self._ready)} กลุ่ม")
+        fill(self.ready_groups, readiness_rows(self._ready), status_col=4)
+        for r, g in enumerate(self._ready):
+            self.ready_groups.item(r, 3).setData(BarDelegate.ROLE, 1.0 if g.complete else min(g.pct, 0.99))
+        self._show_ready_lines()
+
+    def _show_ready_lines(self) -> None:
+        rows = selected_rows(self.ready_groups)
+        groups = [self._ready[r] for r in rows if r < len(self._ready)] or self._ready
+        fill(self.ready_lines, [line[:-1] for line in kitting_rows(groups)], status_col=len(LINE_HEADERS) - 1)
 
     def _show_wip(self) -> None:
         fill(self.wip, [[c, n, s, q if q is not None else "", note] for c, n, s, q, note in wip_from_stock(self.state.stock)],
@@ -359,3 +425,75 @@ class ProductionPage(QWidget):
             export_status(jobs, path)
             self.state.notify(f"บันทึก {Path(path).name} แล้ว")
 
+    # ---- tickets, picking list, scan ---------------------------------------
+    def print_tickets(self) -> None:
+        job = self._job()
+        if job is None:
+            return
+        indexes = [r for r in selected_rows(self.parts) if r < len(job.parts)] or None
+        tickets = job_tickets(job, indexes, self.state.catalog, self.state.stock, self.state.flats,
+                              self.state.cut_queue.programs)
+        if not tickets:
+            self.actions.error("ไม่มีใบงาน", "งานนี้ไม่มีชิ้นที่ต้องผลิต (ใช้จากสต็อกทั้งหมด)")
+            return
+        path = self.actions.save_path("ใบงาน (PDF)", f"ใบงาน_{job.job_no}.pdf", "PDF (*.pdf)")
+        if not path:
+            return
+        from ..printing import open_document, write_tickets_pdf
+
+        n = write_tickets_pdf(path, tickets)
+        self.state.notify(f"บันทึก {Path(path).name} แล้ว ({n} ใบ · A6 แนวนอน · สแกน QR ที่ช่อง สแกนใบงาน)")
+        open_document(path)
+
+    def export_kitting(self) -> None:
+        job = self._job()
+        if job is None:
+            return
+        path = self.actions.save_path("ใบจัดชุด", f"ใบจัดชุด_{job.job_no}.xlsx", "Excel (*.xlsx)")
+        if path:
+            export_kitting(job, job_readiness(job, self.state.catalog, self.state.stock), path)
+            self.state.notify(f"บันทึก {Path(path).name} แล้ว")
+
+    def scanned(self) -> None:
+        """A scanned ticket (RRS1|J|job|line|…) opens the job and selects the part; other text finds codes."""
+        text = self.scan.text().strip()
+        if not text:
+            return
+        scan = parse_payload(text)
+        if scan.kind == "job":
+            job = next((j for j in self.state.jobs if j.job_no == scan.job_no), None)
+            if job is None:
+                self.actions.error("ไม่พบงาน", f"ไม่พบงาน {scan.job_no} ในโปรแกรม")
+                return
+            if job not in self._visible_jobs():
+                self.show_closed.setChecked(True)
+            self._select_job(job.job_no)
+            index = scan.line - 1
+            if not (0 <= index < len(job.parts) and (not scan.code or job.parts[index].code == scan.code)):
+                index = next((i for i, p in enumerate(job.parts) if p.code == scan.code), -1)
+            rows = [index] if index >= 0 else []
+        else:
+            job = self._job()
+            if job is None:
+                return
+            needle = scan.code.lower()
+            rows = [i for i, p in enumerate(job.parts) if needle in f"{p.code} {p.name}".lower()]
+        self.tabs.setCurrentIndex(0)
+        self.parts.clearSelection()
+        selection = self.parts.selectionModel()
+        for r in rows:
+            selection.select(self.parts.model().index(r, 0), QItemSelectionModel.Select | QItemSelectionModel.Rows)
+        if rows:
+            self.parts.scrollToItem(self.parts.item(rows[0], 0))
+            p = job.parts[rows[0]]
+            self.state.notify(f"{job.job_no} · {p.code} {p.name} · {p.status_text}"
+                              + (f" (+ อีก {len(rows) - 1} แถว)" if len(rows) > 1 else ""))
+        else:
+            self.state.notify(f"ไม่พบ '{text}' ในงาน {job.job_no}")
+        self.scan.clear()
+
+    def _select_job(self, job_no: str) -> None:
+        for i in range(self.list.count()):
+            if self.list.item(i).data(Qt.UserRole) == job_no:
+                self.list.setCurrentRow(i)
+                return

@@ -202,6 +202,31 @@ def main() -> int:
     w.pages["stock"].tabs.setCurrentIndex(2)
     w.pages["stock"].replenish.run()
     shot(w, "15_minmax.png")
+    # ---- parts waiting for assembly by group (with shelf locations), readiness of a job, a job ticket
+    from partlist_studio.core import catalog as catalog_mod
+    from partlist_studio.ui.printing import ticket_image
+
+    per_group: dict[str, int] = {}
+    for r in catalog_mod.part_stock(state.stock, state.jobs, state.catalog):
+        if r.group and r.item is not None:
+            per_group[r.group] = per_group.get(r.group, 0) + 1
+            state.catalog.set_location(r.code, f"P-{r.group}-{(per_group[r.group] - 1) // 4 + 1:02d}")
+    state.save_catalog()
+    stock_page = w.pages["stock"]
+    stock_page.tabs.setCurrentIndex(3)
+    stock_page.ready.refresh()
+    stock_page.ready.table.selectRow(1)
+    shot(w, "15b_parts_ready.png")
+    w.go("production")
+    prod = w.pages["production"]
+    prod._select_job("SO6910-015")
+    prod.tabs.setCurrentIndex(1)
+    prod.ready_groups.selectRow(0)
+    shot(w, "12b_readiness.png")
+    ticket = catalog_mod.job_tickets(laser_job, [0], state.catalog, state.stock, state.flats,
+                                     state.cut_queue.programs)[0]
+    ticket_image(ticket, 160).save(str(out / "12c_job_ticket.png"))
+    prod.tabs.setCurrentIndex(0)
     w.go("express")
     w.pages["express"].audit_codes()
     shot(w, "16_code_audit.png")

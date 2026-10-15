@@ -6,3 +6,4 @@ gspread>=6.0
 google-auth>=2.20
 google-auth-oauthlib>=1.0
 Pillow>=10
+segno>=1.6

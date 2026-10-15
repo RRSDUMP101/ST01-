@@ -69,10 +69,11 @@ def test_checks_before_cutting():
 
 
 def test_cut_time_and_params_round_trip():
-    params = laser.LaserParams()
-    assert params.speed("STEEL", 3) == 4500 and params.speed("STEEL", 3.5) == pytest.approx(4000)
-    minutes = laser.cut_minutes(4500, 10, "STEEL", 3, params)  # 1 min cutting + 10 × 0.5 s
-    assert minutes == pytest.approx((1 + 10 * 0.5 / 60) * 1.15)
+    params = laser.LaserParams()  # HSG 12,000W, the company's machine
+    assert params.machine == "HSG 12,000W" and (params.bed_w, params.bed_l) == (2500, 8000)
+    assert params.speed("STEEL", 3) == 26000 and params.speed("STEEL", 3.5) == pytest.approx(23000)
+    minutes = laser.cut_minutes(26000, 10, "STEEL", 3, params)  # 1 min cutting + 10 × 0.2 s
+    assert minutes == pytest.approx((1 + 10 * 0.2 / 60) * 1.15)
     params.speeds["STEEL"][3] = 3000
     params.mark_codes = True
     back = laser.LaserParams.from_dict(params.to_dict())
@@ -154,3 +155,21 @@ def test_open_cut_lines_are_counted(tmp_path):
     doc.saveas(path)
     data = dwg_io.read_drawing(path)
     assert len(data.outer_profiles) == 1 and data.open_chains == 1 and data.open_examples == [(200.0, 0.0)]
+
+
+def test_machine_presets_bed_and_old_settings():
+    params = laser.LaserParams()
+    params.use_machine("Fiber 3,000W (ทั่วไป)")
+    assert params.speed("STEEL", 3) == 4500 and params.bed_l == 3000
+    # settings saved by the first version (3 kW table, never tuned) move to the company's machine
+    old = laser.LaserParams.from_dict({k: v for k, v in params.to_dict().items() if k not in ("machine", "bed_w", "bed_l")})
+    assert old.machine == "HSG 12,000W" and old.speed("STEEL", 3) == 26000
+    tuned = params.to_dict()
+    tuned.pop("machine")
+    tuned["speeds"]["STEEL"]["3"] = 5000  # tuned by hand: kept
+    assert laser.LaserParams.from_dict(tuned).speed("STEEL", 3) == 5000
+    params = laser.LaserParams()
+    square = [(0, 0), (9000, 0), (9000, 100), (0, 100)]
+    long_part = nesting.NestPart("k", "RRS-X-030", "รางยาว", "SS400", 3, 9000, 100, 1, outline=[square])
+    assert any("ใหญ่กว่าโต๊ะ" in i.text and i.level == laser.ERROR for i in laser.check_part(long_part, params))
+    assert params.fits_bed(1524, 6096) and not params.fits_bed(3000, 3000)

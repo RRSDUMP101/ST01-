@@ -122,8 +122,32 @@ class LaserSettingsDialog(QDialog):
         self.resize(760, 640)
         self.params = params
         lay = QVBoxLayout(self)
-        hint = QLabel("ความเร็วตัด (มม./นาที) ตามวัสดุและความหนา – ค่าเริ่มต้นเป็นค่าทั่วไปของเลเซอร์ไฟเบอร์ ~3 kW "
-                      "ให้แก้ตามตารางตัดของเครื่องจริง · เวลาเจาะ (วินาที/จุด) ใช้กับทุกวัสดุ")
+        top = QHBoxLayout()
+        top.addWidget(QLabel("เครื่องตัด"))
+        self.machine = QComboBox()
+        self.machine.addItems(list(laser.MACHINES))
+        if params.machine and params.machine not in laser.MACHINES:
+            self.machine.addItem(params.machine)
+        self.machine.setCurrentText(params.machine)
+        top.addWidget(self.machine)
+        use = button("ใช้ค่าของรุ่นนี้", tooltip="แทนตารางความเร็ว เวลาเจาะ และขนาดโต๊ะ ด้วยค่าของรุ่นที่เลือก")
+        use.clicked.connect(self._use_machine)
+        top.addWidget(use)
+        top.addWidget(QLabel("โต๊ะรับแผ่นได้สูงสุด"))
+        self.bed_w, self.bed_l = QDoubleSpinBox(), QDoubleSpinBox()
+        for w, v in ((self.bed_w, params.bed_w), (self.bed_l, params.bed_l)):
+            w.setRange(0, 20000)
+            w.setDecimals(0)
+            w.setSuffix(" มม.")
+            w.setValue(v)
+        top.addWidget(self.bed_w)
+        top.addWidget(QLabel("x"))
+        top.addWidget(self.bed_l)
+        top.addStretch(1)
+        lay.addLayout(top)
+        hint = QLabel("ความเร็วตัด (มม./นาที) ตามวัสดุและความหนา – ค่า HSG 12,000W เป็นค่าประมาณ "
+                      "(เหล็กใช้ลม/N2 ถึง 12 มม. หนากว่านั้น O2) ให้แก้ตามตารางตัดของเครื่องจริง · "
+                      "เวลาเจาะ (วินาที/จุด) ใช้กับทุกวัสดุ · แผ่นหรือชิ้นที่ใหญ่กว่าโต๊ะจะขึ้นในตรวจก่อนตัด")
         hint.setWordWrap(True)
         hint.setObjectName("Hint")
         lay.addWidget(hint)
@@ -192,9 +216,25 @@ class LaserSettingsDialog(QDialog):
     def _add_row(self) -> None:
         self.speeds.insertRow(self.speeds.rowCount())
 
+    def _use_machine(self) -> None:
+        name = self.machine.currentText()
+        if name not in laser.MACHINES:
+            return
+        fresh = laser.LaserParams(gap=self.params.gap, margin=self.params.margin, rotate=self.params.rotate)
+        fresh.use_machine(name)
+        self.bed_w.setValue(fresh.bed_w)
+        self.bed_l.setValue(fresh.bed_l)
+        self._fill_speeds(fresh)
+
     def _reset(self) -> None:
         fresh = laser.LaserParams(gap=self.params.gap, margin=self.params.margin, rotate=self.params.rotate)
-        self.params = fresh
+        self.machine.setCurrentText(fresh.machine)
+        self.bed_w.setValue(fresh.bed_w)
+        self.bed_l.setValue(fresh.bed_l)
+        self._fill_speeds(fresh)
+
+    def _fill_speeds(self, fresh: laser.LaserParams) -> None:
+        self.params.speeds, self.params.pierce = fresh.speeds, fresh.pierce
         self.speeds.setRowCount(0)
         thicknesses = sorted({float(k) for t in fresh.speeds.values() for k in t} | {float(k) for k in fresh.pierce})
         self.speeds.setRowCount(len(thicknesses))
@@ -237,6 +277,8 @@ class LaserSettingsDialog(QDialog):
             setattr(p, key, w.text().strip() or getattr(laser.LaserParams(), key))
         p.mark_codes = self.mark.isChecked()
         p.sheet_outline = self.sheet.isChecked()
+        p.machine = self.machine.currentText()
+        p.bed_w, p.bed_l = self.bed_w.value(), self.bed_l.value()
         return p
 
 

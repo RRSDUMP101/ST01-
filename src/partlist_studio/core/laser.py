@@ -11,8 +11,9 @@
          CUT_INNER / MARK), PNG previews and the cut order (Excel)
       ─► queue: รอตัด → กำลังตัด → ตัดแล้ว - the job parts pass ตัด (so they show รอพับ) and a PD draft issues
          the sheets that were cut
-Cutting time = cut length ÷ speed + pierces × pierce time, plus travel and sheet handling. The speeds are
-typical of a 3 kW fiber laser; set them to the cutting table of the machine.
+Cutting time = cut length ÷ speed + pierces × pierce time, plus travel and sheet handling. The default speeds
+are estimates for the company's HSG 12,000 W fiber laser (bed 8,000 × 2,500 mm); set them to the machine's own
+cutting table.
 """
 
 from __future__ import annotations
@@ -40,16 +41,34 @@ OPEN = {ST_WAIT, ST_CUTTING}
 ERROR = "error"
 WARN = "warn"
 
-# mm/min by material family and thickness (mm): typical 3 kW fiber laser (O2 for steel, N2 for SUS / AL).
-DEFAULT_SPEEDS: dict[str, dict[float, float]] = {
+# mm/min by material family and thickness (mm), and seconds per pierce by thickness.
+# HSG 12,000 W (the company's machine): estimates - steel with air/N2 up to 12 mm and O2 above, SUS / AL with N2.
+SPEEDS_12KW: dict[str, dict[float, float]] = {
+    "STEEL": {1: 45000, 1.5: 40000, 2: 35000, 2.5: 30000, 3: 26000, 4: 20000, 5: 16000, 6: 12000, 8: 7500,
+              10: 5000, 12: 3500, 14: 2600, 16: 2000, 20: 1400, 25: 1000, 30: 750},
+    "GALV": {1: 40000, 1.5: 35000, 2: 30000, 3: 22000, 4: 16000, 5: 12000},
+    "SUS": {1: 50000, 1.5: 45000, 2: 38000, 3: 26000, 4: 19000, 5: 14000, 6: 11000, 8: 6500, 10: 4500, 12: 3200,
+            16: 1800, 20: 1100, 25: 650},
+    "AL": {1: 40000, 2: 30000, 3: 20000, 4: 14000, 5: 10000, 6: 7500, 8: 4500, 10: 3200, 12: 2300, 16: 1200, 20: 700},
+}
+PIERCE_12KW: dict[float, float] = {1: 0.1, 3: 0.2, 5: 0.3, 8: 0.6, 12: 1.0, 16: 1.5, 20: 2.5, 25: 3.5, 30: 5.0}
+# a typical 3 kW fiber laser (O2 for steel, N2 for SUS / AL): the defaults of the first version
+SPEEDS_3KW: dict[str, dict[float, float]] = {
     "STEEL": {1: 25000, 1.5: 15000, 2: 8000, 2.5: 6000, 3: 4500, 4: 3500, 5: 3000, 6: 2500, 8: 1800, 10: 1400,
               12: 1100, 16: 800, 20: 600},
     "GALV": {1: 22000, 1.5: 14000, 2: 7000, 3: 4000},
     "SUS": {1: 25000, 1.5: 16000, 2: 10000, 3: 4500, 4: 2800, 5: 1800, 6: 1200, 8: 700},
     "AL": {1: 20000, 2: 8000, 3: 3500, 4: 2000, 5: 1200, 6: 800},
 }
-# seconds per pierce by thickness (mm)
-DEFAULT_PIERCE: dict[float, float] = {1: 0.3, 3: 0.5, 5: 1.0, 8: 2.0, 12: 3.0, 20: 5.0}
+PIERCE_3KW: dict[float, float] = {1: 0.3, 3: 0.5, 5: 1.0, 8: 2.0, 12: 3.0, 20: 5.0}
+# name -> (speeds, pierce, bed width, bed length mm)
+MACHINES: dict[str, tuple[dict, dict, float, float]] = {
+    "HSG 12,000W": (SPEEDS_12KW, PIERCE_12KW, 2500.0, 8000.0),
+    "Fiber 3,000W (ทั่วไป)": (SPEEDS_3KW, PIERCE_3KW, 1500.0, 3000.0),
+}
+DEFAULT_MACHINE = "HSG 12,000W"
+DEFAULT_SPEEDS = SPEEDS_12KW
+DEFAULT_PIERCE = PIERCE_12KW
 
 
 def _interp(table: dict, x: float) -> float:
@@ -85,6 +104,9 @@ class LaserParams:
     layer_mark: str = "MARK"
     mark_codes: bool = False  # write the part code on the MARK layer (engraving)
     sheet_outline: bool = False  # draw the sheet border on layer SHEET (most laser software would cut it)
+    machine: str = DEFAULT_MACHINE
+    bed_w: float = 2500.0  # largest sheet the machine takes, mm
+    bed_l: float = 8000.0
 
     def nest_params(self) -> NestParams:
         return NestParams(self.gap, self.margin, self.rotate)
@@ -95,6 +117,16 @@ class LaserParams:
 
     def pierce_seconds(self, thickness: float) -> float:
         return _interp(self.pierce, thickness)
+
+    def fits_bed(self, w: float, h: float) -> bool:
+        return not (self.bed_w and self.bed_l) or (min(w, h) <= self.bed_w and max(w, h) <= self.bed_l)
+
+    def use_machine(self, name: str) -> None:
+        """Speeds, pierce times and bed of a machine of MACHINES."""
+        speeds, pierce, bed_w, bed_l = MACHINES[name]
+        self.machine, self.bed_w, self.bed_l = name, bed_w, bed_l
+        self.speeds = {f: dict(t) for f, t in speeds.items()}
+        self.pierce = dict(pierce)
 
     def in_table(self, family: str, thickness: float) -> bool:
         table = self.speeds.get(family) or {}
@@ -120,7 +152,18 @@ class LaserParams:
                     setattr(p, key, type(default)(value) if not isinstance(default, bool) else bool(value))
                 except (TypeError, ValueError):
                     pass
+        if "machine" not in (data or {}) and _same_table(p.speeds, SPEEDS_3KW) and _same_table(
+                {"": p.pierce}, {"": PIERCE_3KW}):
+            p.use_machine(DEFAULT_MACHINE)  # saved by the first version, never tuned: the company's machine
         return p
+
+
+def _norm_table(table: dict) -> dict:
+    return {f: {float(k): float(v) for k, v in t.items()} for f, t in table.items()}
+
+
+def _same_table(a: dict, b: dict) -> bool:
+    return _norm_table(a) == _norm_table(b)
 
 
 # --------------------------------------------------------------------------
@@ -399,6 +442,8 @@ def check_part(part: NestPart, params: LaserParams) -> list[Issue]:
         if web < t * params.edge_factor:
             add(WARN, f"รูห่างขอบชิ้นงานเพียง {web:.1f} มม. (น้อยกว่า {t * params.edge_factor:g}) – ขอบอาจละลาย/บิด")
     w, h = part.width, part.height
+    if not params.fits_bed(w, h):
+        add(ERROR, f"ใหญ่กว่าโต๊ะเครื่อง {w:.0f}x{h:.0f} มม. (เครื่องรับได้ {params.bed_w:.0f}x{params.bed_l:.0f})")
     if max(w, h) < params.small_part:
         add(WARN, f"ชิ้นเล็ก {w:.0f}x{h:.0f} มม. – อาจกระดก/ตกร่องโต๊ะตัด ใช้ micro-joint")
     seen: dict[tuple, int] = {}
@@ -421,6 +466,11 @@ def check_parts(parts: list[NestPart], params: LaserParams, groups: list[NestGro
         done.add(sig)
         out += check_part(p, params)
     for g in groups or []:
+        for size in {s.size: s for s in g.sheets}.values():
+            if not params.fits_bed(size.width, size.height):
+                out.append(Issue(ERROR, "", f"แผ่น {g.family} หนา {g.thickness:g}",
+                                 f"แผ่น {size.width:.0f}x{size.height:.0f} ใหญ่กว่าโต๊ะเครื่อง "
+                                 f"{params.bed_w:.0f}x{params.bed_l:.0f} มม.", ""))
         for p in g.too_big:
             out.append(Issue(ERROR, p.code, p.name, f"ใหญ่กว่าแผ่น {p.width:.0f}x{p.height:.0f} มม. – ไม่มีแผ่นที่วางได้",
                              p.key))
@@ -819,6 +869,7 @@ def export_cut_order(programs: list[CutProgram], path: str | Path, params: Laser
         sheets.append(Sheet("ตรวจก่อนตัด", ISSUE_HEADERS, issue_rows(issues)))
     sheets.append(Sheet("ค่าที่ใช้", ["ค่า", "ใช้"], [
         ["ระยะห่างชิ้นงาน (มม.)", params.gap], ["ขอบแผ่น (มม.)", params.margin],
+        ["เครื่องตัด", f"{params.machine} · โต๊ะ {params.bed_w:.0f} x {params.bed_l:.0f} มม."],
         ["หมุน 90°", "ได้" if params.rotate else "ไม่หมุน"], ["เผื่อเวลาเคลื่อนที่ (%)", params.travel_pct],
         ["เวลาวาง/เก็บแผ่น (นาที)", params.sheet_minutes], ["DXF", params.dxf_version],
         ["เลเยอร์", f"{params.layer_outer} (รอบนอก) · {params.layer_inner} (รู) · {params.layer_mark} (แกะสลัก)"],

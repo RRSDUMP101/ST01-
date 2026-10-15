@@ -325,7 +325,12 @@ def test_laser_settings_dialog(app):
     dialog.speeds.item(row, 1).setText("3800")
     dialog.mark.setChecked(True)
     p = dialog.result_params()
-    assert p.speed("STEEL", 3) == 3800 and p.mark_codes and p.speed("SUS", 3) == 4500
+    assert p.speed("STEEL", 3) == 3800 and p.mark_codes and p.speed("SUS", 3) == 26000
+    assert p.machine == "HSG 12,000W" and p.bed_l == 8000
+    dialog.machine.setCurrentText("Fiber 3,000W (ทั่วไป)")
+    dialog._use_machine()
+    p = dialog.result_params()
+    assert p.speed("STEEL", 3) == 4500 and p.bed_l == 3000 and p.machine.startswith("Fiber 3,000W")
 
 
 def test_parts_ready_tab_readiness_tickets_and_scan(window, app, monkeypatch, tmp_path):

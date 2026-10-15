@@ -429,7 +429,8 @@ class NestingPage(QWidget):
         tools.addStretch(1)
         lay.addLayout(tools)
         split = QSplitter(Qt.Vertical)
-        self.programs = table(laser.PROGRAM_HEADERS, [110, 80, 60, 90, 110, 70, 60, 65, 90, 70, 90, 90, 90, 150, 80, 160])
+        self.programs = table(laser.PROGRAM_HEADERS,
+                              [115, 70, 45, 95, 110, 45, 60, 70, 110, 75, 75, 70, 75, 160, 75, 200])
         self.programs.itemSelectionChanged.connect(self._program_selected)
         split.addWidget(self.programs)
         self.program_view = SheetView()
@@ -504,9 +505,9 @@ class NestingPage(QWidget):
     def _refresh_jobs(self) -> None:
         from ...core.production import CLOSED
 
+        known = {self.jobs.item(i).data(Qt.UserRole) for i in range(self.jobs.count())}
         checked = {self.jobs.item(i).data(Qt.UserRole) for i in range(self.jobs.count())
                    if self.jobs.item(i).checkState() == Qt.Checked}
-        first = self.jobs.count() == 0
         self.jobs.clear()
         planned = laser.planned_pieces(self.state.cut_queue.programs)
         for job in self.state.jobs:
@@ -518,7 +519,8 @@ class NestingPage(QWidget):
             item.setData(Qt.UserRole, job.job_no)
             item.setData(Qt.UserRole + 1, left)
             item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
-            item.setCheckState(Qt.Checked if (first or job.job_no in checked) and left > 0 else Qt.Unchecked)
+            new = job.job_no not in known  # a job opened since: ticked when it has parts to cut
+            item.setCheckState(Qt.Checked if (new or job.job_no in checked) and left > 0 else Qt.Unchecked)
             self.jobs.addItem(item)
 
     def _job_nos(self) -> list[str]:
@@ -587,8 +589,8 @@ class NestingPage(QWidget):
         errors = sum(1 for i in self.issues if i.level == laser.ERROR) + len(demand.missing)
         warns = sum(1 for i in self.issues if i.level == laser.WARN)
         self.summary.setText(
-            f"<b>{sheets} แผ่น</b> ({len(self.groups)} ความหนา) · ใช้เนื้อเหล็ก {used / area:.0%} · เศษ {1 - used / area:.0%} "
-            f"· คิดจากน้ำหนักได้ {by_weight:.1f} แผ่น · เวลาเลเซอร์ประมาณ {minutes / 60:.1f} ชม."
+            f"<b>{sheets} แผ่น</b> ({len(self.groups)} ความหนา) · ใช้เนื้อเหล็ก {used / area:.0%} "
+            f"· เศษ {1 - used / area:.0%} · คิดจากน้ำหนักได้ {by_weight:.1f} แผ่น · เวลาเลเซอร์ประมาณ {minutes / 60:.1f} ชม."
             + (f" · <span style='color:#D64545'>ต้องแก้ {errors}</span>" if errors else "")
             + (f" · ควรตรวจ {warns} (แท็บ ตรวจก่อนตัด)" if warns else "")
             + (f" · ไม่ได้วาง {len(demand.skipped)} รายการ (ไม่มีความหนา/ขนาด หรือ ซื้อสำเร็จ)" if demand.skipped else ""))
@@ -640,7 +642,8 @@ class NestingPage(QWidget):
             self.run()
         if not self.groups:
             return
-        path = self.actions.save_path("แผนวางชิ้นงาน (DXF)", self.actions.default_name(".dxf", "แผนตัดเหล็ก"), "DXF (*.dxf)")
+        path = self.actions.save_path("แผนวางชิ้นงาน (DXF)", self.actions.default_name(".dxf", "แผนตัดเหล็ก"),
+                                      "DXF (*.dxf)")
         if path:
             nesting.export_dxf(self.groups, path)
             self.state.notify(f"บันทึก {Path(path).name} แล้ว – เปิดใน ZWCAD ได้")
@@ -660,7 +663,8 @@ class NestingPage(QWidget):
         open_ = q.open_programs()
         self.queue_summary.setText(
             f"รอตัด {sum(1 for p in open_ if p.status == laser.ST_WAIT)} · กำลังตัด "
-            f"{sum(1 for p in open_ if p.status == laser.ST_CUTTING)} โปรแกรม · เหลือ {sum(p.left_sheets for p in open_)} แผ่น "
+            f"{sum(1 for p in open_ if p.status == laser.ST_CUTTING)} โปรแกรม "
+            f"· เหลือ {sum(p.left_sheets for p in open_)} แผ่น "
             f"· เวลาประมาณ {sum(p.minutes * p.left_sheets for p in open_) / 60:.1f} ชม.")
         self.tabs.setTabText(2, f"คิวเลเซอร์ ({len(open_)})" if open_ else "คิวเลเซอร์")
         self._refresh_flats()

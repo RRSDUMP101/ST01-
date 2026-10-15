@@ -162,8 +162,42 @@ def main() -> int:
     w.pages["production"].make_documents()
     shot(w, "13_movements.png")
     w.go("nesting")
+    w.pages["nesting"].source.setCurrentIndex(w.pages["nesting"].source.findData("partlist"))
+    w.pages["nesting"].tabs.setCurrentIndex(0)
     w.pages["nesting"].run()
     shot(w, "14_nesting.png")
+    # ---- laser: flat patterns from the frame-set drawing, a job that needs them, programs, queue, library
+    from partlist_studio.core import laser as laser_mod
+
+    frame = dwg_io.read_drawing(samples / "RRS-T-SET_frame_parts.dxf")
+    frame_parts = [c.part for c in dwg_io.drawing_to_candidates(frame)]
+    state.flats.add_parts(frame_parts, "RRS-T-SET", "A", "RRS-T-SET_frame_parts.dxf")
+    state.save_laser()
+    laser_job = production.job_from_parts("SO6910-016", frame_parts, 2, None, False, model="ชุดเฟรมกระบะ",
+                                          title="ชุดเฟรมกระบะ (แบบ RRS-T-SET)", customer="บจก. ขนส่งตัวอย่าง",
+                                          due="2026-10-28")
+    state.jobs = [job, laser_job]
+    state.save_jobs()
+    cut_page = w.pages["nesting"]
+    cut_page.source.setCurrentIndex(cut_page.source.findData("jobs"))
+    cut_page.tabs.setCurrentIndex(0)
+    cut_page.run()
+    cut_page.table.selectRow(2)
+    shot(w, "14b_laser_plan_jobs.png")
+    cut_page.tabs.setCurrentIndex(1)
+    shot(w, "14c_laser_checks.png")
+    cut_page.make_programs()
+    progs = state.cut_queue.open_programs()
+    laser_mod.apply_cut(progs[0], progs[0].repeat, state.jobs, state.ledger, "ช่างเลเซอร์")
+    progs[1].status = laser_mod.ST_CUTTING
+    state.save_laser()
+    cut_page.show_done.setChecked(True)
+    t3 = next(p for p in state.cut_queue.programs if p.thickness == 3)
+    cut_page.programs.selectRow(cut_page._programs.index(t3))
+    shot(w, "14d_laser_queue.png")
+    cut_page.tabs.setCurrentIndex(3)
+    cut_page.flats.selectRow(0)
+    shot(w, "14e_flat_library.png")
     w.go("stock")
     w.pages["stock"].tabs.setCurrentIndex(2)
     w.pages["stock"].replenish.run()

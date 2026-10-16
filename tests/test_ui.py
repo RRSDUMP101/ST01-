@@ -37,10 +37,45 @@ def window(app, tmp_path):
 
 
 def test_all_pages_open(window, app):
-    for i in range(window.nav.count()):
-        window.nav.setCurrentRow(i)
+    from partlist_studio.ui.main_window import NAV
+
+    for key, _label in NAV:
+        window.go(key)
         app.processEvents()
-        assert window.stack.currentIndex() == i
+        assert window.stack.currentWidget() is window.pages[key] and window.current_page() == key
+    headers = [window.nav.item(r) for r in range(window.nav.count()) if not window.nav.item(r).data(0x0100)]
+    assert headers and all(not (h.flags() & h.flags().ItemIsSelectable) for h in headers)  # group titles
+
+
+def test_work_path_and_next_step(window, app, monkeypatch):
+    from partlist_studio.core import dwg_io, production
+    from partlist_studio.ui import workflow
+
+    state = window.state
+    assert workflow.next_action(state).action == "import_drawings"  # nothing yet: start with a drawing
+    data = dwg_io.read_drawing(SAMPLES / "RRS-T-SET_frame_parts.dxf")
+    parts = [c.part for c in dwg_io.drawing_to_candidates(data)]
+    state.partlist.parts = parts
+    state.flats.add_parts(parts)
+    state.mark_dirty()
+    nxt = workflow.next_action(state)
+    assert (nxt.key, nxt.action) == ("production", "new_job")  # a Part List without a job: open the job
+    state.jobs.append(production.job_from_parts("SO-W1", parts, 1, None, False))
+    state.save_jobs()
+    nxt = workflow.next_action(state)
+    assert nxt.key == "nesting" and nxt.tab == 0 and str(workflow.pieces_to_plan(state)) in nxt.text
+    steps = {s.key: s for s in workflow.workflow_steps(state)}
+    assert [s.num for s in steps.values()] == [1, 2, 3, 4, 5, 6] and steps["nesting"].waiting
+    window.go("parts")
+    app.processEvents()
+    window.refresh_steps()
+    assert window.steps.isVisible() and window.steps.buttons["parts"].property("step") == "current"
+    assert window.steps.buttons["nesting"].property("step") == "wait" and "วางแผนตัด" in window.steps.next_btn.text()
+    window.run_next()  # opens the laser plan
+    assert window.current_page() == "nesting" and window.pages["nesting"].tabs.currentIndex() == 0
+    window.go("dashboard")
+    app.processEvents()
+    assert not window.steps.isVisible() and "วางแผนตัด" in window.pages["dashboard"].next_btn.text()
 
 
 def test_partlist_flow(window, app):

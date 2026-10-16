@@ -28,14 +28,14 @@ class PartListPage(QWidget):
 
         header = PageHeader("Part List", "รายการชิ้นส่วน วัสดุ จำนวน หน่วย กระบวนการ และสถานะความพร้อม "
                                          "– แก้ไขในตารางได้โดยตรง (ดับเบิลคลิก)")
-        imp = header.add_action(button("นำเข้า ▾", "primary"))
+        check = header.add_action(button("ตรวจวัตถุดิบเทียบสต็อก", "accent",
+                                         "ต้องใช้ × จำนวนคัน เทียบยอดคงเหลือของสโตร์ (ผลอยู่ในหน้า สโตร์)"))
+        check.clicked.connect(self._check_stock)
+        imp = header.add_action(button("เพิ่มรายการ ▾", tooltip="แบบ DWG ใช้ปุ่ม นำเข้าแบบ ในหน้า แบบ 2D"))
         imp_menu = QMenu(imp)
-        imp_menu.addAction("แบบ 2D ZWCAD (DWG/DXF)…", lambda: actions.import_drawings())
         imp_menu.addAction("ตาราง BOM จาก ZWCAD / Excel / CSV…", actions.import_table)
         imp_menu.addAction("จากแบบกระบะมาตรฐาน (หน้า แบบกระบะ)…", lambda: self.window().go("models"))
         imp.setMenu(imp_menu)
-        rev = header.add_action(button("เทียบ Rev.", tooltip="เทียบแบบ/Part List 2 Rev.: เพิ่ม ตัด จำนวน ขนาด วัสดุ รูปคลี่"))
-        rev.clicked.connect(lambda: self.actions.window.compare_revisions())
         exp = header.add_action(button("ส่งออก ▾"))
         exp_menu = QMenu(exp)
         exp_menu.addAction("ตาราง Part List สำหรับ ZWCAD (DXF)…", actions.export_cad_dxf)
@@ -164,3 +164,10 @@ class PartListPage(QWidget):
     def renumber(self) -> None:
         self.state.partlist.renumber()
         self.state.mark_dirty()
+
+    def _check_stock(self) -> None:
+        """Material check of this Part List × beds: the result is on the store page."""
+        stock = self.window().pages["stock"]
+        if stock.run_check(show=False):
+            self.window().go("stock")
+            stock.tabs.setCurrentIndex(1)

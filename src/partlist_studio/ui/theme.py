@@ -103,6 +103,13 @@ QMainWindow, QDialog, #Content {{ background: {BG}; }}
 #NavList::item:hover {{ background: {NAVY_DARK}; color: white; }}
 #NavList::item:selected {{ background: {NAVY}; color: white; font-weight: 600; }}
 #SidebarFoot {{ color: #6F87A5; font-size: 11px; padding: 12px 18px; }}
+#StepBar {{ background: white; border-bottom: 1px solid #DDE3EC; }}
+QPushButton#Step {{ background: transparent; border: 1px solid transparent; border-radius: 8px; padding: 4px 12px;
+    color: {MUTED}; text-align: left; font-size: 12px; }}
+QPushButton#Step:hover {{ background: #EEF2F7; }}
+QPushButton#Step[step="wait"] {{ color: #B4610F; border: 1px solid #F3C99B; background: #FFF7EE; }}
+QPushButton#Step[step="current"] {{ color: white; background: {NAVY}; border: 1px solid {NAVY}; font-weight: 600; }}
+#StepArrow {{ color: #B0B8C4; font-size: 16px; padding: 0 2px; }}
 
 #PageTitle {{ font-size: 20px; font-weight: 700; color: {NAVY_DEEP}; }}
 #PageSub {{ color: {MUTED}; }}

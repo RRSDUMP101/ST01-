@@ -93,6 +93,52 @@ class BarDelegate(QStyledItemDelegate):
         painter.restore()
 
 
+class StepBar(QFrame):
+    """The work path on top of every work page: 1 แบบ 2D › 2 Part List › … with what waits in each step,
+    the page you are on, and ONE button for the next thing to do."""
+
+    def __init__(self, navigate, on_next, parent=None):
+        super().__init__(parent)
+        self.setObjectName("StepBar")
+        self._navigate = navigate
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(20, 8, 20, 8)
+        lay.setSpacing(4)
+        self.buttons: dict[str, QPushButton] = {}
+        self._row = lay
+        self.next_label = QLabel("ขั้นต่อไป")
+        self.next_label.setObjectName("Hint")
+        self.next_btn = button("", "accent")
+        self.next_btn.clicked.connect(on_next)
+
+    def set_steps(self, steps, current: str, next_text: str) -> None:
+        if not self.buttons:
+            for i, st in enumerate(steps):
+                if i:
+                    arrow = QLabel("›")
+                    arrow.setObjectName("StepArrow")
+                    self._row.addWidget(arrow)
+                b = QPushButton()
+                b.setObjectName("Step")
+                b.setCursor(Qt.PointingHandCursor)
+                b.clicked.connect(lambda _=False, k=st.key: self._navigate(k))
+                self.buttons[st.key] = b
+                self._row.addWidget(b)
+            self._row.addStretch(1)
+            self._row.addWidget(self.next_label)
+            self._row.addWidget(self.next_btn)
+        for st in steps:
+            b = self.buttons[st.key]
+            b.setText(f"{st.num}  {st.title}\n{st.metric}")
+            b.setToolTip(f"ขั้น {st.num}: {st.title} – {st.metric}")
+            state = "current" if st.key == current else ("wait" if st.waiting else "")
+            if b.property("step") != state:
+                b.setProperty("step", state)
+                b.style().unpolish(b)
+                b.style().polish(b)
+        self.next_btn.setText(next_text + "  ›")
+
+
 class PageHeader(QWidget):
     def __init__(self, title: str, subtitle: str = "", parent=None):
         super().__init__(parent)

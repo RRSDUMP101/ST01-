@@ -326,9 +326,9 @@ class NestingPage(QWidget):
         lay = QVBoxLayout(self)
         lay.setContentsMargins(28, 24, 28, 16)
         lay.setSpacing(10)
-        header = PageHeader("ตัดเหล็ก / เลเซอร์",
-                            "แบบ DWG → คลังรูปคลี่ → ชิ้นที่ต้องตัด (Part List หรืองานผลิต) → ตรวจก่อนตัด → วางบนแผ่น "
-                            "→ โปรแกรมตัด + ไฟล์ DXF ให้เครื่องเลเซอร์ → บันทึกตัดแล้ว (ชิ้นงานขึ้น รอพับ, ร่างใบ PD)")
+        header = PageHeader("ตัดเลเซอร์",
+                            "ทำตามแท็บจากซ้ายไปขวา: วางแผนตัด → ตรวจก่อนตัด → คิวเลเซอร์ (ส่งออกไฟล์ / บันทึกตัดเสร็จ) · "
+                            "บันทึกแล้วชิ้นงานขึ้น รอพับ และระบบร่างใบ PD แผ่นเหล็กให้สโตร์")
         run = header.add_action(button("คำนวณแผนตัด", "accent"))
         run.clicked.connect(self.run)
         self.make_btn = header.add_action(button("สร้างโปรแกรมตัด → คิวเลเซอร์", "primary",
@@ -337,10 +337,10 @@ class NestingPage(QWidget):
         self.make_btn.setEnabled(False)
         exp = header.add_action(button("ส่งออก ▾"))
         menu = QMenu(exp)
-        menu.addAction("แผนตัด (Excel)…", self.export_excel)
-        menu.addAction("แผนวางชิ้นงาน (DXF สำหรับ ZWCAD)…", self.export_dxf)
+        menu.addAction("ไฟล์ให้เครื่องเลเซอร์: โปรแกรมที่ยังไม่ตัด (DXF + ใบสั่งตัด)…", lambda: self.export_package(False))
         menu.addSeparator()
-        menu.addAction("แพ็กเลเซอร์ของโปรแกรมที่ยังไม่ตัด (DXF + ใบสั่งตัด)…", lambda: self.export_package(False))
+        menu.addAction("แผนตัดเพื่อดูจำนวนแผ่น/ต้นทุนเหล็ก (Excel)…", self.export_excel)
+        menu.addAction("แผนวางชิ้นงานเปิดดูใน ZWCAD (DXF)…", self.export_dxf)
         exp.setMenu(menu)
         b = header.add_action(button("ค่าเครื่องตัด…", tooltip="ความเร็วตัด เวลาเจาะ เกณฑ์ตรวจ และเลเยอร์ไฟล์ DXF"))
         b.clicked.connect(self.edit_settings)
@@ -371,8 +371,8 @@ class NestingPage(QWidget):
         params = Card("ชิ้นที่ต้องตัด และค่าที่ใช้วาง")
         row = QHBoxLayout()
         self.source = QComboBox()
-        self.source.addItem("งานผลิตที่ยังตัดไม่ครบ (รูปคลี่จากคลัง)", SRC_JOBS)
-        self.source.addItem("Part List ปัจจุบัน × จำนวนคัน", SRC_PARTLIST)
+        self.source.addItem("งานผลิตที่ยังตัดไม่ครบ (ใช้ตัดจริง)", SRC_JOBS)
+        self.source.addItem("ทดลองคำนวณจาก Part List (ยังไม่เปิดงาน)", SRC_PARTLIST)
         saved = self.state.settings.get("laser/source")
         if saved:
             self.source.setCurrentIndex(max(0, self.source.findData(saved)))

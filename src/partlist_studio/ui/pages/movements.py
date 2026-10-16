@@ -36,7 +36,9 @@ class MovementsPage(QWidget):
         for code, (name, _sign) in DOC_TYPES.items():
             menu.addAction(f"{code} – {name}", lambda c=code: self.new_doc(c))
         new.setMenu(menu)
-        auto = header.add_action(button("จาก Part List × จำนวนคัน ▾"))
+        auto = header.add_action(button("ร่างจาก Part List (ยังไม่เปิดงาน) ▾",
+                                        tooltip="มีงานผลิตแล้ว: ใช้ปุ่ม สร้างใบเบิก/รับ ในหน้า งานผลิต "
+                                                "(ตัดเลเซอร์เสร็จ ระบบร่าง PD แผ่นเหล็กให้เอง)"))
         menu = QMenu(auto)
         menu.addAction("PD เบิกวัตถุดิบ (ตามผลตรวจวัตถุดิบ)", self.from_requirements)
         menu.addAction("PD จ่ายชิ้นส่วนเพื่อประกอบ", lambda: self.from_partlist("PD"))

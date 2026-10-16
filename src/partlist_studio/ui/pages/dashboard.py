@@ -10,19 +10,22 @@ from ...core.models import STATUSES
 from .. import theme
 from ..state import AppState
 from ..widgets import Card, KpiCard, PageHeader, StatusChipRow, button
+from ..workflow import next_action, workflow_steps
 
 INFO_FIELDS = [
     ("so_no", "เลขที่ SO"), ("customer", "ลูกค้า"), ("vehicle_model", "รุ่นรถ"), ("job_type", "แบบงาน"),
     ("drawing_no", "เลขที่แบบหลัก"), ("revision", "Rev."), ("prepared_by", "ผู้จัดทำ"), ("created", "วันที่"),
 ]
 
-FLOW = [
-    ("1", "แบบ / Part List", "DWG/DXF จาก ZWCAD หรือแบบกระบะ → เลือกรุ่นย่อย ได้รหัส Express"),
-    ("2", "ตรวจวัตถุดิบ + ตัดเลเซอร์", "เทียบสต็อก × จำนวนคัน · แผนตัดจากรูปคลี่ → ไฟล์ DXF + คิวเลเซอร์"),
-    ("3", "เปิดงานผลิต (SO)", "ติดตาม รอตัด → รอพับ → รอเชื่อม → เสร็จ รายชิ้น"),
-    ("4", "เบิก / รับ สต็อก", "PD วัตถุดิบ · PD ชิ้นส่วน · FR รับชิ้นงานเสร็จ → คีย์ Express"),
-    ("5", "สั่งซื้อ / ส่งต่อ", "Min/Max เตือนสั่งซื้อ · Google Sheet · Excel"),
-]
+# what each step of the work path is for (the step bar and this page use the same 6 steps)
+FLOW_HELP = {
+    "drawings": "นำเข้าแบบ DWG/DXF – อ่านรหัส ชื่อ ความหนา จำนวน · เก็บรูปคลี่ไว้ตัดเลเซอร์",
+    "parts": "ตรวจ/แก้รายการ ตรวจวัตถุดิบเทียบสต็อก × จำนวนคัน",
+    "production": "เปิดงาน SO จาก Part List หรือแบบกระบะ · ติดตามรายชิ้น · ใบงาน QR",
+    "nesting": "วางแผนตัดจากงานที่เปิดอยู่ → ตรวจก่อนตัด → ไฟล์ DXF → คิว → บันทึกตัดเสร็จ",
+    "stock": "ชิ้นส่วนพร้อมประกอบแยกกลุ่ม · ตำแหน่งเก็บ · Min/Max",
+    "movements": "ตรวจและบันทึกใบ PD / FR ที่ระบบร่างให้ → คีย์ Express",
+}
 
 
 class DashboardPage(QWidget):
@@ -46,9 +49,8 @@ class DashboardPage(QWidget):
         header = PageHeader("ภาพรวมงาน", "Part List ของงานผลิต เชื่อมแบบ ZWCAD กับสโตร์ คลังสินค้า และฝ่ายผลิต")
         b = header.add_action(button("นำเข้าแบบ DWG/DXF", "primary"))
         b.clicked.connect(lambda: actions.import_drawings())
-        b = header.add_action(button("นำเข้าตาราง BOM"))
-        b.clicked.connect(actions.import_table)
         lay.addWidget(header)
+        self._navigate = navigate
 
         kpis = QHBoxLayout()
         kpis.setSpacing(12)
@@ -106,21 +108,25 @@ class DashboardPage(QWidget):
         work_card.body.addWidget(self.work_label)
         side.addWidget(work_card)
 
-        flow_card = Card("ขั้นตอนงาน: แบบ → สโตร์ → ผลิต → เบิก/รับ")
-        targets = ["models", "nesting", "production", "movements", "stock"]
-        for (num, title, desc), target in zip(FLOW, targets):
+        flow_card = Card("ขั้นตอนงาน 6 ขั้น: แบบ → ผลิต → ตัด → สโตร์")
+        self.next_btn = button("", "accent", "โปรแกรมเลือกสิ่งที่ต้องทำต่อจากข้อมูลงาน (Ctrl+Enter)")
+        self.next_btn.clicked.connect(self._run_next)
+        flow_card.body.addWidget(self.next_btn)
+        self.flow_rows: dict[str, QLabel] = {}
+        for st in workflow_steps(state):
             line = QHBoxLayout()
-            badge = QLabel(num)
+            badge = QLabel(str(st.num))
             badge.setAlignment(Qt.AlignCenter)
             badge.setFixedSize(26, 26)
             badge.setStyleSheet(f"background:{theme.NAVY}; color:white; border-radius:13px; font-weight:700;")
             line.addWidget(badge)
-            text = QLabel(f"<b>{title}</b><br><span style='color:{theme.MUTED}'>{desc}</span>")
+            text = QLabel()
             text.setWordWrap(True)
+            self.flow_rows[st.key] = text
             line.addWidget(text, 1)
             go = button("ไป ›")
             go.setFixedWidth(56)
-            go.clicked.connect(lambda _=False, t=target: navigate(t))
+            go.clicked.connect(lambda _=False, t=st.key: navigate(t))
             line.addWidget(go)
             flow_card.body.addLayout(line)
         side.addWidget(flow_card)
@@ -137,6 +143,17 @@ class DashboardPage(QWidget):
         state.laser_changed.connect(self.refresh_work)
         self.refresh()
         self.refresh_work()
+        self.refresh_flow()
+
+    def refresh_flow(self) -> None:
+        for st in workflow_steps(self.state):
+            color = "#B4610F" if st.waiting else theme.MUTED
+            self.flow_rows[st.key].setText(f"<b>{st.title}</b> · <span style='color:{color}'>{st.metric}</span><br>"
+                                           f"<span style='color:{theme.MUTED}'>{FLOW_HELP[st.key]}</span>")
+        self.next_btn.setText(f"ขั้นต่อไป: {next_action(self.state).text}  ›")
+
+    def _run_next(self) -> None:
+        self.actions.window.run_next()
 
     def refresh_work(self) -> None:
         from ...core.production import CLOSED, JOB_DONE

@@ -36,10 +36,11 @@ class ProductionPage(QWidget):
         header = PageHeader("งานผลิต (SO) – ติดตามสถานะรายชิ้น",
                             "เปิดงานจากแบบกระบะ × จำนวนคัน หรือจาก Part List · บันทึกจำนวนที่ผ่านแต่ละขั้น "
                             "(ตัด → พับ → เหยียบปิด → เชื่อม …) · สร้างใบเบิกวัตถุดิบ / ใบจ่ายชิ้นส่วน / ใบรับชิ้นงานเสร็จ")
-        b = header.add_action(button("+ งานจากแบบกระบะ", "primary", "เลือกแบบในหน้า แบบกระบะ แล้วกด สร้างงานผลิต"))
-        b.clicked.connect(lambda: self.actions.go("models"))
-        b = header.add_action(button("+ งานจาก Part List ปัจจุบัน"))
-        b.clicked.connect(self.new_from_partlist)
+        new = header.add_action(button("+ เปิดงานผลิต ▾", "primary", "งานใหม่ 1 งาน = 1 SO × จำนวนคัน"))
+        menu = QMenu(new)
+        menu.addAction("จาก Part List ปัจจุบัน (แบบที่เพิ่งนำเข้า)…", self.new_from_partlist)
+        menu.addAction("จากแบบกระบะมาตรฐาน (เลือกรุ่นย่อย)…", lambda: self.actions.go("models"))
+        new.setMenu(menu)
         exp = header.add_action(button("ส่งออก ▾"))
         menu = QMenu(exp)
         menu.addAction("สถานะงานที่เลือก (Excel)…", lambda: self.export(False))

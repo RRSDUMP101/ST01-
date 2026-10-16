@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import QSize, Qt, QTimer
-from PySide6.QtGui import QAction, QKeySequence
+from PySide6.QtGui import QAction, QColor, QKeySequence
 from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QMainWindow,
                                QMessageBox, QStackedWidget, QVBoxLayout, QWidget)
 
@@ -24,21 +24,29 @@ from .pages.production import ProductionPage
 from .pages.settings import SettingsPage
 from .pages.stock import StockPage
 from .state import AppState
+from .widgets import StepBar
 from .work_dialogs import CompareDialog
+from .workflow import STEP_PAGES, next_action, workflow_steps
 
-NAV = [
-    ("dashboard", "▦   ภาพรวม"),
-    ("drawings", "◫   แบบ 2D (DWG/DXF)"),
-    ("parts", "☰   Part List"),
-    ("models", "▣   แบบกระบะ"),
-    ("production", "⚒   งานผลิต (SO)"),
-    ("nesting", "✂   ตัดเหล็ก / เลเซอร์"),
-    ("stock", "▤   สโตร์ / คลังสินค้า"),
-    ("movements", "⇄   เบิก / รับ สต็อก"),
-    ("express", "₿   Express"),
-    ("sheets", "⇅   Google Sheets"),
-    ("settings", "⚙   ตั้งค่า"),
+# The sidebar in the order of the work: start, the 6 steps from the drawing to the store, then the master data
+NAV_GROUPS = [
+    ("", [("dashboard", "▦   ภาพรวม / เริ่มงาน")]),
+    ("ขั้นตอนงาน", [
+        ("drawings", "①   แบบ 2D (DWG/DXF)"),
+        ("parts", "②   Part List"),
+        ("production", "③   งานผลิต (SO)"),
+        ("nesting", "④   ตัดเลเซอร์"),
+        ("stock", "⑤   สโตร์ / ชิ้นส่วนพร้อมประกอบ"),
+        ("movements", "⑥   เบิก / รับ สต็อก"),
+    ]),
+    ("ข้อมูลหลัก & เชื่อมต่อ", [
+        ("models", "▣   แบบกระบะมาตรฐาน"),
+        ("express", "₿   Express"),
+        ("sheets", "⇅   Google Sheets"),
+        ("settings", "⚙   ตั้งค่า"),
+    ]),
 ]
+NAV = [entry for _title, entries in NAV_GROUPS for entry in entries]
 
 
 class MainWindow(QMainWindow):
@@ -71,11 +79,22 @@ class MainWindow(QMainWindow):
         self.nav = QListWidget()
         self.nav.setObjectName("NavList")
         self.nav.setCursor(Qt.PointingHandCursor)
-        for key, label in NAV:
-            item = QListWidgetItem(label)
-            item.setData(Qt.UserRole, key)
-            item.setSizeHint(QSize(200, 44))
-            self.nav.addItem(item)
+        for title, entries in NAV_GROUPS:
+            if title:
+                head = QListWidgetItem(title.upper())
+                head.setFlags(Qt.NoItemFlags)
+                head.setForeground(QColor("#6F87A5"))
+                font = head.font()
+                font.setPointSizeF(max(7.0, font.pointSizeF() - 1))
+                font.setBold(True)
+                head.setFont(font)
+                head.setSizeHint(QSize(200, 30))
+                self.nav.addItem(head)
+            for key, label in entries:
+                item = QListWidgetItem(label)
+                item.setData(Qt.UserRole, key)
+                item.setSizeHint(QSize(200, 42))
+                self.nav.addItem(item)
         sl.addWidget(self.nav, 1)
         self.foot = QLabel(f"v{__version__}")
         self.foot.setObjectName("SidebarFoot")
@@ -83,9 +102,16 @@ class MainWindow(QMainWindow):
         sl.addWidget(self.foot)
         lay.addWidget(sidebar)
 
+        right = QWidget()
+        rl = QVBoxLayout(right)
+        rl.setContentsMargins(0, 0, 0, 0)
+        rl.setSpacing(0)
+        self.steps = StepBar(self.go, self.run_next)
+        rl.addWidget(self.steps)
         self.stack = QStackedWidget()
         self.stack.setObjectName("Content")
-        lay.addWidget(self.stack, 1)
+        rl.addWidget(self.stack, 1)
+        lay.addWidget(right, 1)
 
         self.pages: dict[str, QWidget] = {}
         self.pages["dashboard"] = DashboardPage(self.state, self.actions, self.go)
@@ -101,14 +127,19 @@ class MainWindow(QMainWindow):
         self.pages["settings"] = SettingsPage(self.state)
         for key, _label in NAV:
             self.stack.addWidget(self.pages[key])
-        self.nav.currentRowChanged.connect(self.stack.setCurrentIndex)
-        self.nav.setCurrentRow(0)
+        self.nav.currentItemChanged.connect(self._nav_changed)
+        self.go("dashboard")
 
         self._build_menu()
         self.statusBar().showMessage("พร้อมใช้งาน")
         self.state.message.connect(lambda m: self.statusBar().showMessage(m, 8000))
         self.state.partlist_changed.connect(self._update_title)
         self._update_title()
+        self._steps_due = False
+        for signal in (self.state.partlist_changed, self.state.jobs_changed, self.state.laser_changed,
+                       self.state.ledger_changed, self.state.stock_changed):
+            signal.connect(self._steps_changed)
+        self.refresh_steps()
 
     def _build_menu(self) -> None:
         a = self.actions
@@ -152,22 +183,31 @@ class MainWindow(QMainWindow):
         ex.addSeparator()
         ex.addAction("ตรวจรูปแบบรหัส Express", lambda: (self.go("express"), self.pages["express"].audit_codes()))
         ex.addAction("ตั้งรหัสใหม่ตามกฎรหัส…", self.pages["express"].new_code)
-        work = self.menuBar().addMenu("งานผลิต / สโตร์")
-        work.addAction("เปิดงานผลิตจาก Part List ปัจจุบัน…", lambda: (self.go("production"),
-                                                                    self.pages["production"].new_from_partlist()))
-        work.addAction("เปิดงานผลิตจากแบบกระบะ…", lambda: self.go("models"))
+        work = self.menuBar().addMenu("ขั้นตอนงาน")
+        act = QAction("ทำขั้นต่อไป ›", self)
+        act.setShortcut(QKeySequence("Ctrl+Return"))
+        act.triggered.connect(self.run_next)
+        work.addAction(act)
         work.addSeparator()
-        for code, (name, _s) in DOC_TYPES.items():
-            work.addAction(f"ใบใหม่ {code} – {name}", lambda c=code: (self.go("movements"),
-                                                                     self.pages["movements"].new_doc(c)))
-        work.addAction("ประวัติการเคลื่อนไหวสินค้า", lambda: (self.go("movements"),
-                                                             self.pages["movements"].tabs.setCurrentIndex(1)))
-        work.addSeparator()
-        work.addAction("วางแผนตัดแผ่นเหล็ก / เลเซอร์", lambda: (self.go("nesting"), self.pages["nesting"].run()))
-        work.addAction("คิวเลเซอร์ (โปรแกรมตัด)",
+        work.addAction("① นำเข้าแบบ DWG/DXF…", lambda: a.import_drawings())
+        work.addAction("② Part List", lambda: self.go("parts"))
+        work.addAction("③ เปิดงานผลิตจาก Part List…", lambda: (self.go("production"),
+                                                              self.pages["production"].new_from_partlist()))
+        work.addAction("③ เปิดงานผลิตจากแบบกระบะ (เลือกรุ่นย่อย)…", lambda: self.go("models"))
+        work.addAction("④ วางแผนตัดเลเซอร์", lambda: (self.go("nesting"), self.pages["nesting"].tabs.setCurrentIndex(0),
+                                                      self.pages["nesting"].run()))
+        work.addAction("④ คิวเลเซอร์ / บันทึกตัดเสร็จ",
                        lambda: (self.go("nesting"), self.pages["nesting"].tabs.setCurrentIndex(2)))
-        work.addAction("Min / Max & เตือนสั่งซื้อ", lambda: (self.go("stock"), self.pages["stock"].tabs.setCurrentIndex(2),
-                                                           self.pages["stock"].replenish.run()))
+        work.addAction("⑤ ชิ้นส่วนพร้อมประกอบ (แยกกลุ่ม)",
+                       lambda: (self.go("stock"), self.pages["stock"].tabs.setCurrentWidget(self.pages["stock"].ready)))
+        work.addAction("⑤ Min / Max & เตือนสั่งซื้อ", lambda: (self.go("stock"), self.pages["stock"].tabs.setCurrentIndex(2),
+                                                             self.pages["stock"].replenish.run()))
+        docs = work.addMenu("⑥ ใบเบิก / รับใหม่")
+        for code, (name, _s) in DOC_TYPES.items():
+            docs.addAction(f"{code} – {name}", lambda c=code: (self.go("movements"), self.pages["movements"].new_doc(c)))
+        work.addAction("⑥ ประวัติการเคลื่อนไหวสินค้า", lambda: (self.go("movements"),
+                                                                self.pages["movements"].tabs.setCurrentIndex(1)))
+        work.addSeparator()
         work.addAction("เทียบ Rev. แบบ / Part List…", self.compare_revisions)
         file_menu.addSeparator()
         quit_act = QAction("ออก", self)
@@ -181,7 +221,48 @@ class MainWindow(QMainWindow):
         CompareDialog(self.state, self.actions, self).exec()
 
     def go(self, key: str) -> None:
-        self.nav.setCurrentRow([k for k, _ in NAV].index(key))
+        for row in range(self.nav.count()):
+            if self.nav.item(row).data(Qt.UserRole) == key:
+                self.nav.setCurrentRow(row)
+                return
+
+    def current_page(self) -> str:
+        item = self.nav.currentItem()
+        return item.data(Qt.UserRole) if item else ""
+
+    def _nav_changed(self, item, _previous=None) -> None:
+        key = item.data(Qt.UserRole) if item else None
+        if key in self.pages:
+            self.stack.setCurrentWidget(self.pages[key])
+            self.refresh_steps()
+
+    # ---- the work path: the step bar and the next thing to do -------------
+    def _steps_changed(self) -> None:
+        if not self._steps_due:  # many signals in a row: one refresh
+            self._steps_due = True
+            QTimer.singleShot(0, self.refresh_steps)
+
+    def refresh_steps(self) -> None:
+        self._steps_due = False
+        current = self.current_page()
+        self.steps.setVisible(current in STEP_PAGES)
+        if current in STEP_PAGES:
+            self.steps.set_steps(workflow_steps(self.state), current, next_action(self.state).text)
+        dash = self.pages.get("dashboard")
+        if dash is not None and current == "dashboard":
+            dash.refresh_flow()
+
+    def run_next(self) -> None:
+        """Open the page (and tab) of the next thing to do, and start it when it is one click."""
+        nxt = next_action(self.state)
+        self.go(nxt.key)
+        page = self.pages[nxt.key]
+        if nxt.tab >= 0 and hasattr(page, "tabs"):
+            page.tabs.setCurrentIndex(nxt.tab)
+        if nxt.action == "import_drawings":
+            self.actions.import_drawings()
+        elif nxt.action == "new_job":
+            page.new_from_partlist()
 
     def _update_title(self) -> None:
         name = Path(self.state.path).name if self.state.path else "งานใหม่"

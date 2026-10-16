@@ -36,6 +36,7 @@
 รายละเอียดการวิเคราะห์ระบบ DWG ↔ สโตร์ ↔ ผลิต: [docs/DWG_INTEGRATION.md](docs/DWG_INTEGRATION.md)
 การเชื่อม Express / Google Sheet / ไฟล์ Excel ของบริษัท: [docs/EXPRESS_INTEGRATION.md](docs/EXPRESS_INTEGRATION.md)
 การออกแบบหน้าจอ: [docs/UI_DESIGN.md](docs/UI_DESIGN.md)
+ปรับเมนูให้เป็นเส้นทางงานเดียว 6 ขั้น + ปุ่มขั้นต่อไป: [docs/UI_FLOW_REDESIGN.md](docs/UI_FLOW_REDESIGN.md)
 ระบบสต็อกชิ้นส่วนรอประกอบ + การผลิตถึงประกอบ (กลุ่มประกอบ, ใบงาน QR, ความพร้อมประกอบ – ระยะ 1 ทำแล้ว): [docs/STOCK_PRODUCTION_DESIGN.md](docs/STOCK_PRODUCTION_DESIGN.md)
 จากแบบ DWG สู่เครื่องตัดเลเซอร์: [docs/LASER_CUTTING.md](docs/LASER_CUTTING.md)
 

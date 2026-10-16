@@ -60,6 +60,8 @@ class Part:
     drawing_thickness: float = 0  # thickness the drawing gave (kept so "ตามแบบ" can undo a manual value)
     drawing_qty: float = 0  # quantity the drawing gave ('16 ชิ้น'), 0 = it gave none
     qty_source: str = ""  # where the quantity came from: 'แบบ (ป้ายที่ชิ้นงาน): “16 ชิ้น”'
+    drawing_material: str = ""  # material the drawing gave ('M=Steel'), kept so it can be put back
+    material_source: str = ""  # where the material came from: 'แบบ (ป้ายที่ชิ้นงาน): “M=Steel”', 'กำหนดเอง'
 
     def get(self, key: str):
         return getattr(self, key)
@@ -84,6 +86,8 @@ class Part:
         part.drawing_thickness = to_number(data.get("drawing_thickness", 0))
         part.drawing_qty = to_number(data.get("drawing_qty", 0))
         part.qty_source = str(data.get("qty_source", "") or "")
+        part.drawing_material = str(data.get("drawing_material", "") or "")
+        part.material_source = str(data.get("material_source", "") or "")
         return part
 
 

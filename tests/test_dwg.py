@@ -310,3 +310,62 @@ def test_qty_from_general_notes(tmp_path):
     assert got == [(1, dwg_io.QTY_DEFAULT)] * 2 and (data.note_qty, data.note_qty_each) == (16, False)
     data, got = _read(tmp_path, one, [("16 ชิ้น", 400, 400), ("8 ชิ้น", 400, 300)])  # two different notes
     assert got == [(1, dwg_io.QTY_DEFAULT)] and data.note_qty == 0
+
+
+@pytest.mark.parametrize("text, material", [("M=Steel", "Steel"), ("M=aluminium", "Aluminium"), ("m = stainless", "Stainless"),
+                                            ('M="SUS304"', "SUS304"), ("MAT: SS400", "SS400"),
+                                            ("RRS-T-001 เฟรมบน t3 16 ชิ้น M=Steel", "Steel"),
+                                            ("16 ชิ้น", ""), ("M=1", ""), ("Room: A", "")])
+def test_parse_material(text, material):
+    assert dwg_io.parse_material(text)[0] == material
+
+
+def test_material_next_to_each_part_and_change_later(tmp_path):
+    two = [(0, 0, 100, 50), (120, 0, 100, 50)]
+    data, _got = _read(tmp_path, two, [("RRS-T-001 เฟรมบน t3 16 ชิ้น M=Steel", 0, -10),
+                                       ("RRS-T-002 ฝาท้าย t2 4 ชิ้น M=Aluminium", 120, -10)])
+    cands = dwg_io.drawing_to_candidates(data)
+    assert [(c.part.part_no, c.part.name, c.part.qty, c.part.material) for c in cands] == [
+        ("RRS-T-001", "เฟรมบน", 16, "Steel"), ("RRS-T-002", "ฝาท้าย", 4, "Aluminium")]  # M= is not part of the name
+    assert all(c.material_source == dwg_io.MAT_FROM_PART for c in cands)
+    assert "M=Aluminium" in cands[1].part.material_source and cands[1].part.drawing_material == "Aluminium"
+    steel, alu = cands[0].part, cands[1].part
+    assert alu.weight == pytest.approx(steel.weight * (2 / 3) * 2.70 / 7.85, rel=0.01)  # weighed as aluminium
+    # changed later: weighed again, the drawing's value kept to go back to
+    assert dwg_io.set_part_material(alu, "Stainless") and alu.material_source.startswith(dwg_io.MAT_MANUAL)
+    assert alu.weight == pytest.approx(steel.weight * (2 / 3) * 7.93 / 7.85, rel=0.01)
+    assert dwg_io.reset_part_material(alu) and alu.material == "Aluminium" and alu.material_source.startswith("ตามแบบ")
+    assert not dwg_io.set_part_material(alu, "Aluminium")  # nothing changed
+    from partlist_studio.core.models import Part
+
+    back = Part.from_dict(alu.__dict__ | {})
+    assert (back.drawing_material, back.material_source) == (alu.drawing_material, alu.material_source)
+
+
+def test_material_from_notes_and_title_block(tmp_path):
+    two = [(0, 0, 100, 50), (200, 0, 100, 50)]
+    data, _got = _read(tmp_path, two, [("M=Stainless", 600, 400)])  # one note for the whole drawing
+    assert [(c.part.material, c.material_source) for c in dwg_io.drawing_to_candidates(data)] == [
+        ("Stainless", dwg_io.MAT_FROM_NOTE)] * 2
+    data, _got = _read(tmp_path, two, [("M=Steel", 0, -10)])  # the label of the first part only
+    assert [c.material_source for c in dwg_io.drawing_to_candidates(data)] == [dwg_io.MAT_FROM_PART,
+                                                                               dwg_io.MAT_MISSING]
+    data, _got = _read(tmp_path, two, [("MATERIAL : SS400", 600, 400), ("M=Aluminium", 0, -10)])
+    assert [(c.part.material, c.material_source) for c in dwg_io.drawing_to_candidates(data)] == [
+        ("Aluminium", dwg_io.MAT_FROM_PART), ("SS400", dwg_io.MAT_FROM_NOTE)]  # its own label wins
+    data, _got = _read(tmp_path, two, [("M=Aluminium", 0, -10)])
+    data.title_block["material"] = "SPHC"  # the Title Block is used last
+    assert [(c.part.material, c.material_source) for c in dwg_io.drawing_to_candidates(data)] == [
+        ("Aluminium", dwg_io.MAT_FROM_PART), ("SPHC", dwg_io.MAT_FROM_TITLE)]
+    data, _got = _read(tmp_path, two, [])
+    assert {c.material_source for c in dwg_io.drawing_to_candidates(data)} == {dwg_io.MAT_MISSING}
+
+
+def test_material_line_under_a_stacked_label(tmp_path):
+    two = [(0, 200, 150, 60), (300, 200, 150, 60)]
+    lines = [(v, 0, 192 - i * 6) for i, v in enumerate(("RRS-T-001", "เฟรมบน", "t=3", "16 ชิ้น", "M=Aluminium"))]
+    data, got = _read(tmp_path, two, lines)  # the 5th line is past LABEL_DISTANCE, still the part's own label
+    cands = dwg_io.drawing_to_candidates(data)
+    assert got[0] == (16, dwg_io.QTY_FROM_PART) and not data.note_material
+    assert [(c.part.material, c.material_source) for c in cands] == [("Aluminium", dwg_io.MAT_FROM_PART),
+                                                                     ("", dwg_io.MAT_MISSING)]

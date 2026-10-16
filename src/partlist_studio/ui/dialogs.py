@@ -8,13 +8,15 @@ from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDialog,
                                QGridLayout, QHBoxLayout, QHeaderView, QLabel, QListWidget, QListWidgetItem, QSpinBox,
                                QSplitter, QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget)
 
-from ..core.dwg_io import (QTY_DEFAULT, QTY_MANUAL, THICKNESS_MODES, THK_DEFAULT, THK_FROM_BOM, THK_FROM_PART,
-                           THK_MANUAL, THK_MISSING, CandidatePart, DrawingData, drawing_to_candidates,
-                           resolve_thickness, set_part_thickness)
+from ..core.dwg_io import (MAT_AS_DRAWN, MAT_MANUAL, MAT_MISSING, MATERIAL_CHOICES, QTY_DEFAULT, QTY_MANUAL,
+                           THICKNESS_MODES, THK_DEFAULT, THK_FROM_BOM, THK_FROM_PART, THK_MANUAL, THK_MISSING,
+                           CandidatePart, DrawingData, drawing_to_candidates, reset_part_material, resolve_thickness,
+                           set_part_material, set_part_thickness)
 from ..core.models import COLUMN_KEYS, COLUMN_LABELS, COMMON_THICKNESS, NUMERIC_COLUMNS, Part, to_number
 from ..core.mapping import auto_map
 from ..core.partlist_io import TableImport
 from . import theme
+from .table_models import ComboDelegate
 from .widgets import DrawingPreview, button
 
 NOT_USED = "— ไม่ใช้ —"
@@ -120,6 +122,11 @@ CAND_COLUMNS = ["part_no", "drawing_no", "name", "material", "spec", "thickness"
 SOURCE_LABEL = {"bom": "ตาราง BOM", "profile": "รูปคลี่", "title": "Title Block", "block": "บล็อกมาตรฐาน"}
 THK_SOURCE_COL = "_thk_source"
 QTY_SOURCE_COL = "_qty_source"
+MAT_SOURCE_COL = "_mat_source"
+
+
+def material_color(source: str) -> QColor | None:
+    return theme.WARN_BG if source in (MAT_MISSING, MAT_MANUAL) else None
 
 
 def qty_color(source: str) -> QColor | None:
@@ -228,6 +235,25 @@ class DrawingImportDialog(QDialog):
         thk.addWidget(self.reset_btn)
         thk.addStretch(1)
         rlay.addLayout(thk)
+        # ---- material: as written next to the part ('M=Steel'), or picked for the chosen rows
+        mat = QHBoxLayout()
+        mat.addWidget(QLabel("<b>วัสดุ</b>"))
+        self.mat_value = QComboBox()
+        self.mat_value.setEditable(True)
+        self.mat_value.addItems(MATERIAL_CHOICES)
+        self.mat_value.setMinimumWidth(150)
+        self.mat_value.setToolTip("อ่านจากป้ายที่ชิ้นงาน M=Steel / M=Aluminium / M=Stainless (ต่อจากจำนวนชิ้น) "
+                                  "ถ้าไม่มี ใช้ M= ในหมายเหตุของแบบ แล้วจึงใช้ MATERIAL ใน Title Block\n"
+                                  "เลือกหรือพิมพ์วัสดุ แล้วกด ใช้กับแถวที่เลือก")
+        mat.addWidget(self.mat_value)
+        self.mat_apply_btn = button("ใช้กับแถวที่เลือก", tooltip="ตั้งวัสดุของแถวที่เลือก แล้วคำนวณน้ำหนักใหม่")
+        self.mat_apply_btn.clicked.connect(self._apply_material)
+        mat.addWidget(self.mat_apply_btn)
+        self.mat_reset_btn = button("คืนค่าตามแบบ", tooltip="แถวที่เลือก (หรือทั้งแบบนี้ถ้าไม่ได้เลือก) กลับไปใช้วัสดุที่อ่านจากแบบ")
+        self.mat_reset_btn.clicked.connect(self._reset_material)
+        mat.addWidget(self.mat_reset_btn)
+        mat.addStretch(1)
+        rlay.addLayout(mat)
         self.thk_mode.currentIndexChanged.connect(self._thickness_rule_changed)
         self.thk_value.valueChanged.connect(self._thickness_rule_changed)
 
@@ -235,7 +261,9 @@ class DrawingImportDialog(QDialog):
         self.columns = ["_check", "_source"] + CAND_COLUMNS
         self.columns.insert(self.columns.index("thickness") + 1, THK_SOURCE_COL)
         self.columns.insert(self.columns.index("qty") + 1, QTY_SOURCE_COL)
-        labels = {"_check": "เพิ่ม", "_source": "ที่มา", THK_SOURCE_COL: "ความหนาจาก", QTY_SOURCE_COL: "จำนวนจาก"}
+        self.columns.insert(self.columns.index("material") + 1, MAT_SOURCE_COL)
+        labels = {"_check": "เพิ่ม", "_source": "ที่มา", THK_SOURCE_COL: "ความหนาจาก", QTY_SOURCE_COL: "จำนวนจาก",
+                  MAT_SOURCE_COL: "วัสดุจาก"}
         self.table = QTableWidget()
         self.table.setColumnCount(len(self.columns))
         self.table.setHorizontalHeaderLabels([labels.get(k) or COLUMN_LABELS[k] for k in self.columns])
@@ -243,6 +271,8 @@ class DrawingImportDialog(QDialog):
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.itemChanged.connect(self._item_changed)
+        self._mat_delegate = ComboDelegate(MATERIAL_CHOICES, self.table)
+        self.table.setItemDelegateForColumn(self._col("material"), self._mat_delegate)
         self.tabs.addTab(self.table, "รายการที่จะเพิ่มเข้า Part List")
         self.attr_table = QTableWidget()
         self.attr_table.setColumnCount(3)
@@ -307,8 +337,9 @@ class DrawingImportDialog(QDialog):
             f"รหัส {sum(1 for p in outers if p.info.get('part_no'))} · ชื่อ "
             f"{sum(1 for p in outers if p.info.get('name') or p.info.get('label_name'))} · ความหนา "
             f"{sum(1 for p in outers if p.info.get('thickness'))} · จำนวน "
-            f"{sum(1 for p in outers if p.info.get('qty'))} จาก {len(outers)} ชิ้น" if labelled else
-            ("ไม่พบ (เขียน รหัส / ชื่อ / t3 / 16 ชิ้น ไว้ใน หรือติดกับรูปคลี่แต่ละชิ้น)" if outers else "-"))
+            f"{sum(1 for p in outers if p.info.get('qty'))} · วัสดุ "
+            f"{sum(1 for p in outers if p.info.get('material'))} จาก {len(outers)} ชิ้น" if labelled else
+            ("ไม่พบ (เขียน รหัส / ชื่อ / t3 / 16 ชิ้น / M=Steel ไว้ใน หรือติดกับรูปคลี่แต่ละชิ้น)" if outers else "-"))
         self.info_labels["qty"].setText(self._qty_info(data))
         self.info_labels["revision"].setText(tb.get("revision", "-"))
         self.info_labels["bom"].setText(
@@ -392,6 +423,18 @@ class DrawingImportDialog(QDialog):
             qsrc.setBackground(color)
             self.table.item(r, self._col("qty")).setBackground(color)
         self.table.setItem(r, self._col(QTY_SOURCE_COL), qsrc)
+        msrc = QTableWidgetItem(cand.material_source)
+        msrc.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+        if cand.part.material_source:
+            msrc.setToolTip(cand.part.material_source)
+        if cand.material_source == MAT_MISSING:
+            msrc.setToolTip("แบบไม่ระบุวัสดุ – เขียน M=Steel ต่อจากจำนวนชิ้นในแบบ หรือเลือกวัสดุด้านบน")
+        color = material_color(cand.material_source)
+        if color is not None:
+            msrc.setBackground(color)
+            self.table.item(r, self._col("material")).setBackground(color)
+        self.table.setItem(r, self._col(MAT_SOURCE_COL), msrc)
+        self.table.item(r, self._col("material")).setToolTip("ดับเบิลคลิกเพื่อเลือกวัสดุ")
         self._loading = loading
 
     def _store_row(self, r: int, cand: CandidatePart, skip: str = "") -> None:
@@ -430,9 +473,9 @@ class DrawingImportDialog(QDialog):
                 cand.part.qty_source = QTY_MANUAL + (f" (ในแบบ {cand.part.drawing_qty:g})"
                                                      if cand.part.drawing_qty else "")
             self._fill_row(r, cand)
-        elif col == self._col("material") and cand.part.thickness:
-            self._store_row(r, cand)
-            set_part_thickness(cand.part, cand.part.thickness, self.densities)  # weigh with the new density
+        elif col == self._col("material"):
+            self._store_row(r, cand, skip="material")
+            self._set_material(cand, item.text())
             self._fill_row(r, cand)
 
     # ---- thickness ---------------------------------------------------------
@@ -506,6 +549,31 @@ class DrawingImportDialog(QDialog):
             if self._plate(cand):
                 self._resolve(self._current, cand, "drawing")
                 self._manual.add(id(cand))  # stays as drawn even when the rule says one value for all
+        self._reload_rows()
+
+    # ---- material ----------------------------------------------------------
+    def _set_material(self, cand: CandidatePart, material: str) -> None:
+        if set_part_material(cand.part, material, self.densities):  # weighed again with the new density
+            same = bool(cand.part.drawing_material) and cand.part.material == cand.part.drawing_material
+            cand.material_source = MAT_AS_DRAWN if same else (MAT_MANUAL if cand.part.material else MAT_MISSING)
+
+    def _apply_material(self) -> None:
+        if self._current < 0:
+            return
+        self._store_table()
+        cands = self.candidates[self._current]
+        for r in self._rows(all_if_none=False):
+            self._set_material(cands[r], self.mat_value.currentText())
+        self._reload_rows()
+
+    def _reset_material(self) -> None:
+        if self._current < 0:
+            return
+        self._store_table()
+        cands = self.candidates[self._current]
+        for r in self._rows(all_if_none=True):
+            if reset_part_material(cands[r].part, self.densities):
+                cands[r].material_source = MAT_AS_DRAWN
         self._reload_rows()
 
     def _reload_rows(self) -> None:

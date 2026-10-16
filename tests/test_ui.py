@@ -167,6 +167,72 @@ def test_drawing_dialog_thickness(app):
     assert dialog.thickness_mode == "drawing" and dialog.default_thickness == 5
 
 
+def test_drawing_dialog_material(app):
+    from partlist_studio.core import dwg_io
+    from partlist_studio.ui.dialogs import DrawingImportDialog
+
+    data = dwg_io.read_drawing(SAMPLES / "RRS-T-SET_frame_parts.dxf")
+    dialog = DrawingImportDialog([data], dwg_io.DEFAULT_DENSITIES)
+    cands = dialog.candidates[0]
+    col, src = dialog._col("material"), dialog._col("_mat_source")
+    assert [dialog.table.item(r, col).text() for r in range(5)] == ["Steel", "Stainless", "SS400", "SS400", "SS400"]
+    assert [dialog.table.item(r, src).text() for r in range(3)] == [dwg_io.MAT_FROM_PART, dwg_io.MAT_FROM_PART,
+                                                                    dwg_io.MAT_FROM_TITLE]
+    assert dialog.table.itemDelegateForColumn(col) is dialog._mat_delegate
+    w = cands[0].part.weight
+    dialog.table.item(0, col).setText("Aluminium")  # picked in the table
+    assert cands[0].part.material == "Aluminium" and cands[0].material_source == dwg_io.MAT_MANUAL
+    assert cands[0].part.weight == pytest.approx(w * 2.70 / 7.85, rel=0.02)
+    assert dialog.table.item(0, src).text() == dwg_io.MAT_MANUAL
+    dialog.table.selectRow(3)
+    dialog.mat_value.setCurrentText("SUS304")
+    dialog._apply_material()  # the bar: the chosen rows only
+    assert [c.part.material for c in cands] == ["Aluminium", "Stainless", "SS400", "SUS304", "SS400"]
+    dialog.table.selectRow(0)
+    dialog._reset_material()
+    assert cands[0].part.material == "Steel" and cands[0].material_source == dwg_io.MAT_AS_DRAWN
+    assert cands[0].part.weight == pytest.approx(w, rel=1e-3)
+    dialog.accept()
+    [(_d, parts)] = dialog.selected_parts()
+    assert [p.material for p in parts] == ["Steel", "Stainless", "SS400", "SUS304", "SS400"]
+    assert parts[1].drawing_material == "Stainless" and "M=Stainless" in parts[1].material_source
+
+
+def test_partlist_material_edit_and_dialog(window, app):
+    from PySide6.QtCore import Qt
+
+    from partlist_studio.core import dwg_io
+    from partlist_studio.core.models import COLUMN_KEYS
+    from partlist_studio.ui.work_dialogs import MaterialDialog
+
+    state = window.state
+    data = dwg_io.read_drawing(SAMPLES / "RRS-T-SET_frame_parts.dxf")
+    parts = [c.part for c in dwg_io.drawing_to_candidates(data)]
+    state.partlist.parts.extend(parts)
+    state.flats.add_parts(parts, "RRS-T-SET")
+    state.mark_dirty()
+    page = window.pages["parts"]
+    index = page.model.index(1, COLUMN_KEYS.index("material"))
+    assert "M=Stainless" in page.model.data(index, Qt.ToolTipRole)
+    w = parts[1].weight
+    assert page.model.setData(index, "Aluminium")  # chosen in the table later
+    assert parts[1].material == "Aluminium" and parts[1].weight == pytest.approx(w * 2.70 / 7.93, rel=0.02)
+    assert parts[1].material_source.startswith(dwg_io.MAT_MANUAL)
+    assert state.flats.get("RRS-T-002").material == "Aluminium"  # the laser plan cuts it as aluminium
+    dialog = MaterialDialog(state.partlist.parts, [2, 3], page)
+    assert dialog.targets() == [2, 3]
+    dialog.value.setCurrentText("Stainless")
+    page.materials_changed(dialog.apply())
+    assert [p.material for p in parts] == ["Steel", "Aluminium", "Stainless", "Stainless", "SS400"]
+    assert state.flats.get("RRS-T-004").material == "Stainless"
+    dialog.scope.button(1).setChecked(True)  # every row
+    dialog.action.button(1).setChecked(True)  # back to the drawing (M= / Title Block)
+    page.materials_changed(dialog.apply())
+    dialog.deleteLater()
+    assert [p.material for p in parts] == ["Steel", "Stainless", "SS400", "SS400", "SS400"]
+    assert parts[1].weight == pytest.approx(w, rel=1e-3) and state.flats.get("RRS-T-002").material == "Stainless"
+
+
 def test_partlist_thickness_edit_and_dialog(window, app):
     from partlist_studio.core import dwg_io
     from partlist_studio.core.models import COLUMN_KEYS

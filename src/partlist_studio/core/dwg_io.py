@@ -62,7 +62,7 @@ TITLE_TAGS: dict[str, list[str]] = {
     "drawing_no": ["dwg no", "dwgno", "drawing no", "drawingno", "drg no", "dwg", "เลขที่แบบ", "เลขแบบ"],
     "part_no": ["part no", "partno", "part number", "code", "รหัสชิ้นส่วน", "รหัส"],
     "name": ["title", "name", "part name", "partname", "description", "ชื่อชิ้นงาน", "ชื่อชิ้นส่วน", "ชื่อแบบ"],
-    "material": ["material", "mat", "วัสดุ"],
+    "material": ["material", "mat", "matl", "วัสดุ"],  # not "m": 'M=Steel' is the label of one part
     "thickness": ["thk", "thickness", "t", "ความหนา"],
     "qty": ["qty", "quantity", "จำนวน"],
     "revision": ["rev", "revision", "แก้ไขครั้งที่"],
@@ -82,6 +82,9 @@ _CODE_RE = re.compile(r"(?<![\w-])([A-Za-z]{2,6}(?:-[A-Za-z0-9]+){1,6})(?![\w-])
 _NUM = r"(\d{1,3}(?:,\d{3})+|\d+)"
 # Quantity of a part: '16 ชิ้น', '16ชิ้น', 'จำนวน 16', 'QTY: 4', '8 pcs', '1,000 ชิ้น' (Thai digits '๑๖ ชิ้น' too).
 _QTY_RE = re.compile(rf"(?:\bqty|\bq'ty|จำนวน)\s*[:=.]?\s*{_NUM}|{_NUM}\s*(?:ชิ้น|pcs?\b|ea\b)", re.IGNORECASE)
+# Material written after the quantity: 'M=Steel', 'M=Aluminium', 'M="SUS304"', 'MAT: SS400', 'วัสดุ=อลูมิเนียม'.
+_MAT_RE = re.compile(r"(?<![A-Za-z0-9])(?:material|matl|mat|m|วัสดุ)\s*[=:]\s*[\"'“”]?"
+                     r"([A-Za-z\u0E00-\u0E7F][\w.\-\u0E00-\u0E7F]*)[\"'“”]?", re.IGNORECASE)
 # 'อย่างละ 2 ชิ้น' / '2 pcs each': the note is meant for every part it stands next to, not only the nearest.
 _EACH_RE = re.compile(r"อย่างละ|\beach\b", re.IGNORECASE)
 # Words around a quantity that are not part of a name: 'อย่างละ 2 ชิ้น', 'รวม 16 ชิ้น'.
@@ -106,6 +109,14 @@ QTY_FROM_BOM = "แบบ (ตาราง BOM)"
 QTY_FROM_BLOCKS = "แบบ (นับบล็อก)"
 QTY_DEFAULT = "ไม่ระบุในแบบ (ใช้ 1)"
 QTY_MANUAL = "กำหนดเอง"
+MAT_FROM_PART = "แบบ (ป้ายที่ชิ้นงาน)"
+MAT_FROM_NOTE = "แบบ (หมายเหตุในแบบ)"
+MAT_FROM_TITLE = "แบบ (Title Block)"
+MAT_MANUAL = "กำหนดเอง"
+MAT_MISSING = "ไม่พบในแบบ"
+MAT_AS_DRAWN = "ตามแบบ"
+# offered in the material pickers (any other text can be typed)
+MATERIAL_CHOICES = ["Steel", "Stainless", "Aluminium", "Galvanized", "SS400", "SPHC", "SUS304", "SUS430", "AL5052"]
 
 # "MATERIAL : SS400", "THK. 3.2", "วัสดุ: SUS304" written as plain text.
 _KEY_VALUE_RE = re.compile(r"^\s*([A-Za-z\u0E00-\u0E7F][\w\u0E00-\u0E7F .]*?)\s*[:=]\s*(.+?)\s*$")
@@ -308,6 +319,8 @@ class DrawingData:
     note_qty: float = 0  # the one quantity written in the general notes ('16 ชิ้น'), 0 = none or several
     note_qty_each: bool = False  # written as 'อย่างละ N ชิ้น': for every part
     note_qty_text: str = ""
+    note_material: str = ""  # 'M=Steel' written once for the whole drawing
+    note_material_text: str = ""
     open_chains: int = 0  # cut lines that do not close into a loop (a laser cannot cut them as a part)
     open_examples: list = field(default_factory=list)  # (x, y) where they start (first 300), mm
 
@@ -376,6 +389,7 @@ def read_drawing(path: str | Path, converter: Converter | None = None, cut_layer
     _classify_profiles(data)
     _label_profiles(data)
     data.note_qty, data.note_qty_each, data.note_qty_text = _note_qty(data.notes)
+    data.note_material, data.note_material_text = _note_material(data.notes)
     if not data.bom and not data.outer_profiles and not data.title_block:
         data.warnings.append("ไม่พบ Title Block, ตาราง BOM หรือรูปคลี่ชิ้นงานในไฟล์นี้")
     return data
@@ -849,6 +863,7 @@ def _label_profiles(data: DrawingData) -> None:
                    for i in outers}
     near: dict[int, list[tuple[float, TextItem]]] = {i: [] for i in outers}
     data.notes = []
+    owned: list[tuple[TextItem, float, int]] = []
     for t in data.texts:
         if t.title or not t.text:
             continue
@@ -857,8 +872,31 @@ def _label_profiles(data: DrawingData) -> None:
             data.notes.append(t)
         for gap, i in owners:
             near[i].append((gap, t))
+        if len(owners) == 1:
+            owned.append((t, *owners[0]))
+    _stacked_material(data, owned, near)
     for i, items in near.items():
         profiles[i].info = read_labels(items)
+
+
+def _stacked_material(data: DrawingData, owned: list[tuple[TextItem, float, int]],
+                      near: dict[int, list[tuple[float, TextItem]]]) -> None:
+    """'M=Steel' as one more line under the code / name / thickness / qty lines of a part belongs to that
+    part even when the column of lines reaches past LABEL_DISTANCE (else it would be a note for every part)."""
+    moved = True
+    while moved:
+        moved = False
+        for t in [n for n in data.notes if parse_material(n.text)[0]]:
+            h = max(t.height, 1e-6)
+            above = [(gap, i) for o, gap, i in owned
+                     if abs(o.left - t.left) <= h and 0 < abs(o.y - t.y) <= 1.8 * max(h, o.height)]
+            if len({i for _gap, i in above}) != 1:
+                continue
+            gap, i = min(above)
+            data.notes.remove(t)
+            near[i].append((gap + h, t))
+            owned.append((t, gap + h, i))
+            moved = True
 
 
 def _owners(t: TextItem, grid: _BoxGrid, boxes, profiles: list[Profile], containers: list[Profile],
@@ -886,6 +924,26 @@ def parse_qty(text) -> float:
     return to_number(match.group(1) or match.group(2)) if match else 0
 
 
+def parse_material(text) -> tuple[str, str]:
+    """('Steel', 'M=Steel') from a text holding 'M=Steel'; ('', '') without one.
+    'steel' / 'STEEL' -> 'Steel', 'aluminium' -> 'Aluminium', codes stay upper case: 'ss400' -> 'SS400'."""
+    match = _MAT_RE.search("" if text is None else str(text))
+    if not match:
+        return "", ""
+    value = match.group(1).strip(".-")
+    if value.isascii():
+        value = value.capitalize() if value.isalpha() else value.upper()
+    return value, match.group(0).strip()
+
+
+def _note_material(notes: list[TextItem]) -> tuple[str, str]:
+    """The material of the general notes when they give just one ('M=Steel' for the whole drawing)."""
+    found = [m for t in notes if (m := parse_material(t.text))[0]]
+    if not found or len({m for m, _t in found}) > 1:
+        return "", ""
+    return found[0]
+
+
 def _note_qty(notes: list[TextItem]) -> tuple[float, bool, str]:
     """The quantity of the general notes when they give just one: (qty, written as 'อย่างละ', the text)."""
     found = [(q, bool(_EACH_RE.search(t.text)), t.text) for t in notes if (q := parse_qty(t.text))]
@@ -911,6 +969,13 @@ def read_labels(items: list[tuple[float, TextItem]]) -> dict:
     code_at = None
     for gap, t in sorted(items, key=lambda it: it[0]):
         text = t.text.strip()
+        material, material_text = parse_material(text) if not t.key else ("", "")
+        if material:  # 'RRS-T-001 เฟรมบน t3 16 ชิ้น M=Steel': the material, then read the rest
+            if "material" not in info:
+                info["material"], info["material_text"] = material, material_text
+            text = _MAT_RE.sub(" ", text).strip()
+            if not text:
+                continue
         key, value = t.key, text
         if not key:
             match = _KEY_VALUE_RE.match(text)
@@ -927,6 +992,8 @@ def read_labels(items: list[tuple[float, TextItem]]) -> dict:
                     info["qty_text"] = f"QTY = {text}" if t.key else text  # an attribute holds the number only
             elif key == "material" and value.isdigit():
                 continue  # 'Material=1' from sheet-metal exports
+            elif key == "material" and "material" not in info:
+                info["material_text"] = f"{t.key}={value}" if t.key else text
             elif key == "part_no" and _CODE_RE.fullmatch(value):
                 value = value.upper()
             if value and key not in info:
@@ -992,6 +1059,7 @@ class CandidatePart:
     thickness_source: str = ""  # THK_FROM_PART, THK_FROM_TITLE, THK_DEFAULT, THK_MANUAL ... ("" = not a plate)
     qty_source: str = ""  # QTY_FROM_PART, QTY_FROM_NOTE, QTY_FROM_TITLE, QTY_FROM_BOM, QTY_DEFAULT, QTY_MANUAL
     qty_text: str = ""  # the text of the drawing the quantity was read from ('16 ชิ้น')
+    material_source: str = ""  # MAT_FROM_PART ('M=Steel'), MAT_FROM_NOTE, MAT_FROM_TITLE, MAT_MANUAL, MAT_MISSING
 
     def set_qty(self, qty: float, source: str, text: str = "") -> None:
         """Quantity read from the drawing; the part keeps it (drawing_qty) and where it came from (qty_source)."""
@@ -1074,7 +1142,14 @@ def drawing_to_candidates(data: DrawingData, densities: dict[str, float] | None 
             lab = prof.info
             own = to_number(lab.get("thickness", 0))
             thickness, source = resolve_thickness(own, data.thickness, default_thickness, thickness_mode)
-            mat = lab.get("material") or material
+            if lab.get("material"):
+                mat, mat_source, mat_text = lab["material"], MAT_FROM_PART, lab.get("material_text", "")
+            elif data.note_material:
+                mat, mat_source, mat_text = data.note_material, MAT_FROM_NOTE, data.note_material_text
+            elif material:
+                mat, mat_source, mat_text = material, MAT_FROM_TITLE, f"MATERIAL {material}"
+            else:
+                mat, mat_source, mat_text = "", MAT_MISSING, ""
             part = Part(
                 part_no=lab.get("part_no") or ((tb.get("part_no") or tb.get("drawing_no", "")) if single else ""),
                 drawing_no=drawing_no,
@@ -1088,10 +1163,12 @@ def drawing_to_candidates(data: DrawingData, densities: dict[str, float] | None 
                        f" · รู {len(prof.holes)}",
             )
             part.drawing_thickness = own or data.thickness
+            part.drawing_material = mat
+            part.material_source = qty_source_text(mat_source, mat_text)
             if thickness:
                 part.weight = plate_weight(prof.net_area, thickness, density_for(mat, densities))
             part.outline = profile_outline(data, prof)
-            cand = CandidatePart(part, "profile", profile_index=i, thickness_source=source)
+            cand = CandidatePart(part, "profile", profile_index=i, thickness_source=source, material_source=mat_source)
             qty, qty_source = resolve_qty(to_number(lab.get("qty", 0)),
                                           data.note_qty if (single or data.note_qty_each) else 0,
                                           title_qty if single else 0)
@@ -1163,6 +1240,33 @@ def set_part_thickness(part: Part, thickness: float, densities: dict[str, float]
         part.weight = plate_weight(area, thickness, density_for(part.material, densities)) if thickness else 0
     elif old and thickness and part.weight:
         part.weight = round(part.weight * thickness / old, 3)
+
+
+def set_part_material(part: Part, material: str, densities: dict[str, float] | None = None,
+                      manual: bool = True) -> bool:
+    """Change a part's material (picked by hand, or back to the drawing's) and weigh it again with the new
+    density. Returns False when nothing changed."""
+    material = re.sub(r"\s+", " ", material or "").strip()
+    if material == part.material:
+        return False
+    old_density = density_for(part.material, densities)
+    part.material = material
+    if part.drawing_material and material == part.drawing_material:
+        part.material_source = f"{MAT_AS_DRAWN}: {material}"
+    elif manual:
+        part.material_source = MAT_MANUAL + (f" (ในแบบ {part.drawing_material})" if part.drawing_material else "")
+    if outline_net_area(part.outline) and part.thickness:
+        set_part_thickness(part, part.thickness, densities)
+    elif part.weight and old_density:
+        part.weight = round(part.weight * density_for(material, densities) / old_density, 3)
+    return True
+
+
+def reset_part_material(part: Part, densities: dict[str, float] | None = None) -> bool:
+    """Back to the material the drawing gave ('M=Steel'); False when the drawing gave none."""
+    if not part.drawing_material:
+        return False
+    return set_part_material(part, part.drawing_material, densities, manual=False)
 
 
 def profile_outline(data: DrawingData, prof: Profile) -> list[list[tuple[float, float]]]:

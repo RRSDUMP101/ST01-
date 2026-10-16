@@ -68,8 +68,8 @@ EXPRESS_UNIT_NAMES = {"ผน": "แผ่น", "สน": "เส้น", "ช�
 # Material families, so "SS400" in a drawing matches "เหล็กแผ่นดำ 4มม." in Express.
 MATERIAL_FAMILIES: list[tuple[str, list[str]]] = [
     ("SUS", ["SUS", "STAINLESS", "สแตนเลส", "สเตนเลส"]),
+    ("GALV", ["SGCC", "GALV", "GI", "กัลวาไนซ์", "เหล็กแผ่นขาว", "ซิงค์"]),  # before AL: 'GALVANIZED' holds 'AL'
     ("AL", ["ALUMIN", "A50", "A60", "AL", "อลูมิเนียม", "อะลูมิเนียม"]),
-    ("GALV", ["SGCC", "GALV", "GI", "กัลวาไนซ์", "เหล็กแผ่นขาว", "ซิงค์"]),
     ("STEEL", ["SS400", "SPHC", "SPCC", "DC01", "STEEL", "Q235", "ST37", "เหล็กแผ่นดำ", "แผ่นดำ", "เหล็กดำ"]),
 ]
 

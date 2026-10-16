@@ -8,7 +8,7 @@ from PySide6.QtCore import QAbstractTableModel, QModelIndex, QSortFilterProxyMod
 from PySide6.QtGui import QColor, QFont, QPixmap
 from PySide6.QtWidgets import QComboBox, QStyledItemDelegate
 
-from ..core.dwg_io import set_part_thickness
+from ..core.dwg_io import MATERIAL_CHOICES, set_part_material, set_part_thickness
 from ..core.models import (COLUMN_KEYS, COLUMN_LABELS, COMMON_THICKNESS, NUMERIC_COLUMNS, PROCESSES, STATUSES, UNITS,
                            Part, PartList, to_number)
 from ..core.stock import STOCK_KEYS, STOCK_LABELS, STOCK_NUMERIC, REQUIREMENT_HEADERS, RequirementLine, StockItem, \
@@ -134,6 +134,8 @@ class PartTableModel(QAbstractTableModel):
                 return msg
             if key == "qty" and part.qty_source:
                 return qty_tooltip(part)
+            if key == "material" and part.material_source:
+                return f"วัสดุจาก {part.material_source} – ดับเบิลคลิกเพื่อเลือกวัสดุอื่น"
             return value if key == "remark" else None
         return None
 
@@ -147,10 +149,10 @@ class PartTableModel(QAbstractTableModel):
         key = COLUMN_KEYS[index.column()]
         if key == "thickness":  # size text and weight follow the thickness
             set_part_thickness(part, to_number(value), self.densities)
+        elif key == "material":  # picked by hand: weighed again, and the drawing's value is kept to go back to
+            set_part_material(part, str(value), self.densities)
         else:
             part.set(key, value)
-            if key == "material" and part.thickness and part.outline:
-                set_part_thickness(part, part.thickness, self.densities)
         self.dataChanged.emit(self.index(index.row(), 0), self.index(index.row(), self.columnCount() - 1))
         return True
 
@@ -207,7 +209,7 @@ class ChoiceDelegate(QStyledItemDelegate):
     """Combo box editor for status / process / unit (editable so new values are allowed)."""
 
     CHOICES = {"status": STATUSES, "process": PROCESSES, "unit": UNITS,
-               "thickness": [""] + [f"{v:g}" for v in COMMON_THICKNESS]}
+               "thickness": [""] + [f"{v:g}" for v in COMMON_THICKNESS], "material": MATERIAL_CHOICES}
 
     def createEditor(self, parent, option, index):  # noqa: N802
         key = COLUMN_KEYS[index.column()]
@@ -231,6 +233,26 @@ class ChoiceDelegate(QStyledItemDelegate):
             model.setData(index, editor.currentText(), Qt.EditRole)
         else:
             super().setModelData(editor, model, index)
+
+
+class ComboDelegate(QStyledItemDelegate):
+    """An editable combo box with fixed choices for one column (any other text can be typed)."""
+
+    def __init__(self, choices: list[str], parent=None):
+        super().__init__(parent)
+        self.choices = list(choices)
+
+    def createEditor(self, parent, option, index):  # noqa: N802
+        combo = QComboBox(parent)
+        combo.setEditable(True)
+        combo.addItems(self.choices)
+        return combo
+
+    def setEditorData(self, editor, index):  # noqa: N802
+        editor.setCurrentText(str(index.data(Qt.EditRole) or ""))
+
+    def setModelData(self, editor, model, index):  # noqa: N802
+        model.setData(index, editor.currentText(), Qt.EditRole)
 
 
 class StockTableModel(QAbstractTableModel):

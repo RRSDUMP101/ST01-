@@ -91,10 +91,10 @@ def frame_set():
         msp.add_text(value, height=height, dxfattribs={"layer": "TEXT"}).set_placement((x, y))
 
     plate(20, 200, 150, 60)  # 1: four texts under the part
-    for i, value in enumerate(("RRS-T-001", "เฟรมบน", "t=3", "16 ชิ้น")):
+    for i, value in enumerate(("RRS-T-001", "เฟรมบน", "t=3", "16 ชิ้น", "M=Steel")):
         text(value, 20, 192 - i * 6)
     plate(200, 200, 180, 60, holes=3)  # 2: one text inside: code, name, thickness, quantity
-    text("RRS-T-002 เฟรมล่าง t3.2 2 ชิ้น", 210, 226)
+    text("RRS-T-002 เฟรมล่าง t3.2 2 ชิ้น M=Stainless", 210, 226)  # material after the quantity
     plate(20, 60, 100, 80)  # 3: label block with PART_NO / NAME / THK / QTY attributes
     ref = msp.add_blockref("PART_TAG", (130, 130), dxfattribs={"layer": "TEXT"})
     ref.add_auto_attribs({"PART_NO": "RRS-T-003", "NAME": "แผ่นปิดข้าง", "THK": "4", "QTY": "4"})

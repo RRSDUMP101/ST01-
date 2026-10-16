@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QComboBox, QDateEdit, QD
                                QRadioButton, QSpinBox, QVBoxLayout)
 
 from ..core import code_rules, revision
-from ..core.dwg_io import set_part_thickness
+from ..core.dwg_io import MATERIAL_CHOICES, reset_part_material, set_part_material, set_part_thickness
 from ..core.company_files import ModelBOM
 from ..core.express_codes import (ST_NONE, VARIANT_BRANDS, VARIANT_HEIGHTS, VARIANT_LENGTHS, Resolved,
                                   resolve_variant, resolved_to_parts, row_options, summary)
@@ -444,4 +444,68 @@ class ThicknessDialog(QDialog):
             if value != part.thickness:
                 set_part_thickness(part, value, densities)
                 changed += 1
+        return changed
+
+
+class MaterialDialog(QDialog):
+    """เปลี่ยนวัสดุ: one material for the chosen rows, or back to what their DWG said ('M=Steel').
+    The weight per piece follows the density of the new material."""
+
+    def __init__(self, parts: list[Part], selected: list[int], parent=None):
+        super().__init__(parent)
+        self.parts = parts
+        self.selected = [r for r in selected if 0 <= r < len(parts)]
+        self.setWindowTitle("เปลี่ยนวัสดุ")
+        self.setMinimumWidth(520)
+        lay = QVBoxLayout(self)
+        lay.addWidget(QLabel("<b>ใช้กับ</b>"))
+        self.scope = QButtonGroup(self)
+        missing = [r for r, p in enumerate(parts) if not p.material]
+        self._scopes = {0: self.selected, 1: list(range(len(parts))), 2: missing}
+        for key, text in ((0, f"แถวที่เลือก ({len(self.selected)} รายการ)"), (1, f"ทุกรายการ ({len(parts)} รายการ)"),
+                          (2, f"เฉพาะที่ยังไม่มีวัสดุ ({len(missing)} รายการ)")):
+            rb = QRadioButton(text)
+            rb.setEnabled(bool(self._scopes[key]))
+            self.scope.addButton(rb, key)
+            lay.addWidget(rb)
+        self.scope.button(next((k for k in (0, 2, 1) if self._scopes[k]), 0)).setChecked(True)
+        lay.addWidget(QLabel("<b>วัสดุ</b>"))
+        self.action = QButtonGroup(self)
+        row = QHBoxLayout()
+        self.set_rb = QRadioButton("เปลี่ยนเป็น")
+        self.set_rb.setChecked(True)
+        self.action.addButton(self.set_rb, 0)
+        row.addWidget(self.set_rb)
+        self.value = QComboBox()
+        self.value.setEditable(True)
+        self.value.addItems(MATERIAL_CHOICES)
+        first = parts[self.selected[0]].material if self.selected else ""
+        if first:
+            self.value.setCurrentText(first)
+        row.addWidget(self.value, 1)
+        lay.addLayout(row)
+        drawn = sum(1 for p in parts if p.drawing_material)
+        reset_rb = QRadioButton(f"คืนค่าตามแบบ DWG (M= ที่อ่านได้ตอนนำเข้า · มี {drawn} รายการ)")
+        reset_rb.setEnabled(bool(drawn))
+        self.action.addButton(reset_rb, 1)
+        lay.addWidget(reset_rb)
+        hint = QLabel("น้ำหนัก/ชิ้นคำนวณใหม่ตามความหนาแน่นของวัสดุ (เหล็ก 7.85 · สแตนเลส 7.93 · อะลูมิเนียม 2.70) "
+                      "และรูปคลี่ในคลังใช้วัสดุใหม่ตอนวางแผนตัด")
+        hint.setObjectName("Hint")
+        hint.setWordWrap(True)
+        lay.addWidget(hint)
+        lay.addWidget(_buttons(self, "เปลี่ยนวัสดุ"))
+
+    def targets(self) -> list[int]:
+        return self._scopes[self.scope.checkedId()]
+
+    def apply(self, densities: dict[str, float] | None = None) -> list[Part]:
+        """Change the parts; returns the parts that changed."""
+        changed = []
+        for r in self.targets():
+            part = self.parts[r]
+            done = reset_part_material(part, densities) if self.action.checkedId() == 1 else \
+                set_part_material(part, self.value.currentText(), densities)
+            if done:
+                changed.append(part)
         return changed

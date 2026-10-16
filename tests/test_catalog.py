@@ -141,7 +141,7 @@ def test_tickets_labels_and_qr():
     tickets = catalog.job_tickets(job, None, cat, None, lib, queue.programs)
     assert [t.code for t in tickets] == ["RRS-T-001", "RRS-T-003", "RRS-T-004", "RRS-T-005"]
     t = tickets[0]
-    assert t.no == "SO6910-015/01" and t.qty == 48 and t.due == "30/10/2569" and t.material == "SS400 t3"
+    assert t.no == "SO6910-015/01" and t.qty == 48 and t.due == "30/10/2569" and t.material == "Steel t3"
     assert t.to == "เก็บที่ P-FU-01 · กลุ่มเฟรมบน" and t.outline and t.program.startswith("LC")
     assert t.route == [("ตัด", 0, 48), ("พับ", 0, 48)] and "พื้นที่สุทธิ" not in t.remark
     scan = qr.parse_payload(t.payload)

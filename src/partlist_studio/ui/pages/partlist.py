@@ -61,6 +61,10 @@ class PartListPage(QWidget):
                                            "– ขนาดและน้ำหนักคำนวณใหม่")
         b.clicked.connect(self.adjust_thickness)
         tools.addWidget(b)
+        b = button("เปลี่ยนวัสดุ…", tooltip="เลือกวัสดุให้แถวที่เลือก/ทุกรายการ หรือคืนค่าตามแบบ (M=Steel) "
+                                          "– น้ำหนักคำนวณใหม่")
+        b.clicked.connect(self.change_material)
+        tools.addWidget(b)
         for text, slot in (("+ เพิ่มแถว", self.add_row), ("ลบแถวที่เลือก", self.remove_rows),
                            ("เรียงลำดับใหม่", self.renumber)):
             b = button(text)
@@ -104,12 +108,24 @@ class PartListPage(QWidget):
         self._update_footer()
 
     # ---------------------------------------------------------------------
-    def _edited(self, *args) -> None:
+    def _edited(self, top_left=None, *args) -> None:
         self._editing = True
         try:
+            self._sync_flat_material(top_left.row() if top_left is not None and top_left.isValid() else -1)
             self.state.mark_dirty()
         finally:
             self._editing = False
+
+    def _sync_flat_material(self, row: int) -> None:
+        """A material typed in the table also goes to the flat pattern of that code (used by the laser plan)."""
+        parts = self.state.partlist.parts
+        if not 0 <= row < len(parts) or not parts[row].part_no:
+            return
+        part = parts[row]
+        flat = self.state.flats.get(part.part_no)
+        if flat is not None and part.material and flat.material != part.material:
+            flat.material = part.material
+            self.state.save_laser()
 
     def _external_change(self) -> None:
         if not self._editing:
@@ -160,6 +176,36 @@ class PartListPage(QWidget):
         if changed:
             self.state.mark_dirty()
         self.state.notify(f"ปรับความหนา {changed} รายการ")
+
+    def change_material(self) -> None:
+        from ..work_dialogs import MaterialDialog
+
+        dialog = MaterialDialog(self.state.partlist.parts, self._selected_rows(), self)
+        accepted = dialog.exec()
+        if not accepted:
+            dialog.deleteLater()
+            return
+        self.model.densities = self.state.settings.densities
+        changed = dialog.apply(self.model.densities)
+        dialog.deleteLater()
+        self.materials_changed(changed)
+
+    def materials_changed(self, changed) -> None:
+        """Parts got a new material: the Part List and the flat patterns of their codes (laser plans use them)."""
+        if not changed:
+            self.state.notify("วัสดุเหมือนเดิม ไม่มีรายการเปลี่ยน")
+            return
+        flats = 0
+        for part in changed:
+            flat = self.state.flats.get(part.part_no) if part.part_no else None
+            if flat is not None and flat.material != part.material:
+                flat.material = part.material
+                flats += 1
+        if flats:
+            self.state.save_laser()
+        self.model.refresh()
+        self.state.mark_dirty()
+        self.state.notify(f"เปลี่ยนวัสดุ {len(changed)} รายการ" + (f" · อัปเดตคลังรูปคลี่ {flats} รหัส" if flats else ""))
 
     def renumber(self) -> None:
         self.state.partlist.renumber()

@@ -173,3 +173,22 @@ def test_machine_presets_bed_and_old_settings():
     long_part = nesting.NestPart("k", "RRS-X-030", "รางยาว", "SS400", 3, 9000, 100, 1, outline=[square])
     assert any("ใหญ่กว่าโต๊ะ" in i.text and i.level == laser.ERROR for i in laser.check_part(long_part, params))
     assert params.fits_bed(1524, 6096) and not params.fits_bed(3000, 3000)
+
+
+def test_machine_values_layer_colours_and_test_file(tmp_path):
+    import ezdxf
+
+    params = laser.LaserParams()
+    assert params.speed("STEEL", 2) == 38000 and params.pierce_seconds(2) == pytest.approx(0.04)  # HSG technic
+    old = params.to_dict()  # saved with the first HSG estimates: moves to the machine's values
+    old["speeds"]["STEEL"]["2"] = 35000
+    old["pierce"] = {"1": 0.1, "3": 0.2, "5": 0.3, "8": 0.6, "12": 1.0, "16": 1.5, "20": 2.5, "25": 3.5, "30": 5.0}
+    assert laser.LaserParams.from_dict(old).speed("STEEL", 2) == 38000
+    params.color_outer, params.color_inner = 2, 4
+    back = laser.LaserParams.from_dict(params.to_dict())
+    assert (back.color_outer, back.color_inner, back.color_mark) == (2, 4, 3)
+    path = laser.export_layer_test(tmp_path / "LAYER_TEST.dxf", back)
+    doc = ezdxf.readfile(path)
+    assert doc.layers.get("CUT_OUTER").color == 2 and doc.layers.get("COLOR_6").color == 6
+    squares = [e for e in doc.modelspace() if e.dxftype() == "LWPOLYLINE"]
+    assert len(squares) == 10 and all(e.closed for e in squares)

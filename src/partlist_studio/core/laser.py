@@ -42,16 +42,18 @@ ERROR = "error"
 WARN = "warn"
 
 # mm/min by material family and thickness (mm), and seconds per pierce by thickness.
-# HSG 12,000 W (the company's machine): estimates - steel with air/N2 up to 12 mm and O2 above, SUS / AL with N2.
+# HSG 12,000 W (the company's machine): steel 2 mm from the machine's own technic "12000-Carbon Steel-2.000"
+# (Big Graph 38,000 mm/min, N2 12 bar, pierce 40 ms); the other values are estimates - steel with air/N2 up to
+# 12 mm and O2 above, SUS / AL with N2.
 SPEEDS_12KW: dict[str, dict[float, float]] = {
-    "STEEL": {1: 45000, 1.5: 40000, 2: 35000, 2.5: 30000, 3: 26000, 4: 20000, 5: 16000, 6: 12000, 8: 7500,
+    "STEEL": {1: 45000, 1.5: 40000, 2: 38000, 2.5: 30000, 3: 26000, 4: 20000, 5: 16000, 6: 12000, 8: 7500,
               10: 5000, 12: 3500, 14: 2600, 16: 2000, 20: 1400, 25: 1000, 30: 750},
     "GALV": {1: 40000, 1.5: 35000, 2: 30000, 3: 22000, 4: 16000, 5: 12000},
     "SUS": {1: 50000, 1.5: 45000, 2: 38000, 3: 26000, 4: 19000, 5: 14000, 6: 11000, 8: 6500, 10: 4500, 12: 3200,
             16: 1800, 20: 1100, 25: 650},
     "AL": {1: 40000, 2: 30000, 3: 20000, 4: 14000, 5: 10000, 6: 7500, 8: 4500, 10: 3200, 12: 2300, 16: 1200, 20: 700},
 }
-PIERCE_12KW: dict[float, float] = {1: 0.1, 3: 0.2, 5: 0.3, 8: 0.6, 12: 1.0, 16: 1.5, 20: 2.5, 25: 3.5, 30: 5.0}
+PIERCE_12KW: dict[float, float] = {1: 0.04, 2: 0.04, 3: 0.2, 5: 0.3, 8: 0.6, 12: 1.0, 16: 1.5, 20: 2.5, 25: 3.5, 30: 5.0}
 # a typical 3 kW fiber laser (O2 for steel, N2 for SUS / AL): the defaults of the first version
 SPEEDS_3KW: dict[str, dict[float, float]] = {
     "STEEL": {1: 25000, 1.5: 15000, 2: 8000, 2.5: 6000, 3: 4500, 4: 3500, 5: 3000, 6: 2500, 8: 1800, 10: 1400,
@@ -67,6 +69,9 @@ MACHINES: dict[str, tuple[dict, dict, float, float]] = {
     "Fiber 3,000W (ทั่วไป)": (SPEEDS_3KW, PIERCE_3KW, 1500.0, 3000.0),
 }
 DEFAULT_MACHINE = "HSG 12,000W"
+_OLD_SPEEDS_12KW = {f: dict(t) for f, t in SPEEDS_12KW.items()}
+_OLD_SPEEDS_12KW["STEEL"][2] = 35000  # the first HSG table (estimates only)
+_OLD_PIERCE_12KW = {1: 0.1, 3: 0.2, 5: 0.3, 8: 0.6, 12: 1.0, 16: 1.5, 20: 2.5, 25: 3.5, 30: 5.0}
 DEFAULT_SPEEDS = SPEEDS_12KW
 DEFAULT_PIERCE = PIERCE_12KW
 
@@ -105,6 +110,11 @@ class LaserParams:
     mark_codes: bool = False  # write the part code on the MARK layer (engraving)
     sheet_outline: bool = False  # draw the sheet border on layer SHEET (most laser software would cut it)
     machine: str = DEFAULT_MACHINE
+    # DXF colour (AutoCAD index 1 red, 2 yellow, 3 green, 4 cyan, 5 blue, 6 magenta, 7 white) of each layer:
+    # laser software that sorts by colour puts the contours on its own layers by it
+    color_outer: int = 1
+    color_inner: int = 4
+    color_mark: int = 3
     bed_w: float = 2500.0  # largest sheet the machine takes, mm
     bed_l: float = 8000.0
 
@@ -155,6 +165,10 @@ class LaserParams:
         if "machine" not in (data or {}) and _same_table(p.speeds, SPEEDS_3KW) and _same_table(
                 {"": p.pierce}, {"": PIERCE_3KW}):
             p.use_machine(DEFAULT_MACHINE)  # saved by the first version, never tuned: the company's machine
+        elif p.machine == DEFAULT_MACHINE and _same_table(p.speeds, _OLD_SPEEDS_12KW) and _same_table(
+                {"": p.pierce}, {"": _OLD_PIERCE_12KW}):
+            p.speeds = {f: dict(t) for f, t in SPEEDS_12KW.items()}  # the estimates before the machine's own values
+            p.pierce = dict(PIERCE_12KW)
         return p
 
 
@@ -684,7 +698,8 @@ def _new_doc(params: LaserParams):
     doc.header["$INSUNITS"] = 4  # mm
     if version != "R12":
         doc.header["$MEASUREMENT"] = 1
-    for name, color in ((params.layer_outer, 1), (params.layer_inner, 4), (params.layer_mark, 3), ("SHEET", 8)):
+    for name, color in ((params.layer_outer, params.color_outer), (params.layer_inner, params.color_inner),
+                        (params.layer_mark, params.color_mark), ("SHEET", 8)):
         if name not in doc.layers:
             doc.layers.add(name, color=color)
     return doc
@@ -918,3 +933,35 @@ def export_package(programs: list[CutProgram], folder: str | Path, params: Laser
         write_workbook(folder / "รายการชิ้นงาน_DXF.xlsx", [Sheet("ชิ้นงาน", PART_HEADERS, part_rows(parts, params, files))])
     return {"folder": str(folder), "order": str(order), "files": [str(p) for p in written],
             "programs": len(programs), "parts": len(files)}
+
+
+ACI_NAMES = {1: "แดง", 2: "เหลือง", 3: "เขียว", 4: "ฟ้า", 5: "น้ำเงิน", 6: "ม่วงชมพู", 7: "ขาว/ดำ"}
+
+
+def export_layer_test(path, params: LaserParams) -> Path:
+    """A test file for the laser software: which of its layers each DXF layer / colour lands on.
+    Row 1 (left to right): the 3 layers the program writes (outer, holes, mark).
+    Row 2: one square on each of the 7 standard colours 1 red … 7 white, left to right. All squares 100 mm."""
+    doc = _new_doc(params)
+    msp = doc.modelspace()
+    square = [(0, 0), (100, 0), (100, 100), (0, 100)]
+
+    def add(layer: str, x: float, y: float) -> None:
+        pts = [(x + px, y + py) for px, py in square]
+        if params.dxf_version == "R12":
+            msp.add_polyline2d(pts, close=True, dxfattribs={"layer": layer})
+        else:
+            msp.add_lwpolyline(pts, close=True, dxfattribs={"layer": layer})
+
+    for i, layer in enumerate((params.layer_outer, params.layer_inner, params.layer_mark)):
+        add(layer, i * 150, 200)
+    for aci in range(1, 8):
+        name = f"COLOR_{aci}"
+        if name not in doc.layers:
+            doc.layers.add(name, color=aci)
+        add(name, (aci - 1) * 150, 0)
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    doc.saveas(path)
+    return path
+

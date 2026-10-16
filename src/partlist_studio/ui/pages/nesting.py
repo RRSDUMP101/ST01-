@@ -205,6 +205,23 @@ class LaserSettingsDialog(QDialog):
         self.sheet.setChecked(params.sheet_outline)
         form.addWidget(self.mark, 6, 0, 1, 2)
         form.addWidget(self.sheet, 6, 2, 1, 2)
+        colors = QHBoxLayout()
+        self.colors = {}
+        for key, label in (("color_outer", "สีรอบนอก"), ("color_inner", "สีรู"), ("color_mark", "สีแกะสลัก")):
+            combo = QComboBox()
+            for aci, name in laser.ACI_NAMES.items():
+                combo.addItem(f"{aci} {name}", aci)
+            combo.setCurrentIndex(max(0, combo.findData(getattr(params, key))))
+            self.colors[key] = combo
+            colors.addWidget(QLabel(label))
+            colors.addWidget(combo)
+        colors.addStretch(1)
+        form.addLayout(colors, 7, 0, 1, 4)
+        tip = QLabel("ซอฟต์แวร์ของเครื่องแยกเลเยอร์เอง (HSG: Big / Mid / Small Graph ตามขนาดเส้น, Mark) – "
+                     "ใช้ ส่งออก ▾ → ไฟล์ทดสอบเลเยอร์ เปิดในเครื่อง แล้วตั้งสีให้ตรงกับเลเยอร์ที่ต้องการ")
+        tip.setObjectName("Hint")
+        tip.setWordWrap(True)
+        form.addWidget(tip, 8, 0, 1, 4)
         lay.addLayout(form)
         box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         box.button(QDialogButtonBox.Ok).setText("บันทึก")
@@ -278,6 +295,8 @@ class LaserSettingsDialog(QDialog):
         p.mark_codes = self.mark.isChecked()
         p.sheet_outline = self.sheet.isChecked()
         p.machine = self.machine.currentText()
+        for key, combo in self.colors.items():
+            setattr(p, key, int(combo.currentData()))
         p.bed_w, p.bed_l = self.bed_w.value(), self.bed_l.value()
         return p
 
@@ -341,6 +360,8 @@ class NestingPage(QWidget):
         menu.addSeparator()
         menu.addAction("แผนตัดเพื่อดูจำนวนแผ่น/ต้นทุนเหล็ก (Excel)…", self.export_excel)
         menu.addAction("แผนวางชิ้นงานเปิดดูใน ZWCAD (DXF)…", self.export_dxf)
+        menu.addSeparator()
+        menu.addAction("ไฟล์ทดสอบเลเยอร์สำหรับเครื่องเลเซอร์ (DXF)…", self.export_layer_test)
         exp.setMenu(menu)
         b = header.add_action(button("ค่าเครื่องตัด…", tooltip="ความเร็วตัด เวลาเจาะ เกณฑ์ตรวจ และเลเยอร์ไฟล์ DXF"))
         b.clicked.connect(self.edit_settings)
@@ -527,6 +548,13 @@ class NestingPage(QWidget):
 
     def params(self) -> nesting.NestParams:
         return self.laser_params().nest_params()
+
+    def export_layer_test(self) -> None:
+        """Squares on each layer / colour: open it in the laser software to see which layer each lands on."""
+        path = self.actions.save_path("ไฟล์ทดสอบเลเยอร์", "LAYER_TEST.dxf", "DXF (*.dxf)")
+        if path:
+            laser.export_layer_test(path, self.laser_params())
+            self.state.notify("บันทึก LAYER_TEST.dxf แล้ว – แถวบน: รอบนอก · รู · แกะสลัก · แถวล่าง: สี 1–7 จากซ้ายไปขวา")
 
     def edit_settings(self) -> None:
         dialog = LaserSettingsDialog(self.laser_params(), self)

@@ -428,3 +428,26 @@ def test_parts_ready_tab_readiness_tickets_and_scan(window, app, monkeypatch, tm
 
     again = AppState(data_dir=state.data_dir())  # what was set by hand is saved
     assert again.catalog.group_of("RRS-T-024-L-84") == "FIX" and again.catalog.location_of("RRS-T-024-L-84") == "P-FRONT-01"
+
+
+def test_beds_edited_in_one_place(window, app):
+    from partlist_studio.core import production
+    from partlist_studio.core.models import Part
+
+    state = window.state
+    state.partlist.parts = [Part(part_no="RRS-T-001", name="เฟรมบน", qty=2)]
+    state.partlist.info.build_qty = 3
+    state.mark_dirty()
+    stock, nest = window.pages["stock"], window.pages["nesting"]
+    assert "3 คัน" in stock.build.text() and "3 คัน" in nest.sets.text()  # shown, not edited there
+    dash = window.pages["dashboard"]
+    dash.build_qty.setValue(5)  # the one place for the Part List
+    assert state.partlist.info.build_qty == 5 and "5 คัน" in stock.build.text() and "5 คัน" in nest.sets.text()
+    job = production.job_from_parts("SO-K1", state.partlist.parts, 5, None, False)
+    state.jobs.append(job)
+    state.save_jobs()
+    prod = window.pages["production"]
+    prod._select_job("SO-K1")
+    assert prod.sets.value() == 5
+    prod.sets.setValue(4)  # an open job: its beds are changed on the job page
+    assert job.sets == 4 and job.parts[0].required == 8 and state.partlist.info.build_qty == 5

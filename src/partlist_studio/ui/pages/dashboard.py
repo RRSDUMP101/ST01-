@@ -86,7 +86,9 @@ class DashboardPage(QWidget):
         self.build_qty.setSuffix(" คัน")
         self.build_qty.setButtonSymbols(QSpinBox.NoButtons)
         self.build_qty.valueChanged.connect(self._build_changed)
-        form_grid.addWidget(QLabel("จำนวนผลิต"), 4, 0)
+        self.build_qty.setToolTip("จำนวนคันของ Part List นี้ – แก้ที่นี่ที่เดียว ทุกหน้าใช้ค่านี้ "
+                                  "(งานที่เปิดแล้ว แก้จำนวนคันที่หน้างานผลิต)")
+        form_grid.addWidget(QLabel("จำนวนผลิต (คัน)"), 4, 0)
         form_grid.addWidget(self.build_qty, 4, 1)
         info_card.body.addLayout(form_grid)
         info_card.body.addStretch(1)

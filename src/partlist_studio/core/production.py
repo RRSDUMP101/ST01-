@@ -199,6 +199,24 @@ class Job:
                 self.status = JOB_DONE
         return taken
 
+    def set_sets(self, sets: float, note: str = "") -> float:
+        """Change the number of beds of an open job: every part needs qty per bed × beds again.
+        Pieces already made stay recorded (fewer beds: the extra pieces count as made); pieces taken from stock
+        stay reserved up to what is needed. Returns the old number of beds."""
+        sets = max(1.0, float(sets))
+        old = self.sets
+        if sets == old:
+            return old
+        for p in self.parts:
+            p.required = p.qty_per_set * sets
+            p.from_stock = min(p.from_stock, p.required)
+        self.sets = sets
+        self.log.append(LogEntry(datetime.now().isoformat(timespec="minutes"), "", "", "จำนวนคัน", sets - old,
+                                 note or f"เปลี่ยนจำนวนคัน {old:g} → {sets:g}"))
+        if self.status == JOB_DONE and not all(p.status in (DONE, FROM_STOCK) for p in self.parts):
+            self.status = JOB_RUNNING
+        return old
+
     def unreceived(self) -> list[tuple[JobPart, float]]:
         """Finished pieces not yet received into stock."""
         return [(p, p.finished - p.received) for p in self.parts if p.finished - p.received > 0]

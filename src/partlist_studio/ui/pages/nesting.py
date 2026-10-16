@@ -374,10 +374,10 @@ class NestingPage(QWidget):
         self._build_queue_tab()
         self._build_library_tab()
 
-        state.partlist_changed.connect(lambda: self.sets.setValue(max(1, state.partlist.info.build_qty)))
+        state.partlist_changed.connect(self._sync_sets)
         state.jobs_changed.connect(self._refresh_jobs)
         state.laser_changed.connect(self._refresh_laser)
-        self.sets.setValue(max(1, state.partlist.info.build_qty))
+        self._sync_sets()
         self._refresh_jobs()
         if not state.settings.get("laser/source"):  # first use: the jobs when some still have parts to cut
             has_jobs = any(self.jobs.item(i).checkState() == Qt.Checked for i in range(self.jobs.count()))
@@ -417,17 +417,17 @@ class NestingPage(QWidget):
         self.default_thk.setValue(float(self.state.settings.get("nest/default_thk", "0") or 0))
         self.default_thk.setSuffix(" มม.")
         self.default_thk.setSpecialValueText("ไม่ใช้")
-        self.sets = QSpinBox()
-        self.sets.setRange(1, 999)
-        self.sets.setSuffix(" คัน")
-        self.sets_label = QLabel("จำนวนผลิต")
+        self.sets = QLabel()
+        self.sets.setToolTip("จำนวนคันของ Part List แก้ได้ที่หน้าภาพรวมที่เดียว · งานที่เปิดแล้วแก้ที่หน้างานผลิต")
+        self.sets_label = button("แก้ ›", tooltip="จำนวนคันของ Part List แก้ได้ที่หน้าภาพรวมที่เดียว · งานที่เปิดแล้วแก้ที่หน้างานผลิต")
+        self.sets_label.clicked.connect(lambda: self.actions.go("dashboard"))
         for label, w in (("ระยะห่างชิ้นงาน", self.gap), ("ขอบแผ่น", self.margin), ("", self.rotate),
                          ("ความหนา (เมื่อแบบไม่ระบุ)", self.default_thk)):
             if label:
                 row.addWidget(QLabel(label))
             row.addWidget(w)
-        row.addWidget(self.sets_label)
         row.addWidget(self.sets)
+        row.addWidget(self.sets_label)
         row.addStretch(1)
         params.body.addLayout(row)
         self.jobs = QListWidget()
@@ -563,6 +563,12 @@ class NestingPage(QWidget):
             self.state.notify("บันทึกค่าเครื่องตัดแล้ว")
         dialog.deleteLater()
 
+    def _sets(self) -> int:
+        return max(1, self.state.partlist.info.build_qty)
+
+    def _sync_sets(self) -> None:
+        self.sets.setText(f"× {self._sets()} คัน (จาก Part List)")
+
     def _source_changed(self, index: int | None = None) -> None:
         jobs = self.source.currentData() == SRC_JOBS
         self.jobs.setVisible(jobs)
@@ -618,7 +624,7 @@ class NestingPage(QWidget):
             demand = laser.demand_from_jobs(self.state.jobs, self.state.flats, self.state.cut_queue.programs,
                                             self.state.xref_lookup, self.default_thk.value(), job_nos)
         else:
-            demand = laser.demand_from_partlist(self.state.partlist, self.sets.value(), self.default_thk.value())
+            demand = laser.demand_from_partlist(self.state.partlist, self._sets(), self.default_thk.value())
         if not demand.parts:
             self._clear_plan("")
             self.demand = demand

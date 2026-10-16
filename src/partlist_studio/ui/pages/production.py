@@ -89,10 +89,19 @@ class ProductionPage(QWidget):
         self.status.currentTextChanged.connect(self._info_edited)
         self.progress = QProgressBar()
         self.progress.setFormat("%p% เสร็จ")
-        for i, (label, w) in enumerate((("ลูกค้า", self.customer), ("กำหนดส่ง", self.due), ("สถานะงาน", self.status))):
+        self.sets = QDoubleSpinBox()
+        self.sets.setRange(1, 9999)
+        self.sets.setDecimals(0)
+        self.sets.setSuffix(" คัน")
+        self.sets.setKeyboardTracking(False)
+        self.sets.setToolTip("จำนวนคันของงานนี้ (แก้ที่นี่ที่เดียว) – ทุกชิ้นคิด จำนวนต่อคัน × คัน ใหม่ "
+                             "ชิ้นที่ทำไปแล้วยังนับอยู่")
+        self.sets.valueChanged.connect(self._sets_edited)
+        for i, (label, w) in enumerate((("ลูกค้า", self.customer), ("กำหนดส่ง", self.due), ("สถานะงาน", self.status),
+                                        ("จำนวนคัน", self.sets))):
             grid.addWidget(QLabel(label), 0, i * 2)
             grid.addWidget(w, 0, i * 2 + 1)
-        grid.addWidget(self.progress, 0, 6)
+        grid.addWidget(self.progress, 0, 8)
         rl.addLayout(grid)
         self.chips = StatusChipRow(CHIPS, hide_zero=True)
         rl.addLayout(self.chips)
@@ -183,6 +192,9 @@ class ProductionPage(QWidget):
         self.status.blockSignals(True)
         self.status.setCurrentText(job.status)
         self.status.blockSignals(False)
+        self.sets.blockSignals(True)
+        self.sets.setValue(job.sets)
+        self.sets.blockSignals(False)
         self.progress.setValue(round(job.progress * 100))
         counts = {}
         for p in job.parts:
@@ -271,6 +283,15 @@ class ProductionPage(QWidget):
         job.due = self.due.date().toString("yyyy-MM-dd")
         job.status = self.status.currentText()
         self.state.save_jobs()
+
+    def _sets_edited(self, value: float) -> None:
+        job = self._job()
+        if job is None or value == job.sets:
+            return
+        old = job.set_sets(value)
+        self.state.save_jobs()
+        self.state.notify(f"{job.job_no}: จำนวนคัน {old:g} → {job.sets:g} · ทุกชิ้นคิดจำนวนใหม่แล้ว "
+                          "(ชิ้นที่ทำไปแล้วยังนับอยู่)")
 
     def _cell_edited(self, item) -> None:
         job = self._job()

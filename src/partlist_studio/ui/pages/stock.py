@@ -7,7 +7,7 @@ from pathlib import Path
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (QAbstractItemView, QFileDialog, QHBoxLayout, QHeaderView, QLabel, QListWidget,
-                               QListWidgetItem, QMenu, QSpinBox, QSplitter, QTableView, QTabWidget, QVBoxLayout,
+                               QListWidgetItem, QMenu, QSplitter, QTableView, QTabWidget, QVBoxLayout,
                                QWidget)
 
 from ...core.company_files import (SHEET_STEEL, export_steel_issue, export_stock_count, read_company_workbook,
@@ -108,14 +108,12 @@ class StockPage(QWidget):
         cl = QVBoxLayout(check_tab)
         cl.setContentsMargins(12, 12, 12, 12)
         row = QHBoxLayout()
-        row.addWidget(QLabel("จำนวนผลิต"))
-        self.build = QSpinBox()
-        self.build.setRange(1, 9999)
-        self.build.setSuffix(" คัน")
-        self.build.setButtonSymbols(QSpinBox.NoButtons)
-        self.build.setFixedWidth(90)
-        self.build.valueChanged.connect(self._build_changed)
+        self.build = QLabel()
+        self.build.setToolTip("จำนวนคันของ Part List แก้ได้ที่หน้าภาพรวมที่เดียว · งานที่เปิดแล้วแก้ที่หน้างานผลิต")
         row.addWidget(self.build)
+        edit_build = button("แก้ที่หน้าภาพรวม ›", tooltip="จำนวนคันของ Part List แก้ได้ที่หน้าภาพรวมที่เดียว · งานที่เปิดแล้วแก้ที่หน้างานผลิต")
+        edit_build.clicked.connect(lambda: self.actions.go("dashboard"))
+        row.addWidget(edit_build)
         run = button("ตรวจวัตถุดิบเทียบสต็อก", "accent")
         run.clicked.connect(self.run_check)
         row.addWidget(run)
@@ -267,14 +265,7 @@ class StockPage(QWidget):
 
     # ---- check -------------------------------------------------------------
     def _sync_build(self) -> None:
-        self.build.blockSignals(True)
-        self.build.setValue(max(1, self.state.partlist.info.build_qty))
-        self.build.blockSignals(False)
-
-    def _build_changed(self, value: int) -> None:
-        if self.state.partlist.info.build_qty != value:
-            self.state.partlist.info.build_qty = value
-            self.state.mark_dirty()
+        self.build.setText(f"จำนวนผลิต <b>{max(1, self.state.partlist.info.build_qty)} คัน</b>")
 
     def run_check(self, show: bool = True) -> bool:
         if not self.state.partlist.parts:

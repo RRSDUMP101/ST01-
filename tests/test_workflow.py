@@ -259,3 +259,20 @@ def test_lines_from_parts_merges_codes():
     assert [(ln.code, ln.name, ln.qty, ln.unit_cost) for ln in lines] == [
         ("RRS-A-033", "ตะขอเกี่ยวฝาท้าย", 12, 30), ("", "ไม่มีรหัส", 2, 0)]
     assert StockDoc("OU").sign == -1 and StockDoc("FR").sign == 1
+
+
+def test_job_beds_changed_after_opening():
+    from partlist_studio.core import production
+
+    job = production.job_from_parts("SO-B1", [], 2, None, False)
+    job.parts = [production.JobPart("1", "RRS-T-001", "เฟรมบน", 4, 8, route=["ตัด", "พับ"], done={"ตัด": 8, "พับ": 8}),
+                 production.JobPart("2", "RRS-A-033", "ตะขอ", 3, 6, from_stock=6, route=[])]
+    job.status = production.JOB_DONE
+    assert job.set_sets(3) == 2 and job.sets == 3
+    frame, hook = job.parts
+    assert (frame.required, frame.to_make, frame.waiting()) == (12, 12, {"ตัด": 4})  # 4 more to cut
+    assert (hook.required, hook.from_stock, hook.to_make) == (9, 6, 3)  # stock reservation kept
+    assert job.status == production.JOB_RUNNING and job.log[-1].step == "จำนวนคัน"
+    job.set_sets(1)
+    assert frame.required == 4 and frame.finished == 8 and frame.status == production.DONE  # made pieces stay
+    assert hook.from_stock == 3 and hook.to_make == 0

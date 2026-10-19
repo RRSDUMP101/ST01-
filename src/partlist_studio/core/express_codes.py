@@ -58,6 +58,7 @@ class Context:
     toyota_plain: bool = False
     lengths: set[str] = field(default_factory=set)  # body length chosen by the user: {"230"}
     fixed: bool = False  # chosen by the user (variant dialog): sizes in the row names do not count
+    number_weight: float = 1.0  # the part number in the code (RRS-T-024 -> 024) found in an Express code
 
 
 @dataclass
@@ -242,7 +243,7 @@ def _score(row: ModelRow, ctx: Context, item: StockItem, row_core: str, row_nums
         if cu == b or cu.startswith(b + "-"):
             score += 3
         elif b.split("-")[-1:] and b.split("-")[-1] in cu.split("-"):
-            score += 1
+            score += ctx.number_weight
     brands = _brands(item.name, item.code)
     for brand in brands:
         if brand in ctx.brands:

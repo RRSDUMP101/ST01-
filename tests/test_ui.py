@@ -585,3 +585,43 @@ def test_beds_edited_in_one_place(window, app):
     assert prod.sets.value() == 5
     prod.sets.setValue(4)  # an open job: its beds are changed on the job page
     assert job.sets == 4 and job.parts[0].required == 8 and state.partlist.info.build_qty == 5
+
+
+def test_stock_check_matches_drawing_parts_by_name(window, app, tmp_path):
+    import openpyxl
+    from PySide6.QtCore import Qt
+
+    from partlist_studio.core import part_match as pm
+    from partlist_studio.core.models import Part
+
+    state = window.state
+    state.partlist.parts.extend([Part(part_no="RRS-T-027", name="หูช้าง", drawing_no="toyota-4", qty=2),
+                                 Part(part_no="RRS-T-003", name="ราง 4 คู่หน้าเฟรมบน", drawing_no="toyota-4"),
+                                 Part(part_no="RRS-T-009", name="กระดูกข้างเฟรมบน", drawing_no="toyota-4", qty=2)])
+    wb = openpyxl.Workbook()
+    wb.active.title = "คำแนะนำ"
+    ws = wb.create_sheet("นับสต็อก")
+    ws.append(["รหัสสินค้า", "รายการ", "ยอดคงเหลือ", "หน่วย"])
+    for row in (("RRS-A-027-L", "หูช้าง(ซ้าย)", 5, "ชิ้น"), ("RRS-A-027-R", "หูช้าง(ขวา)", 0, "ชิ้น"),
+                ("RRS-A-003", "ราง 4 คู่หน้าเฟรม(ใช้กับทุกรุ่น)", 10, "ชิ้น"),
+                ("RRS-T-009-L", "กระดูกข้าง T(ซ้าย)", 2, "ชิ้น"), ("RRS-T-009-R-", "กระดูกข้าง T(ขวา)", 2, "ชิ้น")):
+        ws.append(list(row))
+    path = tmp_path / "count.xlsx"
+    wb.save(path)
+    page = window.pages["stock"]
+    page.import_stock(str(path))  # importing the stock checks the Part List against it at once
+    assert state.requirements and len(state.part_matches) == 3
+    assert page.check_tabs.tabText(1) == "จับคู่ชิ้นส่วน ↔ สต็อก (ควรตรวจ 1 · ไม่พบ 0)"
+    table = page.match_table
+    assert table.item(0, 0).text() == "RRS-T-009" and table.item(0, 5).text() == pm.M_CHECK  # to check first
+    assert table.item(0, 2).text() == "RRS-T-009-L / RRS-T-009-R-"
+    headers = [page.req_model.headerData(c, Qt.Horizontal) for c in range(page.req_model.columnCount())]
+    assert headers[-1] == "การจับคู่"
+    page.confirm_matches()  # nothing selected: every row to check
+    assert state.partlist.parts[2].stock_code == "RRS-T-009-L / RRS-T-009-R-"
+    assert dict((p.part_no, m.method) for p, m in state.part_matches)["RRS-T-009"] == pm.M_STOCK_CODE
+    assert page.check_tabs.tabText(1) == "จับคู่ชิ้นส่วน ↔ สต็อก"
+    table.selectRow(next(r for r in range(table.rowCount()) if table.item(r, 0).text() == "RRS-T-009"))
+    page.clear_matches()  # matched again from its code and name
+    assert state.partlist.parts[2].stock_code == ""
+    assert dict((p.part_no, m.method) for p, m in state.part_matches)["RRS-T-009"] == pm.M_CHECK

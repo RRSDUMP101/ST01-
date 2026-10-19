@@ -13,12 +13,13 @@ from PySide6.QtWidgets import (QAbstractItemView, QFileDialog, QHBoxLayout, QHea
 from ...core.company_files import (SHEET_STEEL, export_steel_issue, export_stock_count, read_company_workbook,
                                    sheet_names)
 from ...core.express import read_express_file
+from ...core.part_match import M_CHECK, M_NONE, M_STOCK_CODE, match_parts
 from ...core.stock import (ST_LOW, ST_MISSING, ST_OK, ST_SHORT, StockList, apply_status_to_parts,
                            check_requirements, export_requirements)
 from ..actions import TABLE_FILTER
 from ..state import AppState
 from ..table_models import RequirementModel, StockTableModel
-from ..widgets import PageHeader, StatusChipRow, button
+from ..widgets import PageHeader, StatusChipRow, button, fill, selected_rows, table
 from .parts_ready import PartsReadyTab
 from .replenish import ReplenishTab
 
@@ -123,9 +124,35 @@ class StockPage(QWidget):
         cl.addLayout(row)
         self.req_model = RequirementModel(self)
         self.req_view = _table(self.req_model)
-        for i, w in enumerate([140, 210, 55, 80, 80, 110, 60, 60, 100, 100, 75, 200]):
+        for i, w in enumerate([140, 210, 55, 80, 80, 110, 60, 60, 100, 100, 75, 200, 160, 120]):
             self.req_view.setColumnWidth(i, w)
-        cl.addWidget(self.req_view, 1)
+        self.check_tabs = QTabWidget()
+        self.check_tabs.addTab(self.req_view, "ผลตรวจวัตถุดิบ")
+        match_page = QWidget()
+        ml = QVBoxLayout(match_page)
+        ml.setContentsMargins(0, 6, 0, 0)
+        hint = QLabel("ชิ้นส่วนแต่ละรายการหารายการสต็อก: รหัสสโตร์ใน Part List → รหัสในแบบ (ตรง / ตารางเทียบรหัส) → "
+                      "ชื่อชิ้นส่วน (ชื่อ เลขชิ้นส่วนในรหัส รุ่นรถ ความสูงคอก ความยาวกระบะ ซ้าย/ขวา) → วัสดุ/ความหนา · "
+                      "ชิ้นในแบบที่ไม่ระบุซ้าย/ขวา แบ่งจำนวนให้รหัสซ้ายและขวาอย่างละครึ่ง")
+        hint.setObjectName("Hint")
+        hint.setWordWrap(True)
+        ml.addWidget(hint)
+        self.match_table = table(["รหัสในแบบ", "ชื่อชิ้นส่วน", "รหัสสินค้า (สต็อก)", "ชื่อในสต็อก", "คงเหลือ",
+                                  "การจับคู่", "ตัวเลือกอื่น"], [110, 190, 230, 260, 70, 140, 300])
+        ml.addWidget(self.match_table, 1)
+        mrow = QHBoxLayout()
+        self.confirm_btn = button("ยืนยันรหัสที่เลือก → รหัสสโตร์ใน Part List", "primary",
+                                  tooltip="บันทึกรหัสสินค้าที่จับคู่ได้ของแถวที่เลือกเป็นรหัสสโตร์ของชิ้นส่วนใน Part List "
+                                          "ครั้งต่อไปใช้รหัสนี้ทันที (แถวที่ไม่เลือก = ทุกแถวที่ ควรตรวจ)")
+        self.confirm_btn.clicked.connect(self.confirm_matches)
+        mrow.addWidget(self.confirm_btn)
+        self.clear_btn = button("ล้างรหัสสโตร์ที่เลือก", tooltip="ให้ระบบจับคู่แถวที่เลือกใหม่จากรหัส/ชื่อ")
+        self.clear_btn.clicked.connect(self.clear_matches)
+        mrow.addWidget(self.clear_btn)
+        mrow.addStretch(1)
+        ml.addLayout(mrow)
+        self.check_tabs.addTab(match_page, "จับคู่ชิ้นส่วน ↔ สต็อก")
+        cl.addWidget(self.check_tabs, 1)
         row = QHBoxLayout()
         hint = QLabel("น้ำหนักชิ้นงาน × จำนวน × คัน ใช้กับรายการสต็อกที่นับเป็น กก. · รายการอื่นนับจำนวนชิ้น")
         hint.setObjectName("Hint")
@@ -186,6 +213,7 @@ class StockPage(QWidget):
             return
         self.tabs.setCurrentIndex(0)
         self.state.notify("นำเข้าสต็อก: " + ", ".join(f"{n} ({c} รายการ)" for n, c in added))
+        self.auto_check()
 
     def read_stock_file(self, path: str) -> list[tuple[str, int]]:
         """Every stock sheet of a company workbook becomes its own source; other files one source."""
@@ -274,12 +302,75 @@ class StockPage(QWidget):
         if not self.state.stock.items:
             self.actions.error("ยังไม่มีข้อมูลสต็อก", "นำเข้าไฟล์สต็อกของสโตร์ก่อน (หรือดึงจาก Express / Google Sheet)")
             return False
+        self.state.part_matches = match_parts(self.state.partlist, self.state.stock)
         self.state.requirements = check_requirements(self.state.partlist, self.state.stock,
-                                                     densities=self.state.settings.densities)
+                                                     densities=self.state.settings.densities,
+                                                     matches=self.state.part_matches)
         self.state.requirements_changed.emit()
         if show:
             self.tabs.setCurrentIndex(1)
         return True
+
+    def auto_check(self) -> None:
+        """Stock and a Part List are both there: check the material without being asked."""
+        if not (self.state.partlist.parts and self.state.stock.items) or not self.run_check(show=False):
+            return
+        counts: dict[str, int] = {}
+        for line in self.state.requirements:
+            counts[line.status] = counts.get(line.status, 0) + 1
+        named = sum(1 for _p, m in self.state.part_matches if m.method not in (M_NONE,) and m.score < 99)
+        check = sum(1 for _p, m in self.state.part_matches if m.method == M_CHECK)
+        self.state.notify("ตรวจวัตถุดิบเทียบสต็อกแล้ว: " + " · ".join(f"{k} {v}" for k, v in counts.items())
+                          + (f" · จับคู่จากชื่อ {named} รายการ" if named else "")
+                          + (f" (ควรตรวจ {check} – แท็บ จับคู่ชิ้นส่วน ↔ สต็อก)" if check else ""))
+
+    def _show_matches(self) -> None:
+        matches = self.state.part_matches
+        rows = []
+        for part, m in matches:
+            codes = " / ".join(i.code for i, _s in m.items)
+            names = " / ".join(i.name for i, _s in m.items)
+            on_hand = " / ".join(f"{i.on_hand:g}" for i, _s in m.items)
+            rows.append([part.part_no, part.name, codes, names, on_hand, m.method if m.items else M_NONE,
+                         "; ".join(m.alternatives[:3])])
+        order = {M_CHECK: 0, M_NONE: 1}
+        idx = sorted(range(len(rows)), key=lambda i: order.get(rows[i][5], 2))
+        fill(self.match_table, [rows[i] for i in idx], status_col=5, data=[i for i in idx])
+        check = sum(1 for r in rows if r[5] == M_CHECK)
+        none = sum(1 for r in rows if r[5] == M_NONE)
+        self.check_tabs.setTabText(1, "จับคู่ชิ้นส่วน ↔ สต็อก" + (
+            f" (ควรตรวจ {check} · ไม่พบ {none})" if check or none else ""))
+        self.confirm_btn.setEnabled(bool(rows))
+        self.clear_btn.setEnabled(bool(rows))
+
+    def _match_rows(self, only_check: bool) -> list:
+        picked = [self.match_table.item(r, 0).data(Qt.UserRole) for r in selected_rows(self.match_table)]
+        matches = self.state.part_matches
+        if not picked and only_check:
+            picked = [i for i, (_p, m) in enumerate(matches) if m.method == M_CHECK]
+        return [matches[i] for i in picked if 0 <= i < len(matches)]
+
+    def confirm_matches(self) -> None:
+        n = 0
+        for part, m in self._match_rows(only_check=True):
+            if m.items and all(i.code for i, _s in m.items) and m.method != M_STOCK_CODE:
+                part.stock_code = " / ".join(i.code for i, _s in m.items)
+                n += 1
+        if n:
+            self.state.mark_dirty()
+            self.run_check(show=False)
+        self.state.notify(f"บันทึกรหัสสโตร์ใน Part List {n} รายการ" if n else "ไม่มีแถวที่ยืนยันได้ (เลือกแถวที่มีรหัสสินค้า)")
+
+    def clear_matches(self) -> None:
+        n = 0
+        for part, _m in self._match_rows(only_check=False):
+            if part.stock_code:
+                part.stock_code = ""
+                n += 1
+        if n:
+            self.state.mark_dirty()
+            self.run_check(show=False)
+        self.state.notify(f"ล้างรหัสสโตร์ {n} รายการ – จับคู่ใหม่จากรหัส/ชื่อแล้ว")
 
     def _show_requirements(self) -> None:
         lines = self.state.requirements
@@ -290,9 +381,11 @@ class StockPage(QWidget):
         self.chips.set_counts(counts)
         for b in (self.apply_btn, self.export_btn, self.po_btn, self.steel_btn):
             b.setEnabled(bool(lines))
+        self._show_matches()
 
     def apply_status(self) -> None:
-        changed = apply_status_to_parts(self.state.partlist, self.state.stock, self.state.requirements)
+        changed = apply_status_to_parts(self.state.partlist, self.state.stock, self.state.requirements,
+                                        self.state.part_matches or None)
         self.state.mark_dirty()
         self.state.notify(f"อัปเดตสถานะและรหัสสโตร์ใน Part List {changed} รายการ")
 
@@ -300,7 +393,8 @@ class StockPage(QWidget):
         tail = "PurchaseRequest" if only_purchase else "MaterialCheck"
         path = self.actions.save_path("ส่งออก", self.actions.default_name(".xlsx", tail), "Excel (*.xlsx);;CSV (*.csv)")
         if path:
-            export_requirements(self.state.partlist, self.state.requirements, path, only_purchase)
+            export_requirements(self.state.partlist, self.state.requirements, path, only_purchase,
+                                self.state.part_matches)
             self.state.notify(f"บันทึก {Path(path).name} แล้ว")
 
     def _export_steel_issue(self) -> None:

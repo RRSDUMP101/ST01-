@@ -64,6 +64,13 @@ STATUS_COLORS = {
     "ตัดแล้ว": "#2E9D5B",
     "ต้องแก้": "#D64545",
     "แก้แล้ว": "#2E9D5B",
+    # how a drawing part found its stock item (part_match)
+    "รหัสสโตร์ใน Part List": "#2E9D5B",
+    "ตารางเทียบรหัส": "#2E9D5B",
+    "จับคู่จากชื่อ": "#3A8DDE",
+    "จากชื่อ – ควรตรวจ": "#E08A1E",
+    "วัสดุ/ความหนา": "#8A96A8",
+    "ไม่พบ": "#D64545",
 }
 
 ERROR_BG = QColor("#FDECEC")

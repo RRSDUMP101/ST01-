@@ -149,6 +149,7 @@ class AppState(QObject):
         self.cut_queue = CutQueue()  # laser cut programs
         self.catalog = Catalog()  # assembly group and shelf location set by hand per code
         self.requirements: list[RequirementLine] = []
+        self.part_matches: list = []  # (Part, part_match.PartMatch) of the last material check
         self.drawing_cache: dict[str, DrawingData] = {}
         self.path: str = ""
         self.dirty = False
@@ -320,6 +321,7 @@ class AppState(QObject):
         self.path = path
         self.dirty = False
         self.requirements = []
+        self.part_matches = []
         self.drawing_cache.clear()
         self.partlist_replaced.emit()
         self.partlist_changed.emit()

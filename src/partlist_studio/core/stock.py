@@ -73,7 +73,8 @@ MATERIAL_FAMILIES: list[tuple[str, list[str]]] = [
     ("SUS", ["SUS", "STAINLESS", "สแตนเลส", "สเตนเลส"]),
     ("GALV", ["SGCC", "GALV", "GI", "กัลวาไนซ์", "เหล็กแผ่นขาว", "ซิงค์"]),  # before AL: 'GALVANIZED' holds 'AL'
     ("AL", ["ALUMIN", "A50", "A60", "AL", "อลูมิเนียม", "อะลูมิเนียม"]),
-    ("STEEL", ["SS400", "SPHC", "SPCC", "DC01", "STEEL", "Q235", "ST37", "เหล็กแผ่นดำ", "แผ่นดำ", "เหล็กดำ"]),
+    ("STEEL", ["SS400", "SPHC", "SPCC", "DC01", "STEEL", "Q235", "ST37", "เหล็กแผ่นดำ", "แผ่นดำ", "เหล็กดำ",
+               "เหล็ก"]),  # last: 'M=เหล็ก' in a drawing is plain steel (เหล็กแผ่นขาว is GALV, found before)
 ]
 
 ST_OK = "พอ"
@@ -361,6 +362,14 @@ class RequirementLine:
     no_weight: list[str] = field(default_factory=list)  # parts counted by kg but without weight
     unit_cost: float = 0
     notes: list[str] = field(default_factory=list)
+    methods: list[str] = field(default_factory=list)  # how its parts were matched (part_match.M_*)
+
+    @property
+    def method(self) -> str:
+        """The weakest way one of its parts was matched (what to check first)."""
+        from .part_match import weakest
+
+        return weakest(self.methods)
 
     @property
     def note(self) -> str:
@@ -386,13 +395,13 @@ class RequirementLine:
 
 
 REQUIREMENT_HEADERS = ["รหัสสินค้า", "รายการ", "หน่วย", "ต้องใช้", "คงเหลือ", "คงเหลือหลังเบิก", "Min", "Max",
-                       "สถานะ", "แนะนำสั่งซื้อ", "คลัง", "หมายเหตุ", "ชิ้นส่วนที่ใช้"]
+                       "สถานะ", "แนะนำสั่งซื้อ", "คลัง", "หมายเหตุ", "ชิ้นส่วนที่ใช้", "การจับคู่"]
 
 
 def requirement_row(line: RequirementLine) -> list:
     return [line.code, line.name, line.unit, _r(line.required), _r(line.on_hand), _r(line.balance),
             _r(line.min_qty), _r(line.max_qty), line.status, _r(line.suggest_order), line.location,
-            line.note, ", ".join(line.parts)]
+            line.note, ", ".join(line.parts), line.method]
 
 
 def _r(value: float):
@@ -406,44 +415,65 @@ def explicit_piece(part: Part, item: StockItem) -> bool:
 
 
 def check_requirements(partlist: PartList, stock: StockList, build_qty: int | None = None,
-                       densities: dict[str, float] | None = None) -> list[RequirementLine]:
-    """Total material needed for `build_qty` sets of the Part List versus stock on hand."""
+                       densities: dict[str, float] | None = None, matches: list | None = None) -> list[RequirementLine]:
+    """Total material needed for `build_qty` sets of the Part List versus stock on hand.
+    Each row finds its stock item by its code first, then by its name (part_match), then by material and
+    thickness (raw material it is cut from); `matches` = part_match.match_parts() when already worked out."""
+    from .part_match import M_CODE, M_MATERIAL, M_NONE, M_STOCK_CODE, M_XREF, match_parts
+
     build = build_qty if build_qty is not None else max(1, partlist.info.build_qty)
     lines: dict[str, RequirementLine] = {}
-    for part in partlist.parts:
-        item = find_stock_item(part, stock)
+    for part, match in (matches if matches is not None else match_parts(partlist, stock)):
         label = part.part_no or part.name
-        if item is None:
+        found = list(match.items)
+        method = match.method
+        if not found:
+            candidates = stock_candidates(part, stock)
+            if candidates:
+                found, method = [(candidates[0], 1.0)], M_MATERIAL
+        if not found:
             key = "?" + _key(f"{part.material}|{part.spec}|{part.name if not part.material else ''}"
                              f"|{part.part_no if not part.material else ''}")
+            name = " ".join(x for x in (part.material, part.spec) if x) if part.material else ""
             line = lines.setdefault(key, RequirementLine(
-                code="", name=" ".join(x for x in (part.material, part.spec) if x) or part.name,
+                code="", name=name or part.name or part.spec,  # a part with no material: its own name
                 unit=part.unit, required=0, on_hand=0, status=ST_MISSING))
             if part.part_no and not part.material:
                 line.add_note(f"ไม่พบรหัส {part.part_no} ในสต็อก – ตรวจตารางเทียบรหัส")
+            if match.alternatives:
+                line.add_note("ใกล้เคียง: " + "; ".join(match.alternatives[:2]))
+            line.methods.append(M_NONE)
             line.required += part.qty * build
             line.parts.append(label)
             continue
-        line = lines.setdefault(item.code or item.name, RequirementLine(
-            code=item.code, name=item.name, unit=item.unit, required=0, on_hand=item.on_hand,
-            min_qty=item.min_qty, max_qty=item.max_qty, location=item.location, unit_cost=item.unit_cost))
-        explicit = bool(find_by_code(part.stock_code, stock) or find_by_code(part.part_no, stock))
-        if not explicit and len(stock_candidates(part, stock)) > 1:
-            line.add_note("มีหลายรหัสที่วัสดุ/ความหนาเดียวกัน – ใส่รหัสสโตร์ใน Part List เพื่อเลือกเอง")
-        sheet_kg = sheet_weight_kg(item, densities) if item.is_sheet and not explicit_piece(part, item) else 0
-        if item.by_weight:
-            if part.weight <= 0:
-                line.no_weight.append(label)
-            line.required += part.weight * part.qty * build
-        elif sheet_kg:
-            # Part made from this sheet: kg of the part / kg of one sheet (offcuts not included).
-            if part.weight <= 0:
-                line.no_weight.append(label)
-            line.required += part.weight * part.qty * build / sheet_kg
-            line.add_note(f"คิดจากน้ำหนัก ÷ {sheet_kg:,.1f} kg/แผ่น (ยังไม่รวมเศษ)")
-        else:
-            line.required += part.qty * build
-        line.parts.append(label)
+        for item, share in found:
+            line = lines.setdefault(item.code or item.name, RequirementLine(
+                code=item.code, name=item.name, unit=item.unit, required=0, on_hand=item.on_hand,
+                min_qty=item.min_qty, max_qty=item.max_qty, location=item.location, unit_cost=item.unit_cost))
+            line.methods.append(method)
+            if method not in (M_CODE, M_STOCK_CODE, M_XREF, M_MATERIAL):  # found by its name: say from what
+                line.add_note(f"จากแบบ {label} {part.name if part.part_no else ''}".strip() + f" ({method})")
+            if share < 1:
+                line.add_note("ชิ้นในแบบไม่ระบุซ้าย/ขวา – แบ่งจำนวนครึ่งหนึ่งต่อข้าง")
+            explicit = method != M_MATERIAL
+            if method == M_MATERIAL and len(stock_candidates(part, stock)) > 1:
+                line.add_note("มีหลายรหัสที่วัสดุ/ความหนาเดียวกัน – ใส่รหัสสโตร์ใน Part List เพื่อเลือกเอง")
+            sheet_kg = sheet_weight_kg(item, densities) if item.is_sheet and not explicit else 0
+            qty = part.qty * build * share
+            if item.by_weight:
+                if part.weight <= 0:
+                    line.no_weight.append(label)
+                line.required += part.weight * qty
+            elif sheet_kg:
+                # Part made from this sheet: kg of the part / kg of one sheet (offcuts not included).
+                if part.weight <= 0:
+                    line.no_weight.append(label)
+                line.required += part.weight * qty / sheet_kg
+                line.add_note(f"คิดจากน้ำหนัก ÷ {sheet_kg:,.1f} kg/แผ่น (ยังไม่รวมเศษ)")
+            else:
+                line.required += qty
+            if label not in line.parts:
+                line.parts.append(label)
     for line in lines.values():
         if line.status == ST_MISSING:
             continue
@@ -457,20 +487,27 @@ def check_requirements(partlist: PartList, stock: StockList, build_qty: int | No
     return sorted(lines.values(), key=lambda line: (order[line.status], line.code))
 
 
-def apply_status_to_parts(partlist: PartList, stock: StockList, lines: list[RequirementLine]) -> int:
-    """Write the check result back to the Part List (status + stock code). Returns rows changed."""
+def apply_status_to_parts(partlist: PartList, stock: StockList, lines: list[RequirementLine],
+                          matches: list | None = None) -> int:
+    """Write the check result back to the Part List (status + stock code). Returns rows changed.
+    The stock code is kept only for sure matches (a name match to check is left for a person)."""
+    from .part_match import M_CHECK, M_STOCK_CODE, match_parts
+
     status_by_code = {line.code: line.status for line in lines if line.code}
     changed = 0
-    for part in partlist.parts:
-        item = find_stock_item(part, stock)
-        if item is None:
+    for part, match in (matches if matches is not None else match_parts(partlist, stock)):
+        items = [i for i, _s in match.items]
+        if not items:
+            item = find_stock_item(part, stock)
+            items = [item] if item is not None else []
+        if not items:
             new_status = "รอตรวจ"
         else:
-            if not part.stock_code and item.code:
-                part.stock_code = item.code
-            st = status_by_code.get(item.code, ST_OK)
-            new_status = "ขาด" if st == ST_SHORT else "พร้อม"
-            if st == ST_SHORT and part.process == "ซื้อสำเร็จ":
+            if not part.stock_code and match.method not in (M_CHECK, M_STOCK_CODE) and all(i.code for i in items):
+                part.stock_code = " / ".join(i.code for i in items)
+            short = any(status_by_code.get(i.code, ST_OK) == ST_SHORT for i in items)
+            new_status = "ขาด" if short else "พร้อม"
+            if short and part.process == "ซื้อสำเร็จ":
                 new_status = "รอสั่งซื้อ"
         if part.status != new_status:
             part.status = new_status
@@ -478,8 +515,24 @@ def apply_status_to_parts(partlist: PartList, stock: StockList, lines: list[Requ
     return changed
 
 
+MATCH_HEADERS = ["รหัสในแบบ", "ชื่อชิ้นส่วน", "แบบ", "รหัสสินค้า (สต็อก)", "ชื่อในสต็อก", "คงเหลือ", "การจับคู่",
+                 "ตัวเลือกอื่น"]
+
+
+def match_rows(matches: list) -> list[list]:
+    """One row per Part List row: which stock item(s) it was matched to and how."""
+    from .part_match import M_NONE
+
+    out = []
+    for part, m in matches:
+        out.append([part.part_no, part.name, part.drawing_no, " / ".join(i.code for i, _s in m.items),
+                    " / ".join(i.name for i, _s in m.items), " / ".join(f"{i.on_hand:g}" for i, _s in m.items),
+                    m.method if m.items else M_NONE, "; ".join(m.alternatives[:3])])
+    return out
+
+
 def export_requirements(partlist: PartList, lines: list[RequirementLine], path: str | Path,
-                        only_purchase: bool = False) -> None:
+                        only_purchase: bool = False, matches: list | None = None) -> None:
     info = partlist.info
     rows = [requirement_row(line) for line in lines if not only_purchase or line.suggest_order > 0]
     title = "ใบขอซื้อวัตถุดิบ / Parts (ร่าง)" if only_purchase else "ตรวจสอบวัตถุดิบเทียบสต็อก"
@@ -488,4 +541,10 @@ def export_requirements(partlist: PartList, lines: list[RequirementLine], path: 
         ["SO", info.so_no, "ลูกค้า", info.customer, "รุ่นรถ", info.vehicle_model],
         ["เลขที่แบบ", info.drawing_no, "จำนวนผลิต (คัน)", info.build_qty, "วันที่", info.created],
     ]
+    if matches and not only_purchase and Path(path).suffix.lower() in (".xlsx", ".xlsm"):
+        from .tabular import Sheet, write_workbook
+
+        write_workbook(path, [Sheet("Requirement", REQUIREMENT_HEADERS, rows, title_rows),
+                              Sheet("จับคู่ชิ้นส่วน", MATCH_HEADERS, match_rows(matches))])
+        return
     write_table(path, REQUIREMENT_HEADERS, rows, title_rows=title_rows, sheet_title="Requirement")

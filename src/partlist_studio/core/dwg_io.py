@@ -1257,6 +1257,9 @@ def read_labels(items: list[tuple[float, TextItem]]) -> dict:
         if name:
             names.append((rank, gap, -t.height, name, t.x, t.y))
     if "name" not in info and names:
+        tallest = max(-n[2] for n in names)
+        names = [n for n in names if -n[2] >= 0.3 * tallest]  # a small note ('t-tr') is not the name
+
         def order(n):
             near = n[1] if code_at is None else math.hypot(n[4] - code_at[0], n[5] - code_at[1])
             return n[0], near, n[2]

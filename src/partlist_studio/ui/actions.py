@@ -112,6 +112,9 @@ class Actions:
         self.state.mark_dirty()
         self.state.notify(f"เพิ่ม {added} รายการจากแบบ {len(drawings)} ไฟล์"
                           + (f" · บันทึกรูปคลี่ {flats} รหัสเข้าคลังรูปคลี่ (ใช้ตัดเลเซอร์)" if flats else ""))
+        stock_page = getattr(self.window, "pages", {}).get("stock")
+        if stock_page is not None and self.state.stock.items:
+            stock_page.auto_check()  # a stock file is loaded: check the new parts against it right away
 
     def _fill_info_from_title(self, data) -> None:
         info, tb = self.state.partlist.info, data.title_block

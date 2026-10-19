@@ -317,6 +317,7 @@ class StockTableModel(QAbstractTableModel):
 
 class RequirementModel(QAbstractTableModel):
     STATUS_COL = REQUIREMENT_HEADERS.index("สถานะ")
+    METHOD_COL = REQUIREMENT_HEADERS.index("การจับคู่")
     NUM_COLS = {3, 4, 5, 6, 7, 9}
 
     def __init__(self, parent=None):
@@ -352,6 +353,8 @@ class RequirementModel(QAbstractTableModel):
             return int(Qt.AlignCenter)
         if role == Qt.ForegroundRole and index.column() == self.STATUS_COL:
             return theme.status_color(status)
+        if role == Qt.ForegroundRole and index.column() == self.METHOD_COL and value:
+            return theme.status_color(str(value))
         if role == Qt.FontRole and index.column() in (self.STATUS_COL, 9):
             font = QFont()
             font.setBold(True)

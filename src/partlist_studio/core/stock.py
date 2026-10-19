@@ -55,6 +55,9 @@ STOCK_ALIASES: dict[str, list[str]] = {
     "shelf": ["ชั้นเก็บ", "shelf", "bin"],
     "remark": ["หมายเหตุ", "remark", "note", "สถานะ"],
 }
+# A count sheet: what was counted replaces the book balance when it is filled in.
+COUNTED_ALIASES = ["นับได้จริง", "นับจริง", "จำนวนนับได้", "ยอดนับจริง", "counted", "physical count"]
+_SUMMARY_ROWS = {"รวม", "รวมทั้งสิ้น", "ยอดรวม", "total", "grandtotal", "รวมทั้งหมด"}
 # Unit words used in the company files (also used to find a unit column without a proper header).
 KNOWN_UNITS = {"ชิ้น", "ชุด", "ต้น", "แผ่น", "เส้น", "ตัว", "กล่อง", "อัน", "คัน", "คู่", "กก.", "กก", "ม.", "เมตร",
                "ผน", "สน", "ชน", "kg", "pcs", "set"}
@@ -171,6 +174,8 @@ class StockList:
             return cls(source=source)
         h = _find_stock_header(rows)
         mapping = {}
+        counted_col = next((i for i, c in enumerate(rows[h]) if normalize(c) in {normalize(a) for a in COUNTED_ALIASES}),
+                           None)
         for idx, header in enumerate(rows[h]):
             key = _STOCK_LOOKUP.get(normalize(header)) or _STOCK_LOOKUP.get(
                 re.sub(r"\s*\(.*?\)\s*", "", normalize(header)))  # "Minimum (pcs.)", "ยอดคงเหลือ (pcs.)"
@@ -193,6 +198,11 @@ class StockList:
             for idx, key in mapping.items():
                 if idx < len(row):
                     item.set(key, row[idx])
+            if not item.code and normalize(item.name).replace(" ", "") in _SUMMARY_ROWS:
+                continue  # the total line under the table
+            if counted_col is not None and counted_col < len(row) and str(row[counted_col]).strip() != "":
+                item.extra["book_qty"] = item.on_hand  # the balance before the count
+                item.on_hand = to_number(row[counted_col])
             if item.code or item.name:
                 item.infer_from_name()
                 items.append(item)
@@ -200,7 +210,22 @@ class StockList:
 
     @classmethod
     def from_file(cls, path: str | Path) -> StockList:
-        return cls.from_rows(read_table(path), source=str(path))
+        """The sheet that holds the stock table (a workbook may start with a guide sheet)."""
+        from .company_files import sheet_names
+
+        names = sheet_names(path) if Path(path).suffix.lower() in (".xls", ".xlsx", ".xlsm") else []
+        if len(names) <= 1:
+            return cls.from_rows(read_table(path), source=str(path))
+        best = None
+        for name in names:
+            rows = read_table(path, name)
+            if not rows:
+                continue
+            keys = {_STOCK_LOOKUP.get(normalize(c)) for c in rows[_find_stock_header(rows)]} - {None}
+            score = len(keys) + (3 if "on_hand" in keys else 0) + (2 if keys & {"code", "name"} else 0)
+            if best is None or score > best[0]:
+                best = (score, rows)
+        return cls.from_rows(best[1] if best else [], source=str(path))
 
     def to_rows(self) -> list[list]:
         return [[STOCK_LABELS[k] for k in STOCK_KEYS]] + [[i.get(k) for k in STOCK_KEYS] for i in self.items]

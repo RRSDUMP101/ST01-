@@ -150,3 +150,28 @@ def test_sheets_client_read_write_roundtrip():
     assert back == [["รหัสชิ้นส่วน", "จำนวน"], ["P-1", 2]]
     assert prepare_rows(back).to_parts()[0].qty == 2
     assert client.worksheet_titles(key) == ["Stock", "PartList"]
+
+
+def test_count_workbook_with_guide_sheet_total_row_and_counted_column(tmp_path):
+    import openpyxl
+
+    from partlist_studio.core.company_files import read_company_workbook
+
+    wb = openpyxl.Workbook()
+    wb.active.title = "คำแนะนำ"
+    wb.active.append(["แผ่นนับสต็อก – ใช้รหัสสินค้า Express"])
+    ws = wb.create_sheet("นับสต็อก")
+    ws.append(["รหัสสินค้า", "รายการ", "ยอดคงเหลือ", "หน่วย", "หมายเหตุ", "Minimum", "นับได้จริง", "ผลต่าง"])
+    ws.append(["RRS-A-017", "หน้าโปร 80", 2, "ชุด", "รอตัด", 1, None, None])
+    ws.append(["RRS-T-022-L-84-CHAMP", "เสาหน้า(ซ้าย) 84 T-CHAMP", 6, "ต้น", None, None, 5, -1])
+    ws.append([None, "รวม", 8, None, None, None, 5, -1])
+    codes = wb.create_sheet("รหัส Express")
+    codes.append(["รหัสสินค้า"])
+    codes.append(["RRS-A-017"])
+    path = tmp_path / "count.xlsx"
+    wb.save(path)
+    stock = StockList.from_file(path)  # the guide sheet first: the count sheet is still found
+    assert [(i.code, i.on_hand, i.min_qty) for i in stock.items] == [("RRS-A-017", 2, 1), ("RRS-T-022-L-84-CHAMP", 5, 0)]
+    assert stock.items[1].extra["book_qty"] == 6  # what was counted replaces the book balance
+    book = read_company_workbook(path)
+    assert {k: len(v.items) for k, v in book.stocks.items()} == {"นับสต็อก": 2}  # no "รวม" line

@@ -227,6 +227,11 @@ class StatusChipRow(QHBoxLayout):
 
 
 # --------------------------------------------------------------------------
+REMOVED_STYLE = {"bend": ("#2ECC71", Qt.DashLine), "stray": ("#FF8A80", Qt.DashLine),
+                 "glyph": ("#FF8A80", Qt.DotLine), "overshoot": ("#FF8A80", Qt.SolidLine),
+                 "open": ("#FF4D4F", Qt.SolidLine), "open_in_part": ("#FF4D4F", Qt.SolidLine)}
+
+
 class DrawingPreview(QGraphicsView):
     """Read-only 2D viewer for the geometry extracted from a DWG/DXF (wheel = zoom, drag = pan)."""
 
@@ -242,10 +247,13 @@ class DrawingPreview(QGraphicsView):
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self._auto_fit = True
+        self._focus_item = None
+        self._mark_size = 5.0
 
     def show_drawing(self, data, selected_profiles: set[int] | None = None) -> None:
         scene = self.scene()
         scene.clear()
+        self._focus_item = None
         self._auto_fit = True
         if data is None:
             return
@@ -267,7 +275,7 @@ class DrawingPreview(QGraphicsView):
         selected = selected_profiles if selected_profiles is not None else {
             i for i, p in enumerate(data.profiles) if p.is_outer}
         for i, prof in enumerate(data.profiles):
-            if prof.is_container:
+            if prof.is_container or getattr(prof, "is_glyph", False):
                 continue
             is_outer = prof.parent is None
             if is_outer and i not in selected:
@@ -277,16 +285,38 @@ class DrawingPreview(QGraphicsView):
             poly = QPolygonF([QPointF(x, -y) for x, y in prof.points])
             brush = QBrush(QColor(242, 140, 40, 45)) if is_outer else QBrush(Qt.NoBrush)
             scene.addPolygon(poly, cut_pen if is_outer else hole_pen, brush)
+        # what the check before cutting took out: bend lines (green dashes), loose lines and letters (red dashes),
+        # lines that do not close (red)
+        for kind, pts in getattr(data, "removed", None) or []:
+            if len(pts) < 2:
+                continue
+            color, style = REMOVED_STYLE.get(kind, ("#FF8A80", Qt.DashLine))
+            pen = QPen(QColor(color))
+            pen.setCosmetic(True)
+            pen.setWidthF(1.6)
+            pen.setStyle(style)
+            line = QPainterPath()
+            line.moveTo(pts[0][0], -pts[0][1])
+            for x, y in pts[1:]:
+                line.lineTo(x, -y)
+            scene.addPath(line, pen)
+        rect = scene.itemsBoundingRect()
+        size = max(rect.width(), rect.height()) * 0.006 or 5
+        self._mark_size = size
         # cut lines that do not close into a loop: a laser cannot cut them as a part - mark where they start
         marks = getattr(data, "open_examples", None) or []
         if marks:
-            rect = scene.itemsBoundingRect()
-            size = max(rect.width(), rect.height()) * 0.006 or 5
             mark_pen = QPen(QColor("#FF4D4F"))
             mark_pen.setCosmetic(True)
             mark_pen.setWidthF(2.0)
             for x, y in marks:
                 scene.addEllipse(x - size, -y - size, 2 * size, 2 * size, mark_pen)
+        fixed_pen = QPen(QColor("#2ECC71"))  # joined gaps, overshoots cut off
+        fixed_pen.setCosmetic(True)
+        fixed_pen.setWidthF(2.0)
+        for f in getattr(data, "fixes", None) or []:
+            if f.kind in ("gap", "overshoot", "duplicate", "dup_loop"):
+                scene.addEllipse(f.x - size, -f.y - size, 2 * size, 2 * size, fixed_pen)
         text_color = QColor("#E6EDF6")
         for item in data.texts[:600]:
             t = scene.addSimpleText(item.text)
@@ -297,6 +327,21 @@ class DrawingPreview(QGraphicsView):
                 t.setScale(s)
                 t.setPos(item.x - br.width() * s / 2, -item.y - br.height() * s / 2)
         self.fit()
+
+    def focus(self, x: float, y: float) -> None:
+        """Zoom to one place of the drawing (a fix of the check before cutting) and ring it."""
+        scene = self.scene()
+        if self._focus_item is not None and self._focus_item.scene() is scene:
+            scene.removeItem(self._focus_item)
+        rect = scene.itemsBoundingRect()
+        r = max(max(rect.width(), rect.height()) * 0.06, 20.0)
+        size = self._mark_size * 2.5
+        pen = QPen(QColor("#FFD54F"))
+        pen.setCosmetic(True)
+        pen.setWidthF(2.5)
+        self._focus_item = scene.addEllipse(x - size, -y - size, 2 * size, 2 * size, pen)
+        self._auto_fit = False
+        self.fitInView(QRectF(x - r, -y - r, 2 * r, 2 * r), Qt.KeepAspectRatio)
 
     def mouseDoubleClickEvent(self, event):  # noqa: N802 - double click = fit whole drawing
         self._auto_fit = True

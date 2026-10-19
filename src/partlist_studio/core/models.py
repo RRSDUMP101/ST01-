@@ -62,6 +62,8 @@ class Part:
     qty_source: str = ""  # where the quantity came from: 'แบบ (ป้ายที่ชิ้นงาน): “16 ชิ้น”'
     drawing_material: str = ""  # material the drawing gave ('M=Steel'), kept so it can be put back
     material_source: str = ""  # where the material came from: 'แบบ (ป้ายที่ชิ้นงาน): “M=Steel”', 'กำหนดเอง'
+    bend_lines: list = field(default_factory=list)  # bend lines of the flat pattern [[(x, y), (x, y)], ...] (marks)
+    cad_fixes: list = field(default_factory=list)  # what the import repaired in its lines ('ต่อเส้น 2 จุด ...')
 
     def get(self, key: str):
         return getattr(self, key)
@@ -88,6 +90,8 @@ class Part:
         part.qty_source = str(data.get("qty_source", "") or "")
         part.drawing_material = str(data.get("drawing_material", "") or "")
         part.material_source = str(data.get("material_source", "") or "")
+        part.bend_lines = [[(float(x), float(y)) for x, y in line] for line in data.get("bend_lines") or []]
+        part.cad_fixes = [str(t) for t in data.get("cad_fixes") or []]
         return part
 
 

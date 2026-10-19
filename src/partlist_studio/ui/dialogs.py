@@ -5,13 +5,16 @@ from __future__ import annotations
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox,
-                               QGridLayout, QHBoxLayout, QHeaderView, QLabel, QListWidget, QListWidgetItem, QSpinBox,
-                               QSplitter, QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget)
+                               QFrame, QGridLayout, QHBoxLayout, QHeaderView, QLabel, QListWidget, QListWidgetItem,
+                               QScrollArea, QSpinBox, QSplitter, QTableWidget, QTableWidgetItem, QTabWidget,
+                               QVBoxLayout, QWidget)
 
 from ..core.dwg_io import (MAT_AS_DRAWN, MAT_MANUAL, MAT_MISSING, MATERIAL_CHOICES, QTY_DEFAULT, QTY_MANUAL,
                            THICKNESS_MODES, THK_DEFAULT, THK_FROM_BOM, THK_FROM_PART, THK_MANUAL, THK_MISSING,
                            CandidatePart, DrawingData, drawing_to_candidates, reset_part_material, resolve_thickness,
                            set_part_material, set_part_thickness)
+from ..core import cad_fix
+from ..core.dwg_io import read_drawing
 from ..core.models import COLUMN_KEYS, COLUMN_LABELS, COMMON_THICKNESS, NUMERIC_COLUMNS, Part, to_number
 from ..core.mapping import auto_map
 from ..core.partlist_io import TableImport
@@ -146,10 +149,13 @@ class DrawingImportDialog(QDialog):
     Code, name, thickness and quantity come from the labels of each flat pattern; the thickness can be set here."""
 
     def __init__(self, drawings: list[DrawingData], densities: dict[str, float], parent=None,
-                 default_thickness: float = 0, thickness_mode: str = "drawing"):
+                 default_thickness: float = 0, thickness_mode: str = "drawing", cut_layer: str = "",
+                 laser_params=None):
         super().__init__(parent)
         self.drawings = drawings
         self.densities = densities
+        self.cut_layer = cut_layer
+        self.laser_params = laser_params  # LaserParams for "บันทึกแบบที่แก้แล้ว" (layers, colours, marks)
         self.candidates: dict[int, list[CandidatePart]] = {
             i: drawing_to_candidates(d, densities, include_blocks=True, default_thickness=default_thickness,
                                      thickness_mode=thickness_mode) for i, d in enumerate(drawings)}
@@ -183,7 +189,7 @@ class DrawingImportDialog(QDialog):
                                           ("material", "วัสดุ"), ("thickness", "ความหนา (mm)"),
                                           ("labels", "ป้ายที่ชิ้นงาน"), ("qty", "จำนวน"), ("revision", "Rev."),
                                           ("bom", "ตาราง BOM"), ("profiles", "รูปคลี่ที่พบ"),
-                                          ("open", "เส้นไม่ปิดเป็นวง"), ("blocks", "บล็อกมาตรฐาน"),
+                                          ("open", "ตรวจเส้นตัด"), ("blocks", "บล็อกมาตรฐาน"),
                                           ("warn", "หมายเหตุ")]):
             name = QLabel(label)
             name.setObjectName("Hint")
@@ -194,7 +200,13 @@ class DrawingImportDialog(QDialog):
             grid.addWidget(value, r, 1)
             self.info_labels[key] = value
         grid.setRowStretch(20, 1)
-        top.addWidget(info)
+        self.info_labels["open"].setTextFormat(Qt.RichText)
+        info_scroll = QScrollArea()  # long lines wrap: scroll instead of cutting them off
+        info_scroll.setWidget(info)
+        info_scroll.setWidgetResizable(True)
+        info_scroll.setFrameShape(QFrame.NoFrame)
+        info_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        top.addWidget(info_scroll)
         top.setSizes([700, 340])
         rlay.addWidget(top, 3)
 
@@ -280,6 +292,7 @@ class DrawingImportDialog(QDialog):
         self.attr_table.horizontalHeader().setStretchLastSection(True)
         self.attr_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.tabs.addTab(self.attr_table, "Attribute ใน Title Block")
+        self.tabs.addTab(self._build_check_tab(), "ตรวจแบบก่อนตัด")
         rlay.addWidget(self.tabs, 2)
 
         opts = QHBoxLayout()
@@ -347,12 +360,11 @@ class DrawingImportDialog(QDialog):
             if data.bom else "ไม่พบ")
         self.info_labels["profiles"].setText(
             f"{len(outers)} ชิ้น · รู/ช่อง {sum(len(p.holes) for p in outers)}" if outers else "ไม่พบ")
-        self.info_labels["open"].setText(
-            f"{data.open_chains} เส้น – วงกลมแดงในภาพ (เส้นตัดต่อไม่สนิท หรือเส้นพับ/เส้นช่วย: ย้ายไปเลเยอร์อื่น) "
-            "เลเซอร์ตัดเส้นเหล่านี้เป็นชิ้นงานไม่ได้" if data.open_chains else "ไม่มี")
+        self.info_labels["open"].setText(self._check_info(data))
         self.info_labels["blocks"].setText(", ".join(f"{k} ×{v}" for k, v in data.blocks.most_common(6)) or "-")
         self.info_labels["warn"].setText("\n".join(data.warnings) or "-")
 
+        self._fill_checks(data)
         self.attr_table.setRowCount(len(data.attributes))
         for r, (block, tag, value) in enumerate(data.attributes):
             for c, text in enumerate((block, tag, value)):
@@ -374,6 +386,149 @@ class DrawingImportDialog(QDialog):
         self.table.setColumnWidth(self._col("name"), max(self.table.columnWidth(self._col("name")), 160))
         self._loading = False
         self._refresh_preview()
+
+    # ---- the check before cutting ----------------------------------------
+    def _build_check_tab(self) -> QWidget:
+        page = QWidget()
+        lay = QVBoxLayout(page)
+        lay.setContentsMargins(4, 6, 4, 4)
+        bar = QHBoxLayout()
+        self.fix_on = QCheckBox("แก้เส้นอัตโนมัติ")
+        self.fix_on.setToolTip("ต่อมุมที่ต่อไม่สนิท · ตัดเส้นเกินมุม · ลบเส้นซ้ำ/เส้นเกิน · แยกเส้นพับ (ไม่ตัด) · "
+                               "ลบตัวเลข/ตัวอักษรที่เป็นเส้นในชิ้นงาน (เช่น 90) – ทุกจุดแสดงในตารางนี้")
+        bar.addWidget(self.fix_on)
+        bar.addWidget(QLabel("ต่อปลายเส้นที่ห่างไม่เกิน"))
+        self.fix_tol = QDoubleSpinBox()
+        self.fix_tol.setRange(0.05, 5.0)
+        self.fix_tol.setDecimals(2)
+        self.fix_tol.setSingleStep(0.1)
+        self.fix_tol.setSuffix(" มม.")
+        self.fix_tol.setValue(cad_fix.GAP_TOL)
+        bar.addWidget(self.fix_tol)
+        self.recheck_btn = button("ตรวจใหม่", tooltip="อ่านแบบนี้ใหม่ด้วยค่าที่ตั้ง (ค่าที่แก้ในตารางของแบบนี้จะเริ่มใหม่)")
+        self.recheck_btn.clicked.connect(self._recheck)
+        bar.addWidget(self.recheck_btn)
+        self.clean_btn = button("บันทึกแบบที่แก้แล้ว (DXF)…",
+                                tooltip="เฉพาะเส้นตัดของชิ้นงานที่ปิดเป็นวงแล้ว (รอบนอก/รู แยกเลเยอร์) ตำแหน่งเดิม "
+                                        "– ใช้เปิดในซอฟต์แวร์ของเครื่องเลเซอร์ หรือส่งกลับฝ่ายเขียนแบบ")
+        self.clean_btn.clicked.connect(self._save_clean)
+        bar.addWidget(self.clean_btn)
+        bar.addStretch(1)
+        lay.addLayout(bar)
+        self.check_hint = QLabel()
+        self.check_hint.setObjectName("Hint")
+        self.check_hint.setWordWrap(True)
+        lay.addWidget(self.check_hint)
+        self.check_table = QTableWidget(0, 5)
+        self.check_table.setHorizontalHeaderLabels(["ผล", "รายการ", "ชิ้นงาน", "รายละเอียด", "ตำแหน่ง X, Y (มม.)"])
+        self.check_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.check_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.check_table.horizontalHeader().setStretchLastSection(True)
+        self.check_table.verticalHeader().setVisible(False)
+        self.check_table.itemSelectionChanged.connect(self._check_selected)
+        lay.addWidget(self.check_table, 1)
+        return page
+
+    @staticmethod
+    def _check_info(data: DrawingData) -> str:
+        if not data.gap_tol:
+            if data.repair_note:
+                return data.repair_note
+            return (f"{data.open_chains} เส้นไม่ปิดเป็นวง – วงกลมแดงในภาพ (ไม่ได้เปิด แก้เส้นอัตโนมัติ)"
+                    if data.open_chains else "ไม่มีเส้นไม่ปิดเป็นวง (ไม่ได้เปิด แก้เส้นอัตโนมัติ)")
+        fixes = [f for f in data.fixes if f.kind not in cad_fix.INFO]
+        done = sum(1 for f in fixes if f.fixed)
+        bends = sum(1 for f in data.fixes if f.kind == cad_fix.FIX_BEND)
+        bits = [f"แก้อัตโนมัติ {done} จุด" if done else "เส้นตัดเรียบร้อย ไม่ต้องแก้"]
+        if bends:
+            bits.append(f"เส้นพับ {bends} เส้น (ไม่ตัด)")
+        if data.open_chains:
+            bits.append(f"<span style='color:#D64545'>ต้องแก้ในแบบ {data.open_chains} จุด</span>")
+        return " · ".join(bits) + " – ดูแท็บ ตรวจแบบก่อนตัด"
+
+    def _fill_checks(self, data: DrawingData) -> None:
+        if data.gap_tol:
+            self.fix_tol.setValue(data.gap_tol)
+        self.fix_on.setChecked(bool(data.gap_tol))
+        codes = {}
+        for cand in self.candidates.get(self._current, []):
+            if cand.profile_index is not None:
+                codes[cand.profile_index] = cand.part.part_no or cand.part.name
+        order = sorted(data.fixes, key=lambda f: (f.fixed, f.kind in cad_fix.INFO, list(cad_fix.FIX_LABELS).index(
+            f.kind) if f.kind in cad_fix.FIX_LABELS else 99))
+        self._check_fixes = order
+        self.check_table.setRowCount(len(order))
+        for r, f in enumerate(order):
+            state = "ต้องแก้แบบ" if not f.fixed else ("ข้อมูล" if f.kind in cad_fix.INFO else "แก้แล้ว")
+            cells = [state, f.label, codes.get(f.part, "-") if f.part >= 0 else "-", f.detail(),
+                     f"{f.x:,.1f}, {f.y:,.1f}"]
+            for c, text in enumerate(cells):
+                item = QTableWidgetItem(text)
+                if c == 0:
+                    item.setBackground(theme.ERROR_BG if not f.fixed else (
+                        QColor(0, 0, 0, 0) if f.kind in cad_fix.INFO else theme.OK_BG))
+                self.check_table.setItem(r, c, item)
+        self.check_table.resizeColumnsToContents()
+        unfixed = sum(1 for f in order if not f.fixed)
+        fixed = sum(1 for f in order if f.fixed and f.kind not in cad_fix.INFO)
+        self.tabs.setTabText(2, "ตรวจแบบก่อนตัด" + (f" (แก้ {fixed}" + (f" · ต้องแก้ {unfixed})" if unfixed else ")")
+                                                    if fixed or unfixed else ""))
+        if not data.gap_tol:
+            self.check_hint.setText((data.repair_note + " · ") if data.repair_note else
+                                    "ยังไม่ได้แก้เส้น – ติ๊ก แก้เส้นอัตโนมัติ แล้วกด ตรวจใหม่")
+        else:
+            self.check_hint.setText(
+                "เขียว = แก้ให้แล้ว (วงกลมเขียวในภาพ) · แดง = แก้อัตโนมัติไม่ได้ ต้องแก้ในแบบหรือเพิ่มค่าต่อปลายเส้น · "
+                "เส้นพับและข้อความ/ตัวเลขในชิ้นงานไม่ถูกส่งไปตัด (มาร์คเส้นพับได้ที่ ค่าเครื่องตัด → ก่อนส่งตัด) · "
+                "คลิกแถวเพื่อดูตำแหน่งในภาพ")
+
+    def _check_selected(self) -> None:
+        rows = sorted({i.row() for i in self.check_table.selectedItems()})
+        fixes = getattr(self, "_check_fixes", [])
+        if rows and rows[0] < len(fixes):
+            f = fixes[rows[0]]
+            self.preview.focus(f.x, f.y)
+
+    def _recheck(self) -> None:
+        if self._current < 0:
+            return
+        index, old = self._current, self.drawings[self._current]
+        try:
+            data = read_drawing(old.path, None, self.cut_layer, repair=self.fix_on.isChecked(),
+                                gap_tol=self.fix_tol.value())
+        except Exception as exc:  # noqa: BLE001 - the converted file may be gone
+            from PySide6.QtWidgets import QMessageBox
+
+            QMessageBox.warning(self, "อ่านแบบใหม่ไม่ได้", str(exc))
+            return
+        data.source_path = old.source_path
+        self.drawings[index] = data
+        self.candidates[index] = drawing_to_candidates(data, self.densities, include_blocks=True,
+                                                       default_thickness=self.default_thickness,
+                                                       thickness_mode=self.thickness_mode)
+        self._current = -1  # the table holds the old rows: do not store them on the new ones
+        self._show(index)
+
+    def _save_clean(self) -> None:
+        if self._current < 0:
+            return
+        from pathlib import Path
+
+        from PySide6.QtWidgets import QFileDialog
+
+        from ..core import laser
+
+        data = self.drawings[self._current]
+        name = Path(data.file_name).stem + "_CUT.dxf"
+        start = str(Path(data.source_path or data.path).with_name(name))
+        path, _ = QFileDialog.getSaveFileName(self, "บันทึกแบบที่แก้แล้ว", start, "DXF (*.dxf)")
+        if not path:
+            return
+        self._store_table()
+        params = self.laser_params or laser.LaserParams()
+        codes = {c.profile_index: c.part.part_no for c in self.candidates[self._current] if c.profile_index is not None}
+        n = laser.export_drawing_dxf(data, path, params, codes)
+        self.summary.setText(f"บันทึก {Path(path).name} แล้ว ({n} ชิ้น)")
 
     @staticmethod
     def _qty_info(data: DrawingData) -> str:

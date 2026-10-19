@@ -29,6 +29,9 @@ from functools import cached_property
 from glob import glob
 from pathlib import Path
 
+from . import cad_fix
+from .cad_fix import (BEND_TOUCH, FIX_BEND, FIX_DUP_LOOP, FIX_GLYPH, FIX_OPEN, FIX_OPEN_IN_PART, FIX_OVERSHOOT,
+                      FIX_STRAY, FIX_TEXT, GAP_TOL, GLYPH_MAX, UNFIXED, Fix, GlyphItem, Piece)
 from .mapping import CAD_HEADERS, match_header, normalize
 from .models import COLUMN_KEYS, COLUMN_LABELS, Part, PartList, parse_thickness, strip_thickness, to_number
 from .partlist_io import TableImport, prepare_rows
@@ -53,9 +56,15 @@ DEFAULT_DENSITIES: dict[str, float] = {
 STEEL_DENSITY = 7.85
 
 # Layers that never hold cutting profiles.
-IGNORE_LAYER_RE = re.compile(r"dim|text|title|frame|border|center|hidden|hatch|defpoints|note|ขอบ|กรอบ|ตาราง",
+IGNORE_LAYER_RE = re.compile(r"dim|text|title|frame|border|center|hidden|hatch|defpoints|note|bend|fold|"
+                             r"ขอบ|กรอบ|ตาราง|พับ",
                              re.IGNORECASE)
 NON_CUT_LINETYPES = {"CENTER", "CENTER2", "CENTERX2", "HIDDEN", "HIDDEN2", "DASHED", "PHANTOM", "DASHDOT", "DOT"}
+# bend lines are usually on their own layer or drawn dashed / centre lines (never cut, can be marked)
+BEND_LAYER_RE = re.compile(r"bend|fold|พับ|center|centre|hidden|^cl$|ctr", re.IGNORECASE)
+# a number, an angle or a dimension written in a part ('90', '90°', 'UP 90° R 0', 'R5', 'Ø10', '2-Ø10'): not cut
+DIM_TEXT_RE = re.compile(r"^\s*(?:\d+\s*-\s*)?(?:up|down|ขึ้น|ลง|พับ)?\s*(?:R|Ø|⌀|ø)?\s*[-+]?\d+(?:[.,]\d+)?\s*"
+                         r"(?:°|องศา|deg|mm|มม\.?)?(?:\s*[xX×]\s*\d+(?:\.\d+)?)?(?:\s*R\s*[\d.]+)?\s*$", re.IGNORECASE)
 
 # Title-block attribute tags -> Part / drawing fields (besides the generic header aliases).
 TITLE_TAGS: dict[str, list[str]] = {
@@ -276,6 +285,8 @@ class Profile:
     net_area: float = 0
     cut_length: float = 0
     info: dict = field(default_factory=dict)  # read from its labels: part_no, name, thickness, material, qty
+    is_glyph: bool = False  # a letter / digit of text exploded into lines - not cut
+    bends: list = field(default_factory=list)  # bend lines across it [((x, y), (x, y)), ...] (not cut, marks)
 
     @cached_property
     def bbox(self) -> tuple[float, float, float, float]:  # points never change once the loop is built
@@ -296,7 +307,7 @@ class Profile:
 
     @property
     def is_outer(self) -> bool:
-        return self.parent is None and not self.is_container
+        return self.parent is None and not self.is_container and not self.is_glyph
 
 
 @dataclass
@@ -323,6 +334,11 @@ class DrawingData:
     note_material_text: str = ""
     open_chains: int = 0  # cut lines that do not close into a loop (a laser cannot cut them as a part)
     open_examples: list = field(default_factory=list)  # (x, y) where they start (first 300), mm
+    fixes: list[Fix] = field(default_factory=list)  # what the check before cutting found and repaired
+    removed: list = field(default_factory=list)  # (kind, [(x, y) ...]) lines not cut: bend, stray, glyph, open
+    gap_tol: float = 0.0  # mm the repair joined ends within (0 = lines read as drawn, not repaired)
+    repair_note: str = ""  # why the lines were not checked
+    bend_raw: list = field(default_factory=list)  # straight lines on bend / centre layers (maybe bend lines)
 
     @property
     def file_name(self) -> str:
@@ -341,8 +357,11 @@ class DrawingData:
 # --------------------------------------------------------------------------
 # Reading
 # --------------------------------------------------------------------------
-def read_drawing(path: str | Path, converter: Converter | None = None, cut_layer: str = "") -> DrawingData:
-    """Read a DWG (via converter) or DXF file and extract Part List information."""
+def read_drawing(path: str | Path, converter: Converter | None = None, cut_layer: str = "",
+                 repair: bool = True, gap_tol: float = GAP_TOL) -> DrawingData:
+    """Read a DWG (via converter) or DXF file and extract Part List information.
+    repair: cut lines that do not close are repaired (gaps up to gap_tol mm joined, overshoots, lines drawn twice,
+    stray lines, bend lines and text drawn as lines taken out) and every change is listed in data.fixes."""
     import ezdxf
 
     path = Path(path)
@@ -361,7 +380,8 @@ def read_drawing(path: str | Path, converter: Converter | None = None, cut_layer
         raise DrawingError(f"โครงสร้างไฟล์ DXF เสียหาย: {exc}") from exc
 
     scale = _UNIT_TO_MM.get(doc.header.get("$INSUNITS", 4), 1.0)
-    data = DrawingData(path=str(path), source_path=source, units_to_mm=scale)
+    data = DrawingData(path=str(path), source_path=source, units_to_mm=scale,
+                       gap_tol=max(0.0, float(gap_tol)) if repair else 0.0)
     data.layers = sorted(layer.dxf.name for layer in doc.layers)
     msp = doc.modelspace()
 
@@ -384,10 +404,18 @@ def read_drawing(path: str | Path, converter: Converter | None = None, cut_layer
     _title_from_attributes(data)
     _title_from_texts(data, texts)
     _find_bom(data, tables, texts)
-    data.profiles, open_chains = _build_profiles(edge_entities, closed_paths, scale)
+    if data.bom and data.gap_tol:  # an assembly drawing: its parts come from the BOM, its views are not cut
+        data.gap_tol, data.repair_note = 0.0, "แบบประกอบ (มีตาราง BOM) – ชิ้นส่วนอ่านจากตาราง ไม่ได้ตรวจเส้นตัด"
+    data.profiles, open_chains, fixed = _build_profiles(edge_entities, closed_paths, scale,
+                                                         data.gap_tol if data.gap_tol else None)
     data.open_chains, data.open_examples = len(open_chains), open_chains[:300]
-    _classify_profiles(data)
+    if fixed is not None:
+        data.fixes += fixed.fixes
+        _drop_duplicate_loops(data)
+    _classify_profiles(data, fixed.pieces if fixed is not None else [])
     _label_profiles(data)
+    if fixed is not None:
+        _settle_fixes(data, fixed)
     data.note_qty, data.note_qty_each, data.note_qty_text = _note_qty(data.notes)
     data.note_material, data.note_material_text = _note_material(data.notes)
     if not data.bom and not data.outer_profiles and not data.title_block:
@@ -502,6 +530,11 @@ def _collect(entity, data: DrawingData, texts, tables, edge_entities, closed_pat
     # Geometry inside blocks (bolts, hinges, title frames) is shown but is not a cutting profile,
     # unless the user named the cutting layer explicitly.
     if (depth > 0 and not cut_layer) or not _is_cut_entity(entity, layer, cut_layer):
+        if depth == 0 and kind in ("LINE", "LWPOLYLINE") and (
+                BEND_LAYER_RE.search(layer) or _linetype(entity, layer) in NON_CUT_LINETYPES):
+            pts = [(v.x * data.units_to_mm, v.y * data.units_to_mm) for v in p.flattening(0.05)]
+            if len(pts) >= 2 and cad_fix.is_straight(pts):
+                data.bend_raw.append((pts[0], pts[-1], layer))  # maybe a bend line: decided once parts are known
         return
     if _is_closed(entity, p):
         closed_paths.append((p, layer))
@@ -514,10 +547,14 @@ def _is_cut_entity(entity, layer: str, cut_layer: str) -> bool:
         return layer.lower() == cut_layer.lower()
     if IGNORE_LAYER_RE.search(layer):
         return False
+    return _linetype(entity, layer) not in NON_CUT_LINETYPES
+
+
+def _linetype(entity, layer: str) -> str:
     linetype = entity.dxf.get("linetype", "BYLAYER").upper()
     if linetype == "BYLAYER" and entity.doc and layer in entity.doc.layers:
         linetype = entity.doc.layers.get(layer).dxf.get("linetype", "CONTINUOUS").upper()
-    return linetype not in NON_CUT_LINETYPES
+    return linetype
 
 
 def _is_closed(entity, p) -> bool:
@@ -709,10 +746,13 @@ def _perimeter(points: list[tuple[float, float]], closed: bool = True) -> float:
     return sum(math.dist(a, b) for a, b in zip(pts, pts[1:]))
 
 
-def _build_profiles(edge_entities, closed_paths, scale: float) -> tuple[list[Profile], list[tuple[float, float]]]:
-    """Closed loops of the cut lines, and the start point of every chain of lines that does not close."""
+def _build_profiles(edge_entities, closed_paths, scale: float, gap_tol: float | None = None
+                    ) -> tuple[list[Profile], list[tuple[float, float]], cad_fix.Repair | None]:
+    """Closed loops of the cut lines, and the start point of every chain of lines that does not close.
+    gap_tol given: the chains that do not close are repaired (cad_fix.repair_lines) and their loops added."""
     profiles: list[Profile] = []
     open_chains: list[tuple[float, float]] = []
+    loose: list[tuple[list[tuple[float, float]], str]] = []
     for p, layer in closed_paths:
         pts = _polygon(p, scale)
         if len(pts) >= 3:
@@ -724,17 +764,44 @@ def _build_profiles(edge_entities, closed_paths, scale: float) -> tuple[list[Pro
             edges = list(edgesmith.edges_from_entities_2d(edge_entities, gap_tol=0.01))
             deposit = edgeminer.Deposit(edges, gap_tol=0.01)
             for chain in edgeminer.find_all_simple_chains(deposit):
+                payload = getattr(chain[0], "payload", None)
+                layer = payload.dxf.layer if payload is not None else ""
                 if edgeminer.is_loop(chain, gap_tol=0.01):
                     pts = _polygon(edgesmith.path2d_from_chain(chain), scale)
-                    payload = getattr(chain[0], "payload", None)
-                    layer = payload.dxf.layer if payload is not None else ""
                     if len(pts) >= 3:
                         profiles.append(Profile(pts, _area(pts), _perimeter(pts), layer))
+                    continue
+                if gap_tol is not None:
+                    try:
+                        pts = _polygon(edgesmith.path2d_from_chain(chain), scale)
+                    except Exception:  # noqa: BLE001 - fall back to the ends of every edge
+                        pts = [(v.x * scale, v.y * scale) for e in chain for v in (e.start, e.end)]
+                    loose.append((pts, layer))
                 elif sum(e.length for e in chain) * scale >= 5.0:  # a gap at a corner, a line drawn short
                     open_chains.append((round(chain[0].start.x * scale, 1), round(chain[0].start.y * scale, 1)))
         except Exception:  # noqa: BLE001 - chaining is best effort
             pass
-    return [p for p in profiles if p.area > 1.0], open_chains  # drop specks (< 1 mm2)
+    fixed = None
+    if gap_tol is not None:
+        fixed = cad_fix.repair_lines(loose, gap_tol)
+        for pts, layer in fixed.loops:
+            profiles.append(Profile(pts, _area(pts), _perimeter(pts), layer))
+    return [p for p in profiles if p.area > 1.0], open_chains, fixed  # drop specks (< 1 mm2)
+
+
+def _drop_duplicate_loops(data: DrawingData) -> None:
+    """A loop drawn twice (two polylines on top of each other) would be cut twice: keep one."""
+    seen: set[tuple] = set()
+    kept = []
+    for prof in data.profiles:
+        x0, y0, x1, y1 = prof.bbox
+        sig = (round(x0, 1), round(y0, 1), round(x1, 1), round(y1, 1), round(prof.area), round(prof.perimeter))
+        if sig in seen:
+            data.fixes.append(Fix(FIX_DUP_LOOP, (x0 + x1) / 2, y1, prof.perimeter))
+            continue
+        seen.add(sig)
+        kept.append(prof)
+    data.profiles = kept
 
 
 def _inside(inner: Profile, outer: Profile) -> bool:
@@ -757,7 +824,7 @@ def _point_in(profile: Profile, x: float, y: float) -> bool:
     return is_point_in_polygon_2d(Vec2(x, y), profile.polygon) > 0
 
 
-def _classify_profiles(data: DrawingData) -> None:
+def _classify_profiles(data: DrawingData, pieces: list[Piece] | None = None) -> None:
     profiles = data.profiles
     profiles.sort(key=lambda p: -p.area)
     # Frames and table borders: they contain the title block / BOM text (not the labels of one part).
@@ -767,11 +834,19 @@ def _classify_profiles(data: DrawingData) -> None:
             prof.is_container = True
     # Containment tree among the remaining loops (smallest enclosing loop = parent).
     active = [i for i, p in enumerate(profiles) if not p.is_container]
-    for pos, i in enumerate(active):
-        for j in reversed(active[:pos]):
-            if _inside(profiles[i], profiles[j]):
-                profiles[i].parent = j
-                break
+
+    def link(loops: list[int]) -> None:
+        for pos, i in enumerate(loops):
+            profiles[i].parent = None
+            for j in reversed(loops[:pos]):
+                if _inside(profiles[i], profiles[j]):
+                    profiles[i].parent = j
+                    break
+
+    link(active)
+    if data.gap_tol and _find_glyphs(data, active, pieces or []):
+        active = [i for i in active if not profiles[i].is_glyph]
+        link(active)  # without the letters a part no longer looks like a frame around parts
     # A loop whose children have children is a frame around parts, not a part.
     for i in active:
         kids = [k for k in active if profiles[k].parent == i]
@@ -795,6 +870,165 @@ def _classify_profiles(data: DrawingData) -> None:
             labels = [t.text for t in data.texts
                       if _point_in(prof, t.x, t.y) and not any(_point_in(h, t.x, t.y) for h in holes)]
             prof.label = " ".join(labels[:2])
+
+
+def _find_glyphs(data: DrawingData, active: list[int], pieces: list[Piece]) -> bool:
+    """Text exploded into lines inside a part ('90' left from the bend note): small loops and strokes written
+    next to each other like letters. They are taken out (not cut); True when any was found."""
+    profiles = data.profiles
+    kids: dict[int, list[int]] = {}
+    for i in active:
+        if profiles[i].parent is not None:
+            kids.setdefault(profiles[i].parent, []).append(i)
+
+    def small_in(size: float, host: int) -> bool:
+        hw, hh = profiles[host].size
+        return size <= GLYPH_MAX and size * 2 <= min(hw, hh)
+
+    by_host: dict[int, list[GlyphItem]] = {}
+    for i in active:
+        prof = profiles[i]
+        if prof.parent is None or not small_in(max(prof.size), prof.parent) or cad_fix.is_circle(prof.points):
+            continue
+        counter = bool(kids.get(i))
+        concave = prof.area < 0.88 * cad_fix.hull_area(prof.points)
+        by_host.setdefault(prof.parent, []).append(GlyphItem(prof.bbox, counter or concave, ("loop", i), counter))
+    by_area = sorted(active, key=lambda k: profiles[k].area)
+    for n, piece in enumerate(pieces):
+        if piece.spur or len(piece.points) < 2:
+            continue
+        x0, y0, x1, y1 = piece.bbox
+        x, y = piece.points[0]
+        host = next((k for k in by_area if profiles[k].parent is None and _point_in(profiles[k], x, y)), None)
+        if host is None or not small_in(max(x1 - x0, y1 - y0), host):
+            continue
+        # a curved stroke looks like a letter; straight strokes ('1', '-', a centre mark '+') only go with one
+        by_host.setdefault(host, []).append(GlyphItem(piece.bbox, not piece.straight, ("piece", n)))
+    found = False
+    for host, items in by_host.items():
+        for group in cad_fix.text_clusters(items):
+            found = True
+            for item in group:
+                kind, k = item.ref
+                if kind == "piece":
+                    pieces[k].kind = FIX_GLYPH
+                    continue
+                stack = [k]
+                while stack:
+                    g = stack.pop()
+                    profiles[g].is_glyph = True
+                    stack += kids.get(g, [])
+            x0 = min(it.bbox[0] for it in group)
+            y0 = min(it.bbox[1] for it in group)
+            x1 = max(it.bbox[2] for it in group)
+            y1 = max(it.bbox[3] for it in group)
+            data.fixes.append(Fix(FIX_GLYPH, (x0 + x1) / 2, (y0 + y1) / 2, max(x1 - x0, y1 - y0),
+                                  f"{len(group)} ส่วน ขนาด {x1 - x0:.0f}x{y1 - y0:.0f} มม. – ไม่ตัด", part=host))
+    for prof in profiles:
+        if prof.is_glyph:
+            data.removed.append((FIX_GLYPH, prof.points + prof.points[:1]))
+    return found
+
+
+def _settle_fixes(data: DrawingData, fixed: cad_fix.Repair) -> None:
+    """Decide what every line taken out was (overshoot, bend line, stray line, a line that does not close),
+    find the part every fix belongs to and list what cannot be repaired."""
+    profiles = data.profiles
+    outers = [i for i, p in enumerate(profiles) if p.is_outer]
+
+    def inside(x: float, y: float) -> int:
+        return next((i for i in outers if _point_in(profiles[i], x, y)), -1)
+
+    def near(x: float, y: float, tol: float = BEND_TOUCH) -> int:
+        hit = inside(x, y)
+        if hit >= 0:
+            return hit
+        best, best_d = -1, tol
+        for i in outers:
+            bx0, by0, bx1, by1 = profiles[i].bbox
+            if bx0 - tol <= x <= bx1 + tol and by0 - tol <= y <= by1 + tol:
+                d = cad_fix.dist_to_loop((x, y), profiles[i].points)
+                if d <= best_d:
+                    best, best_d = i, d
+        return best
+
+    def in_hole(i: int, x: float, y: float) -> bool:
+        return any(_point_in(profiles[h], x, y) for h in profiles[i].holes)
+
+    def add_bend(i: int, a, b, text: str = "") -> None:
+        profiles[i].bends.append((a, b))
+        data.fixes.append(Fix(FIX_BEND, (a[0] + b[0]) / 2, (a[1] + b[1]) / 2, math.dist(a, b), text, part=i))
+        data.removed.append((FIX_BEND, [a, b]))
+
+    def is_bend(i: int, a, b) -> bool:
+        mx, my = (a[0] + b[0]) / 2, (a[1] + b[1]) / 2
+        loop = profiles[i].points
+        return (math.dist(a, b) >= 10 and not in_hole(i, mx, my)
+                and cad_fix.dist_to_loop(a, loop) <= BEND_TOUCH and cad_fix.dist_to_loop(b, loop) <= BEND_TOUCH)
+
+    for f in data.fixes:
+        if f.part < 0:
+            f.part = near(f.x, f.y)
+    open_at: list[tuple[float, float]] = []
+    for piece in fixed.pieces:
+        pts = piece.points
+        if piece.kind == FIX_GLYPH:
+            data.removed.append((FIX_GLYPH, pts))
+            continue
+        a, b = pts[0], pts[-1]
+        mid = pts[len(pts) // 2] if len(pts) > 2 else ((a[0] + b[0]) / 2, (a[1] + b[1]) / 2)
+        if piece.spur:
+            piece.kind = FIX_OVERSHOOT
+            data.fixes.append(Fix(FIX_OVERSHOOT, mid[0], mid[1], piece.length, part=near(*(piece.base or mid))))
+        else:
+            host = inside(*mid)
+            if host >= 0 and piece.straight and is_bend(host, a, b):
+                add_bend(host, a, b, "เส้นบนเลเยอร์ตัด – ไม่ตัด")
+                continue
+            if host >= 0 and piece.straight:
+                piece.kind = FIX_STRAY
+                data.fixes.append(Fix(FIX_STRAY, mid[0], mid[1], piece.length, part=host))
+            elif host >= 0:
+                piece.kind = FIX_OPEN_IN_PART
+                text = f"ยาว {piece.length:.0f} มม." + (f" ปลายห่าง {piece.gap:.1f} มม." if piece.gap else "")
+                data.fixes.append(Fix(FIX_OPEN_IN_PART, a[0], a[1], piece.length, text, part=host))
+                open_at.append(a)
+            elif piece.length >= 5.0:
+                piece.kind = FIX_OPEN
+                text = f"ยาว {piece.length:.0f} มม." + (
+                    f" ปลายห่าง {piece.gap:.1f} มม. (ต่อเองได้ไม่เกิน {data.gap_tol:g} มม.)" if piece.gap else "")
+                data.fixes.append(Fix(FIX_OPEN, a[0], a[1], piece.length, text))
+                open_at.append(a)
+            else:
+                continue
+        data.removed.append((piece.kind, pts))
+    for a, b in fixed.bends:  # straight lines dividing a part, on the cut layer
+        host = inside((a[0] + b[0]) / 2, (a[1] + b[1]) / 2)
+        if host >= 0:
+            add_bend(host, a, b, "เส้นบนเลเยอร์ตัด – ไม่ตัด")
+    for a, b, layer in data.bend_raw:  # lines on bend / centre layers across a part
+        host = inside((a[0] + b[0]) / 2, (a[1] + b[1]) / 2)
+        if host >= 0 and is_bend(host, a, b):
+            add_bend(host, a, b, f"เลเยอร์ {layer}")
+    for t in data.texts:  # '90' / 'UP 90° R 0' written in the part: the laser files only carry the cut lines
+        if t.title or not t.text or not DIM_TEXT_RE.match(t.text):
+            continue
+        host = inside(t.x, t.y)
+        if host >= 0:
+            data.fixes.append(Fix(FIX_TEXT, t.x, t.y, t.height, f"'{t.text}'", part=host))
+    data.open_chains = sum(1 for f in data.fixes if f.kind in UNFIXED)
+    data.open_examples = [(round(x, 1), round(y, 1)) for x, y in open_at][:300]
+
+
+def part_fixes(data: DrawingData, index: int) -> list[Fix]:
+    return [f for f in data.fixes if f.part == index]
+
+
+def profile_bends(data: DrawingData, prof: Profile) -> list[list[tuple[float, float]]]:
+    """Bend lines of a part in the coordinates of profile_outline (origin at the bounding box corner)."""
+    x0, y0, _x1, _y1 = prof.bbox
+    return [[(round(a[0] - x0, 2), round(a[1] - y0, 2)), (round(b[0] - x0, 2), round(b[1] - y0, 2))]
+            for a, b in prof.bends]
 
 
 def _is_table_text(t: TextItem) -> bool:
@@ -1168,6 +1402,8 @@ def drawing_to_candidates(data: DrawingData, densities: dict[str, float] | None 
             if thickness:
                 part.weight = plate_weight(prof.net_area, thickness, density_for(mat, densities))
             part.outline = profile_outline(data, prof)
+            part.bend_lines = profile_bends(data, prof)
+            part.cad_fixes = cad_fix.fix_summary(part_fixes(data, i))
             cand = CandidatePart(part, "profile", profile_index=i, thickness_source=source, material_source=mat_source)
             qty, qty_source = resolve_qty(to_number(lab.get("qty", 0)),
                                           data.note_qty if (single or data.note_qty_each) else 0,

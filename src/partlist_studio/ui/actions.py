@@ -58,6 +58,7 @@ class Actions:
         settings = self.state.settings
         converter = settings.converter()
         cut_layer = settings.get("dwg/cut_layer")
+        repair, gap_tol = settings.auto_fix, settings.gap_tol
         if any(p.lower().endswith(".dwg") for p in paths) and converter is None:
             self.error("ยังไม่พบโปรแกรมแปลง DWG",
                        "ไฟล์ .dwg ต้องแปลงเป็น DXF ก่อนอ่าน\n\n"
@@ -71,7 +72,7 @@ class Actions:
             results, errors = [], []
             for p in paths:
                 try:
-                    results.append(dwg_io.read_drawing(p, converter, cut_layer))
+                    results.append(dwg_io.read_drawing(p, converter, cut_layer, repair=repair, gap_tol=gap_tol))
                 except Exception as exc:  # noqa: BLE001 - collect per file
                     errors.append(f"{Path(p).name}: {exc}")
             return results, errors
@@ -87,7 +88,8 @@ class Actions:
         settings = self.state.settings
         dialog = DrawingImportDialog(drawings, settings.densities, self.window,
                                      default_thickness=settings.default_thickness,
-                                     thickness_mode=settings.thickness_mode)
+                                     thickness_mode=settings.thickness_mode,
+                                     cut_layer=settings.get("dwg/cut_layer"), laser_params=settings.laser)
         if not dialog.exec():
             return
         settings.default_thickness = dialog.default_thickness

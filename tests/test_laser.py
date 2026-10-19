@@ -5,7 +5,7 @@ import math
 import pytest
 
 from conftest import SAMPLES
-from partlist_studio.core import dwg_io, laser, nesting, production
+from partlist_studio.core import cad_fix, dwg_io, laser, nesting, production
 from partlist_studio.core.models import Part, PartList
 from partlist_studio.core.movements import Ledger
 
@@ -153,8 +153,15 @@ def test_open_cut_lines_are_counted(tmp_path):
         msp.add_line(a, b)  # 2 mm gap at the corner
     path = tmp_path / "gap.dxf"
     doc.saveas(path)
-    data = dwg_io.read_drawing(path)
-    assert len(data.outer_profiles) == 1 and data.open_chains == 1 and data.open_examples == [(200.0, 0.0)]
+    data = dwg_io.read_drawing(path)  # 2 mm: more than the repair joins by itself
+    assert len(data.outer_profiles) == 1 and data.open_chains == 1 and data.open_examples[0] in [(200, 0), (200, 2)]
+    [unfixed] = [f for f in data.fixes if not f.fixed]
+    assert unfixed.kind == cad_fix.FIX_OPEN and "ปลายห่าง 2.0 มม." in unfixed.text
+    data = dwg_io.read_drawing(path, repair=False)  # as drawn
+    assert data.open_chains == 1 and data.open_examples == [(200.0, 0.0)] and not data.fixes
+    data = dwg_io.read_drawing(path, gap_tol=3)  # joined
+    assert len(data.outer_profiles) == 2 and data.open_chains == 0
+    assert [(f.kind, round(f.size, 2)) for f in data.fixes] == [(cad_fix.FIX_GAP, 2.0)]
 
 
 def test_machine_presets_bed_and_old_settings():
@@ -192,3 +199,72 @@ def test_machine_values_layer_colours_and_test_file(tmp_path):
     assert doc.layers.get("CUT_OUTER").color == 2 and doc.layers.get("COLOR_6").color == 6
     squares = [e for e in doc.modelspace() if e.dxftype() == "LWPOLYLINE"]
     assert len(squares) == 10 and all(e.closed for e in squares)
+
+
+def test_marks_gaps_spacing_and_orientation(tmp_path):
+    import math
+
+    import ezdxf
+
+    square = [(0.0, 0.0), (100.0, 0.0), (100.0, 50.0), (0.0, 50.0)]
+    # Gap / micro-joint: the outer contour in open pieces, `width` mm left uncut at each joint
+    pieces = laser.micro_joints(square, 2, 1.0)
+    assert len(pieces) == 2 and sum(laser.loop_length(p) - math.dist(p[0], p[-1]) for p in pieces) == pytest.approx(298)
+    assert {round(p[0][1]) for p in pieces} == {0, 50}  # in the middle of the two long edges
+    assert laser.micro_joints(square, 0, 1.0) == [square + square[:1]]
+    params = laser.LaserParams()
+    part = nesting.NestPart("k", "RRS-X-1", "ฉาก", "SS400", 3, 100, 50, 4, outline=[square],
+                            bend_lines=[[(30.0, 0.0), (30.0, 50.0)]], fixes=["ต่อเส้นที่ต่อไม่สนิท 1 จุด (ห่างสุด 0.30 มม.)"])
+    assert params.joints_for(part) == 0  # off by default
+    params.joints, params.mark_bends = "small", "ticks"
+    assert params.joints_for(part) == 2 and params.joints_for(nesting.NestPart(
+        "b", "B", "ใหญ่", "SS400", 3, 1000, 500, 1, outline=[[(0, 0), (1000, 0), (1000, 500), (0, 500)]])) == 0
+    issues = laser.check_part(part, params)
+    assert any(i.level == laser.INFO and i.text.startswith("แก้แบบอัตโนมัติ: ต่อเส้น") for i in issues)
+    path = laser.export_part_dxf(part, tmp_path / "p.dxf", params)
+    ents = list(ezdxf.readfile(path).modelspace())
+    cut = [e for e in ents if e.dxf.layer == params.layer_outer]
+    marks = [e for e in ents if e.dxf.layer == params.layer_mark]
+    assert len(cut) == 2 and not any(e.closed for e in cut)
+    assert sorted((round(e.dxf.start.y), round(e.dxf.end.y)) for e in marks) == [(0, 10), (50, 40)]  # ticks
+    params.mark_bends = "full"
+    path = laser.export_part_dxf(part, tmp_path / "p2.dxf", params)
+    assert [round(e.dxf.end.y - e.dxf.start.y) for e in ezdxf.readfile(path).modelspace()
+            if e.dxf.layer == params.layer_mark] == [50]
+    # spacing by thickness: 12 mm plate gets 12 mm between parts, 3 mm plate keeps the 5 mm gap
+    nest = params.nest_params()
+    assert nest.gap_for(3) == 5 and nest.gap_for(12) == 12
+    groups = nesting.plan([part, nesting.NestPart("t", "T", "หนา", "SS400", 12, 100, 50, 2, outline=[square])],
+                          None, nest)
+    assert sorted((g.thickness, g.gap) for g in groups) == [(3, 5), (12, 12)]
+    # a part drawn at 30°: turned to its smallest blank before nesting (and its bend lines with it)
+    c, s = math.cos(math.radians(30)), math.sin(math.radians(30))
+    tilted = [(x * c - y * s, x * s + y * c) for x, y in square]
+    ox, oy = min(p[0] for p in tilted), min(p[1] for p in tilted)
+    tilted = [(x - ox, y - oy) for x, y in tilted]
+    bend = [[(30 * c - ox, 30 * s - oy), (30 * c - 50 * s - ox, 30 * s + 50 * c - oy)]]
+    w, h = max(p[0] for p in tilted), max(p[1] for p in tilted)
+    turned = nesting.best_orientation(nesting.NestPart("r", "R", "เอียง", "SS400", 3, w, h, 1, outline=[tilted],
+                                                       bend_lines=bend))
+    assert sorted((round(turned.width), round(turned.height))) == [50, 100]
+    (a, b), = turned.bend_lines
+    assert round(math.dist(a, b)) == 50 and (round(a[0]) == round(b[0]) or round(a[1]) == round(b[1]))
+    assert nesting.best_orientation(part) is part  # already square to the sheet
+
+
+def test_bend_lines_and_fixes_kept_in_library_and_programs():
+    data = dwg_io.read_drawing(SAMPLES / "RRS-T-FIX_broken_lines.dxf")
+    parts = [c.part for c in dwg_io.drawing_to_candidates(data)]
+    lib = laser.FlatLibrary()
+    lib.add_parts(parts)
+    back = laser.FlatLibrary.from_dict(lib.to_dict()).get("RRS-T-101")
+    assert back.bend_lines == [[(150.0, 0.0), (150.0, 150.0)], [(230.0, 0.0), (230.0, 150.0)]] and back.fixes
+    job = production.job_from_parts("SO6910-020", parts, 1, None, False)
+    demand = laser.demand_from_jobs([job], lib)
+    side = next(p for p in demand.parts if p.code == "RRS-T-101")
+    assert side.bend_lines == back.bend_lines and side.fixes == back.fixes
+    params = laser.LaserParams()
+    progs = laser.make_programs(nesting.plan(demand.parts, None, params.nest_params()), laser.CutQueue(), params)
+    prog = laser.CutProgram.from_dict(progs[0].to_dict())
+    key = next(k for k, it in prog.items.items() if it["code"] == "RRS-T-101")
+    assert prog.nest_part(key).bend_lines == back.bend_lines

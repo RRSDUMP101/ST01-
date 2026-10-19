@@ -8,6 +8,7 @@ from pathlib import Path
 from PySide6.QtCore import QObject, QSettings, QStandardPaths, Signal
 
 from ..core import stock as stock_mod
+from ..core.cad_fix import GAP_TOL
 from ..core.catalog import Catalog
 from ..core.company_files import ModelBOM
 from ..core.dwg_io import DEFAULT_DENSITIES, DrawingData, find_converter
@@ -69,6 +70,27 @@ class Settings:
     @thickness_mode.setter
     def thickness_mode(self, value: str) -> None:
         self.set("dwg/thickness_mode", value)
+
+    @property
+    def auto_fix(self) -> bool:
+        """Repair the cut lines while importing (gaps, overshoots, lines drawn twice, bend lines, letters)."""
+        return self.get("dwg/auto_fix", "1") != "0"
+
+    @auto_fix.setter
+    def auto_fix(self, value: bool) -> None:
+        self.set("dwg/auto_fix", "1" if value else "0")
+
+    @property
+    def gap_tol(self) -> float:
+        """mm: loose ends of cut lines closer than this are joined."""
+        try:
+            return min(5.0, max(0.05, float(self.get("dwg/gap_tol", "") or GAP_TOL)))
+        except ValueError:
+            return GAP_TOL
+
+    @gap_tol.setter
+    def gap_tol(self, value: float) -> None:
+        self.set("dwg/gap_tol", f"{float(value):g}")
 
     @property
     def replenish(self) -> ReplenishParams:

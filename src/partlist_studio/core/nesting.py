@@ -4,7 +4,8 @@ Each part is placed as its bounding rectangle (rotation 90° allowed) with a gap
 at the sheet edge - the way a shear / laser operator lays out rectangular blanks. It is a safe estimate:
 true-shape nesting can fit odd shapes closer. Parts are grouped by material and thickness; every sheet size
 the store has for that thickness (from the item names, e.g. 4x8ฟุต / 1524x3050) is tried and the size that
-needs the least steel is used.
+needs the least steel is used. A part drawn at an angle is first turned to its smallest bounding rectangle,
+and thick plates get more room between parts (gap = thickness × gap_per_mm when that is more than the gap).
     utilization = net area of the parts ÷ area of the sheets used      scrap % = 100 − utilization
 """
 
@@ -12,9 +13,10 @@ from __future__ import annotations
 
 import math
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
+from .cad_fix import convex_hull
 from .dwg_io import density_for, parse_thickness
 from .models import Part, PartList
 from .stock import StockList, material_family, sheet_size_mm
@@ -27,6 +29,11 @@ class NestParams:
     gap: float = 10.0  # between parts (kerf + clearance), mm
     margin: float = 10.0  # at the sheet edge, mm
     rotate: bool = True
+    gap_per_mm: float = 0.0  # thick plates: gap at least thickness × this (0 = the same gap for every thickness)
+    align: bool = False  # turn a part drawn at an angle to its smallest bounding rectangle first
+
+    def gap_for(self, thickness: float) -> float:
+        return max(self.gap, thickness * self.gap_per_mm)
 
 
 @dataclass
@@ -43,6 +50,8 @@ class NestPart:
     weight: float = 0  # kg of one piece
     outline: list = field(default_factory=list)  # [outer, hole, hole ...] in mm, origin at the bbox corner
     job: str = ""  # SO / job the pieces are cut for ("" = from the Part List)
+    bend_lines: list = field(default_factory=list)  # [[(x, y), (x, y)], ...] same coordinates as the outline
+    fixes: list = field(default_factory=list)  # what the import repaired in its drawing (cad_fix.fix_summary)
 
     @property
     def area(self) -> float:
@@ -86,6 +95,7 @@ class NestGroup:
     too_big: list[NestPart] = field(default_factory=list)
     tried: list[tuple[str, int, float]] = field(default_factory=list)  # (size, sheets, utilization)
     by_weight: float = 0  # sheets by the weight method (part kg ÷ sheet kg)
+    gap: float = 0  # mm between parts used for this thickness
 
     @property
     def parts_area(self) -> float:
@@ -261,8 +271,45 @@ def nest_parts_from(partlist: PartList, build_qty: int | None = None,
         net = float(m.group(1).replace(",", "")) * 1e6 if m else 0
         out.append(NestPart(key=str(i), code=part.part_no, name=part.name, material=part.material or "SS400",
                             thickness=thk, width=size[0], height=size[1], qty=math.ceil(part.qty * build),
-                            net_area=net, weight=part.weight, outline=getattr(part, "outline", None) or []))
+                            net_area=net, weight=part.weight, outline=getattr(part, "outline", None) or [],
+                            bend_lines=list(part.bend_lines), fixes=list(part.cad_fixes)))
     return out, skipped
+
+
+def _rotate(points, cos_a: float, sin_a: float):
+    return [(x * cos_a - y * sin_a, x * sin_a + y * cos_a) for x, y in points]
+
+
+def best_orientation(part: NestPart, min_gain: float = 0.03) -> NestPart:
+    """The part turned so its bounding rectangle is smallest (a bracket drawn at 30° takes a smaller blank);
+    the same part when turning saves less than min_gain of the rectangle."""
+    if not part.outline or len(part.outline[0]) < 3:
+        return part
+    outer = [(float(x), float(y)) for x, y in part.outline[0]]
+    hull = convex_hull(outer)
+    xs, ys = [p[0] for p in outer], [p[1] for p in outer]
+    now = (max(xs) - min(xs)) * (max(ys) - min(ys))
+    best = (now, 0.0)
+    for (x0, y0), (x1, y1) in zip(hull, hull[1:] + hull[:1]):
+        angle = -math.atan2(y1 - y0, x1 - x0)
+        pts = _rotate(hull, math.cos(angle), math.sin(angle))
+        px, py = [p[0] for p in pts], [p[1] for p in pts]
+        area = (max(px) - min(px)) * (max(py) - min(py))
+        if area < best[0] - 1e-6:
+            best = (area, angle)
+    area, angle = best
+    if not now or area > now * (1 - min_gain):
+        return part
+    c, s = math.cos(angle), math.sin(angle)
+    loops = [_rotate([(float(x), float(y)) for x, y in loop], c, s) for loop in part.outline]
+    bends = [_rotate([(float(x), float(y)) for x, y in line], c, s) for line in part.bend_lines]
+    ox = min(p[0] for p in loops[0])
+    oy = min(p[1] for p in loops[0])
+    loops = [[(round(x - ox, 2), round(y - oy, 2)) for x, y in loop] for loop in loops]
+    bends = [[(round(x - ox, 2), round(y - oy, 2)) for x, y in line] for line in bends]
+    w = max(p[0] for p in loops[0])
+    h = max(p[1] for p in loops[0])
+    return replace(part, outline=loops, bend_lines=bends, width=round(w, 2), height=round(h, 2))
 
 
 def sheet_options(stock: StockList, family: str, thickness: float) -> list[tuple[float, float, str, str]]:
@@ -293,16 +340,19 @@ def plan(parts: list[NestPart], stock: StockList | None = None, params: NestPara
         groups.setdefault((material_family(p.material), p.thickness), []).append(p)
     out = []
     for (family, thk), items in sorted(groups.items(), key=lambda kv: (kv[0][0], kv[0][1])):
-        group = NestGroup(material=items[0].material, family=family, thickness=thk, parts=items)
+        if params.align and params.rotate:
+            items = [best_orientation(p) for p in items]
+        gp = replace(params, gap=params.gap_for(thk))
+        group = NestGroup(material=items[0].material, family=family, thickness=thk, parts=items, gap=gp.gap)
         options = sorted(sheet_options(stock, family, thk) or list(DEFAULT_SHEETS), key=lambda o: o[0] * o[1])
         best = None
         for primary in options:
-            sheets, left = _pack_on(items, list(range(len(items))), primary, params)
+            sheets, left = _pack_on(items, list(range(len(items))), primary, gp)
             # parts too big for this size go on the smallest size they fit
             for bigger in options:
                 if not left or bigger[0] * bigger[1] <= primary[0] * primary[1]:
                     continue
-                more, left = _pack_on(items, left, bigger, params)
+                more, left = _pack_on(items, left, bigger, gp)
                 sheets += more
             area = sum(x.width * x.height for x in sheets)
             placed = sum(items[pl.part].area for x in sheets for pl in x.placements)

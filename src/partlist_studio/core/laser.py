@@ -18,12 +18,14 @@ cutting table.
 
 from __future__ import annotations
 
+import bisect
 import math
 import re
 from dataclasses import asdict, dataclass, field
 from datetime import date, datetime
 from pathlib import Path
 
+from .cad_fix import FIX_LABELS, FIX_OPEN_IN_PART
 from .dwg_io import outline_net_area
 from .models import PartList
 from .movements import DocLine, Ledger, StockDoc
@@ -40,6 +42,10 @@ OPEN = {ST_WAIT, ST_CUTTING}
 
 ERROR = "error"
 WARN = "warn"
+INFO = "info"  # repaired by the check before cutting: nothing to do, only shown
+LEVEL_TEXT = {ERROR: "ต้องแก้", WARN: "ควรตรวจ", INFO: "แก้แล้ว"}
+MARK_BENDS = {"off": "ไม่มาร์ค", "ticks": "มาร์คปลายเส้นพับ (ขีดสั้นที่ขอบ)", "full": "มาร์คเส้นพับเต็มเส้น"}
+JOINTS = {"off": "ไม่เว้น (ตัดขาดทุกชิ้น)", "small": "เฉพาะชิ้นเล็ก", "all": "ทุกชิ้น"}
 
 # mm/min by material family and thickness (mm), and seconds per pierce by thickness.
 # HSG 12,000 W (the company's machine): steel 2 mm from the machine's own technic "12000-Carbon Steel-2.000"
@@ -117,9 +123,31 @@ class LaserParams:
     color_mark: int = 3
     bed_w: float = 2500.0  # largest sheet the machine takes, mm
     bed_l: float = 8000.0
+    # spacing (Gap between parts): at least the gap, thick plates thickness × gap_per_mm
+    gap_per_mm: float = 1.0
+    align_parts: bool = True  # turn a part drawn at an angle to its smallest blank before nesting
+    # marks on the MARK layer (engraved, not cut through): bend lines for the press brake
+    mark_bends: str = "off"  # off | ticks | full (MARK_BENDS)
+    mark_tick: float = 10.0  # mm of each tick at the two ends of a bend line
+    # Gap / micro-joint: short pieces of the outer contour left uncut so the part stays in the sheet
+    joints: str = "off"  # off | small | all (JOINTS)
+    joint_width: float = 0.5  # mm left uncut at each joint
+    joint_count: int = 0  # joints per part, 0 = by size (2 up to 600 mm around, then 1 per 600 mm, at most 8)
+    joint_small: float = 150.0  # "small" parts: longest side under this, mm
 
     def nest_params(self) -> NestParams:
-        return NestParams(self.gap, self.margin, self.rotate)
+        return NestParams(self.gap, self.margin, self.rotate, self.gap_per_mm, self.align_parts)
+
+    def joints_for(self, part) -> int:
+        """Number of micro-joints on the outer contour of this part (0 = cut free)."""
+        if self.joints == "off" or self.joint_width <= 0:
+            return 0
+        if self.joints == "small" and max(part.width, part.height) >= self.joint_small:
+            return 0
+        if self.joint_count > 0:
+            return self.joint_count
+        around = loop_length(part.outline[0]) if part.outline else 2 * (part.width + part.height)
+        return max(2, min(8, math.ceil(around / 600)))
 
     def speed(self, family: str, thickness: float) -> float:
         table = self.speeds.get(family) or self.speeds.get("STEEL") or DEFAULT_SPEEDS["STEEL"]
@@ -266,6 +294,8 @@ class FlatPattern:
     revision: str = ""
     source: str = ""  # drawing file it came from
     saved: str = field(default_factory=lambda: date.today().isoformat())
+    bend_lines: list = field(default_factory=list)  # [[(x, y), (x, y)], ...] in the outline's coordinates
+    fixes: list = field(default_factory=list)  # what the import repaired in its drawing
 
     @property
     def size(self) -> tuple[float, float]:
@@ -312,7 +342,9 @@ class FlatLibrary:
             self.flats[_key(code)] = FlatPattern(
                 code=code, name=part.name, material=part.material, thickness=part.thickness,
                 outline=[[(float(x), float(y)) for x, y in loop] for loop in part.outline],
-                drawing_no=part.drawing_no or drawing_no, revision=revision, source=source)
+                drawing_no=part.drawing_no or drawing_no, revision=revision, source=source,
+                bend_lines=[[(float(x), float(y)) for x, y in line] for line in getattr(part, "bend_lines", [])],
+                fixes=list(getattr(part, "cad_fixes", [])))
             n += 1
         return n
 
@@ -332,6 +364,7 @@ class FlatLibrary:
         for raw in (data or {}).get("flats", []):
             kw = {k: v for k, v in raw.items() if k in FlatPattern.__dataclass_fields__}
             kw["outline"] = [[(float(x), float(y)) for x, y in loop] for loop in kw.get("outline") or []]
+            kw["bend_lines"] = [[(float(x), float(y)) for x, y in line] for line in kw.get("bend_lines") or []]
             kw["thickness"] = float(kw.get("thickness") or 0)
             flat = FlatPattern(**kw)
             if flat.code:
@@ -411,7 +444,8 @@ def demand_from_jobs(jobs, library: FlatLibrary, programs: list[CutProgram] | No
             material = flat.material or "SS400"
             out.parts.append(NestPart(key=key, code=p.code, name=p.name or flat.name, material=material,
                                       thickness=thickness, width=w, height=h, qty=math.ceil(left),
-                                      net_area=flat.net_area, outline=flat.outline, job=job.job_no))
+                                      net_area=flat.net_area, outline=flat.outline, job=job.job_no,
+                                      bend_lines=flat.bend_lines, fixes=flat.fixes))
     return out
 
 
@@ -442,6 +476,14 @@ def check_part(part: NestPart, params: LaserParams) -> list[Issue]:
     if not outline:
         add(WARN, "ไม่มีรูปคลี่ – วางเป็นสี่เหลี่ยมตามขนาด")
         return out
+    if part.fixes:  # the check before cutting repaired its drawing: say what, and what still needs a look
+        open_label = FIX_LABELS[FIX_OPEN_IN_PART]
+        unfixed = [t for t in part.fixes if t.startswith(open_label)]
+        done = [t for t in part.fixes if not t.startswith(open_label)]
+        if unfixed:
+            add(WARN, " · ".join(unfixed) + " – ไม่ถูกตัด ตรวจว่าขาดรูหรือไม่")
+        if done:
+            add(INFO, "แก้แบบอัตโนมัติ: " + " · ".join(done))
     if t:
         small = []
         for hole in outline[1:]:
@@ -459,7 +501,10 @@ def check_part(part: NestPart, params: LaserParams) -> list[Issue]:
     if not params.fits_bed(w, h):
         add(ERROR, f"ใหญ่กว่าโต๊ะเครื่อง {w:.0f}x{h:.0f} มม. (เครื่องรับได้ {params.bed_w:.0f}x{params.bed_l:.0f})")
     if max(w, h) < params.small_part:
-        add(WARN, f"ชิ้นเล็ก {w:.0f}x{h:.0f} มม. – อาจกระดก/ตกร่องโต๊ะตัด ใช้ micro-joint")
+        if params.joints_for(part):
+            add(INFO, f"ชิ้นเล็ก {w:.0f}x{h:.0f} มม. – เว้น Gap/micro-joint {params.joints_for(part)} จุดให้แล้ว")
+        else:
+            add(WARN, f"ชิ้นเล็ก {w:.0f}x{h:.0f} มม. – อาจกระดก/ตกร่องโต๊ะตัด ใช้ micro-joint")
     seen: dict[tuple, int] = {}
     for loop in outline:
         sig = tuple(sorted((round(float(x), 1), round(float(y), 1)) for x, y in loop))
@@ -556,7 +601,7 @@ class CutProgram:
         it = self.items[key]
         return NestPart(key=key, code=it.get("code", ""), name=it.get("name", ""), material=self.material,
                         thickness=self.thickness, width=it["width"], height=it["height"], qty=1,
-                        outline=it.get("outline") or [], job=it.get("job", ""))
+                        outline=it.get("outline") or [], job=it.get("job", ""), bend_lines=it.get("bends") or [])
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -566,6 +611,7 @@ class CutProgram:
         kw = {k: v for k, v in data.items() if k in cls.__dataclass_fields__}
         for it in (kw.get("items") or {}).values():
             it["outline"] = [[(float(x), float(y)) for x, y in loop] for loop in it.get("outline") or []]
+            it["bends"] = [[(float(x), float(y)) for x, y in line] for line in it.get("bends") or []]
         return cls(**kw)
 
 
@@ -625,7 +671,7 @@ def make_programs(groups: list[NestGroup], queue: CutQueue, params: LaserParams,
             for pl in sheet.placements:
                 p = g.parts[pl.part]
                 prog.items.setdefault(p.key, {"code": p.code, "name": p.name, "job": p.job, "width": p.width,
-                                              "height": p.height, "outline": p.outline})
+                                              "height": p.height, "outline": p.outline, "bends": p.bend_lines})
                 prog.placements.append({"key": p.key, "x": pl.x, "y": pl.y, "w": pl.w, "h": pl.h,
                                         "rotated": pl.rotated})
                 if p.outline:
@@ -709,12 +755,73 @@ def _oriented(pts: list[tuple[float, float]], ccw: bool) -> list[tuple[float, fl
     return pts if (_signed_area(pts) > 0) == ccw else list(reversed(pts))
 
 
-def _add_loops(msp, outline: list, transform, params: LaserParams) -> None:
+def micro_joints(loop: list, count: int, width: float) -> list[list[tuple[float, float]]]:
+    """The closed loop as open pieces with `count` gaps of `width` mm left uncut (Gap / micro-joint).
+    The gaps go in the middle of the longest straight edges, spread around the part (evenly on a curve)."""
+    pts = [(float(x), float(y)) for x, y in loop]
+    if len(pts) > 2 and math.dist(pts[0], pts[-1]) < 1e-6:
+        pts = pts[:-1]
+    n = len(pts)
+    cum = [0.0]
+    for i in range(n):
+        cum.append(cum[-1] + math.dist(pts[i], pts[(i + 1) % n]))
+    total = cum[-1]
+    if count <= 0 or n < 2 or total <= count * width * 4:
+        return [pts + pts[:1]]
+
+    def apart(pos: float, chosen: list[float], sep: float) -> bool:
+        return all(min(abs(pos - c), total - abs(pos - c)) >= sep for c in chosen)
+
+    chosen: list[float] = []
+    sep = total / (2 * count)
+    for i in sorted(range(n), key=lambda k: cum[k] - cum[k + 1]):  # longest edges first
+        if cum[i + 1] - cum[i] < max(4 * width, 3.0) or len(chosen) == count:
+            break
+        pos = (cum[i] + cum[i + 1]) / 2
+        if apart(pos, chosen, sep):
+            chosen.append(pos)
+    k = 0
+    while len(chosen) < count and k < 4 * count:  # round parts: spread evenly
+        pos = (k % count + 0.5) * total / count + (k // count) * sep / 2
+        if apart(pos, chosen, sep / 2):
+            chosen.append(pos % total)
+        k += 1
+    chosen.sort()
+
+    def point_at(d: float) -> tuple[float, float]:
+        d %= total
+        i = min(n - 1, max(0, bisect.bisect_right(cum, d) - 1))
+        a, b = pts[i], pts[(i + 1) % n]
+        length = cum[i + 1] - cum[i]
+        t = (d - cum[i]) / length if length else 0.0
+        return a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t
+
+    pieces = []
+    for j, pos in enumerate(chosen):
+        start = pos + width / 2
+        end = chosen[(j + 1) % len(chosen)] - width / 2 + (total if j == len(chosen) - 1 else 0)
+        if end - start <= 0:
+            continue
+        corners = sorted((cum[i] + m * total, pts[i]) for m in (0, 1) for i in range(n)
+                         if start < cum[i] + m * total < end)
+        pieces.append([point_at(start)] + [p for _d, p in corners] + [point_at(end)])
+    return pieces
+
+
+def _add_loops(msp, outline: list, transform, params: LaserParams, joints: int = 0) -> None:
     for k, loop in enumerate(outline):
         pts = [transform(p) for p in loop]
         if len(pts) > 2 and math.dist(pts[0], pts[-1]) < 1e-6:
             pts = pts[:-1]
         layer = params.layer_outer if k == 0 else params.layer_inner
+        if k == 0 and joints:
+            for piece in micro_joints(_oriented(pts, ccw=True), joints, params.joint_width):
+                piece = [(round(x, 3), round(y, 3)) for x, y in piece]
+                if params.dxf_version == "R12":
+                    msp.add_polyline2d(piece, dxfattribs={"layer": layer})
+                else:
+                    msp.add_lwpolyline(piece, dxfattribs={"layer": layer})
+            continue
         circle = circle_of(pts)
         if circle:
             cx, cy, r = circle
@@ -742,6 +849,34 @@ def _add_mark(msp, text: str, cx: float, cy: float, w: float, h: float, params: 
         (cx, cy), align=TextEntityAlignment.MIDDLE_CENTER)
 
 
+def _add_bends(msp, bends: list, transform, params: LaserParams) -> None:
+    """Bend lines on the MARK layer: short ticks at both edges of the part, or the whole line."""
+    if params.mark_bends not in ("ticks", "full"):
+        return
+    for line in bends or []:
+        if len(line) < 2:
+            continue
+        (ax, ay), (bx, by) = transform(line[0]), transform(line[-1])
+        length = math.hypot(bx - ax, by - ay)
+        if length < 1:
+            continue
+        if params.mark_bends == "full":
+            ends = [((ax, ay), (bx, by))]
+        else:
+            t = min(params.mark_tick, length / 3) / length
+            ends = [((ax, ay), (ax + (bx - ax) * t, ay + (by - ay) * t)),
+                    ((bx, by), (bx - (bx - ax) * t, by - (by - ay) * t))]
+        for a, b in ends:
+            msp.add_line((round(a[0], 3), round(a[1], 3)), (round(b[0], 3), round(b[1], 3)),
+                         dxfattribs={"layer": params.layer_mark})
+
+
+def _add_part(msp, part: NestPart, transform, params: LaserParams) -> None:
+    outline = part.outline or _rect(part.width, part.height)
+    _add_loops(msp, outline, transform, params, params.joints_for(part))
+    _add_bends(msp, part.bend_lines, transform, params)
+
+
 def _rect(w: float, h: float) -> list:
     return [[(0.0, 0.0), (w, 0.0), (w, h), (0.0, h)]]
 
@@ -759,7 +894,7 @@ def export_program_dxf(prog: CutProgram, path: str | Path, params: LaserParams) 
         outline = part.outline or _rect(part.width, part.height)
         if not part.outline:
             part.outline = outline
-        _add_loops(msp, outline, lambda pt, part=part, pl=pl: place_point(pt, part, pl, 0, 0), params)
+        _add_part(msp, part, lambda pt, part=part, pl=pl: place_point(pt, part, pl, 0, 0), params)
         _add_mark(msp, part.code, pl.x + pl.w / 2, pl.y + pl.h / 2, pl.w, pl.h, params)
     path = Path(path)
     doc.saveas(path)
@@ -772,14 +907,36 @@ def export_part_dxf(part: NestPart, path: str | Path, params: LaserParams) -> Pa
     msp = doc.modelspace()
     outline = part.outline or _rect(part.width, part.height)
     x0, y0, _x1, _y1 = _bbox(outline[0])
-    _add_loops(msp, outline, lambda pt: (float(pt[0]) - x0, float(pt[1]) - y0), params)
+    _add_part(msp, part, lambda pt: (float(pt[0]) - x0, float(pt[1]) - y0), params)
     _add_mark(msp, part.code, part.width / 2, part.height / 2, part.width, part.height, params)
     path = Path(path)
     doc.saveas(path)
     return path
 
 
-def program_png(prog: CutProgram, path: str | Path, width_px: int = 900) -> Path:
+def export_drawing_dxf(data, path: str | Path, params: LaserParams, codes: dict[int, str] | None = None) -> int:
+    """The drawing as the laser should get it: only the closed cut lines of its parts (outer / holes on their
+    layers), where they are in the drawing, bend lines and codes on the MARK layer when marking is on.
+    Texts, dimensions, the frame and every line taken out by the check are left out. Returns the parts written."""
+    doc = _new_doc(params)
+    msp = doc.modelspace()
+    n = 0
+    for i, prof in enumerate(data.profiles):
+        if not prof.is_outer:
+            continue
+        outline = [prof.points] + [data.profiles[h].points for h in prof.holes]
+        part = NestPart(str(i), (codes or {}).get(i, prof.info.get("part_no", "")), "", "", 0,
+                        prof.size[0], prof.size[1], 1, outline=outline, bend_lines=[list(b) for b in prof.bends])
+        _add_part(msp, part, lambda pt: (float(pt[0]), float(pt[1])), params)
+        x0, y0, x1, y1 = prof.bbox
+        _add_mark(msp, part.code, (x0 + x1) / 2, (y0 + y1) / 2, x1 - x0, y1 - y0, params)
+        n += 1
+    path = Path(path)
+    doc.saveas(path)
+    return n
+
+
+def program_png(prog: CutProgram, path: str | Path, width_px: int = 900, params: LaserParams | None = None) -> Path:
     """Picture of the sheet with the parts (for the cut order and the operator)."""
     from PIL import Image, ImageDraw
 
@@ -805,6 +962,9 @@ def program_png(prog: CutProgram, path: str | Path, width_px: int = 900) -> Path
                     draw.polygon(pts, fill=(120, 72, 30), outline=(242, 140, 40))
                 else:
                     draw.polygon(pts, fill=(22, 40, 62), outline=(79, 195, 247))
+        if params is not None and params.mark_bends in ("ticks", "full"):
+            for line in part.bend_lines:
+                draw.line([to_px(place_point(pt, part, pl, 0, 0)) for pt in line[:2]], fill=(46, 204, 113), width=1)
         label = _ascii(part.code)[:18]
         if label:
             cx, cy = to_px((pl.x + pl.w / 2, pl.y + pl.h / 2))
@@ -855,7 +1015,7 @@ ISSUE_HEADERS = ["ระดับ", "รหัส", "ชิ้นส่วน", 
 
 
 def issue_rows(issues: list[Issue]) -> list[list]:
-    return [["ต้องแก้" if i.level == ERROR else "ควรตรวจ", i.code, i.name, i.text] for i in issues]
+    return [[LEVEL_TEXT.get(i.level, i.level), i.code, i.name, i.text] for i in issues]
 
 
 def export_cut_order(programs: list[CutProgram], path: str | Path, params: LaserParams,
@@ -909,7 +1069,7 @@ def export_package(programs: list[CutProgram], folder: str | Path, params: Laser
         sub = folder / "programs" / _safe(f"{prog.family}_t{prog.thickness:g}")
         sub.mkdir(parents=True, exist_ok=True)
         dxf = export_program_dxf(prog, sub / f"{prog.no}_x{prog.repeat}.dxf", params)
-        png = program_png(prog, sub / f"{prog.no}.png")
+        png = program_png(prog, sub / f"{prog.no}.png", params=params)
         prog.files = [str(dxf)]
         images[prog.no] = str(png)
         written += [dxf, png]

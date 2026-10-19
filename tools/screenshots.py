@@ -119,6 +119,14 @@ def main() -> int:
     dialog.table.selectRow(1)
     shot(dialog, "7c_dwg_code_name_thickness.png")
     dialog.close()
+    broken = dwg_io.read_drawing(samples / "RRS-T-FIX_broken_lines.dxf")
+    dialog = DrawingImportDialog([broken], dwg_io.DEFAULT_DENSITIES, w)
+    dialog.show()
+    dialog.tabs.setCurrentIndex(2)
+    shot(dialog, "7d_dwg_precut_check.png")
+    dialog.check_table.selectRow(0)  # the corner that does not meet, zoomed
+    shot(dialog, "7e_dwg_precut_zoom.png")
+    dialog.close()
 
     mapping = ColumnMappingDialog(prepare_import(samples / "zwcad_tableexport_bom.csv"), "zwcad_tableexport_bom.csv", w)
     mapping.show()
@@ -198,6 +206,13 @@ def main() -> int:
     cut_page.tabs.setCurrentIndex(3)
     cut_page.flats.selectRow(0)
     shot(w, "14e_flat_library.png")
+    from partlist_studio.ui.pages.nesting import LaserSettingsDialog
+
+    settings_dialog = LaserSettingsDialog(cut_page.laser_params(), w)
+    settings_dialog.show()
+    settings_dialog.tabs.setCurrentIndex(1)
+    shot(settings_dialog, "14f_laser_precut_settings.png")
+    settings_dialog.close()
     w.go("stock")
     w.pages["stock"].tabs.setCurrentIndex(2)
     w.pages["stock"].replenish.run()

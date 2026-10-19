@@ -9,10 +9,10 @@ from pathlib import Path
 
 from PySide6.QtCore import QPointF, Qt, QUrl
 from PySide6.QtGui import QBrush, QColor, QDesktopServices, QPainter, QPen, QPolygonF
-from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox, QFileDialog,
-                               QFormLayout, QGraphicsScene, QGraphicsView, QGridLayout, QHBoxLayout, QLabel,
-                               QLineEdit, QListWidget, QListWidgetItem, QMenu, QMessageBox, QSpinBox, QSplitter,
-                               QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox, QFileDialog, QGroupBox,
+                               QFormLayout, QFrame, QGraphicsScene, QGraphicsView, QGridLayout, QHBoxLayout, QLabel,
+                               QLineEdit, QListWidget, QListWidgetItem, QMenu, QMessageBox, QScrollArea, QSpinBox,
+                               QSplitter, QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget)
 
 from ...core import laser, nesting
 from ...core.nesting import Placement
@@ -119,9 +119,14 @@ class LaserSettingsDialog(QDialog):
     def __init__(self, params: laser.LaserParams, parent=None):
         super().__init__(parent)
         self.setWindowTitle("ค่าเครื่องตัดเลเซอร์")
-        self.resize(760, 640)
+        self.resize(780, 720)
         self.params = params
-        lay = QVBoxLayout(self)
+        outer = QVBoxLayout(self)
+        self.tabs = QTabWidget()
+        outer.addWidget(self.tabs, 1)
+        page = QWidget()
+        lay = QVBoxLayout(page)
+        self.tabs.addTab(page, "เครื่อง · ความเร็ว · ไฟล์")
         top = QHBoxLayout()
         top.addWidget(QLabel("เครื่องตัด"))
         self.machine = QComboBox()
@@ -199,12 +204,11 @@ class LaserSettingsDialog(QDialog):
             self.layers[key] = w
             form.addWidget(QLabel(label), 4 + i // 2, (i % 2) * 2)
             form.addWidget(w, 4 + i // 2, (i % 2) * 2 + 1)
-        self.mark = QCheckBox("แกะสลักรหัสชิ้นงานบนชิ้น (เลเยอร์ MARK)")
+        self.mark = QCheckBox("มาร์ครหัสชิ้นงานบนชิ้น")
         self.mark.setChecked(params.mark_codes)
         self.sheet = QCheckBox("วาดกรอบแผ่นในไฟล์ (เลเยอร์ SHEET – ระวังเครื่องตัดตามกรอบ)")
         self.sheet.setChecked(params.sheet_outline)
-        form.addWidget(self.mark, 6, 0, 1, 2)
-        form.addWidget(self.sheet, 6, 2, 1, 2)
+        form.addWidget(self.sheet, 6, 0, 1, 4)
         colors = QHBoxLayout()
         self.colors = {}
         for key, label in (("color_outer", "สีรอบนอก"), ("color_inner", "สีรู"), ("color_mark", "สีแกะสลัก")):
@@ -223,12 +227,88 @@ class LaserSettingsDialog(QDialog):
         tip.setWordWrap(True)
         form.addWidget(tip, 8, 0, 1, 4)
         lay.addLayout(form)
+        self.tabs.addTab(self._build_precut(params), "ก่อนส่งตัด (Mark · Nest · Gap)")
         box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         box.button(QDialogButtonBox.Ok).setText("บันทึก")
         box.button(QDialogButtonBox.Cancel).setText("ยกเลิก")
         box.accepted.connect(self.accept)
         box.rejected.connect(self.reject)
-        lay.addWidget(box)
+        outer.addWidget(box)
+
+    def _build_precut(self, params: laser.LaserParams) -> QWidget:
+        """What goes into the laser files besides the cut lines: marks, how parts are laid out, joints."""
+        page = QWidget()
+        lay = QVBoxLayout(page)
+
+        def spin(value: float, lo: float, hi: float, suffix: str, decimals: int = 1) -> QDoubleSpinBox:
+            w = QDoubleSpinBox()
+            w.setRange(lo, hi)
+            w.setDecimals(decimals)
+            w.setSuffix(suffix)
+            w.setValue(float(value))
+            w.setMaximumWidth(140)
+            return w
+
+        def hint(text: str) -> QLabel:
+            label = QLabel(text)
+            label.setObjectName("Hint")
+            label.setWordWrap(True)
+            return label
+
+        mark = QGroupBox("Mark – มาร์คบนชิ้นงาน (เลเยอร์ MARK: เลเซอร์กำลังต่ำ ไม่ตัดขาด)")
+        form = QFormLayout(mark)
+        form.addRow(self.mark)
+        self.mark_bends = QComboBox()
+        for key, label in laser.MARK_BENDS.items():
+            self.mark_bends.addItem(label, key)
+        self.mark_bends.setCurrentIndex(max(0, self.mark_bends.findData(params.mark_bends)))
+        form.addRow("เส้นพับ", self.mark_bends)
+        self.mark_tick = spin(params.mark_tick, 1, 100, " มม.")
+        form.addRow("ความยาวขีดที่ขอบ", self.mark_tick)
+        form.addRow(hint("เส้นพับอ่านจากแบบ (เลเยอร์ BEND/พับ/CENTER หรือเส้นตรงที่ผ่าชิ้นจากขอบถึงขอบ) – "
+                         "ช่างพับเห็นตำแหน่งพับบนชิ้น · ตั้งเลเยอร์ MARK ในซอฟต์แวร์ของเครื่องเป็นงานมาร์คก่อน "
+                         "(ทดสอบด้วย ส่งออก ▾ → ไฟล์ทดสอบเลเยอร์) มิฉะนั้นเครื่องจะตัดตามเส้นมาร์ค"))
+        lay.addWidget(mark)
+
+        nest = QGroupBox("Nest – วางชิ้นงานบนแผ่น")
+        form = QFormLayout(nest)
+        self.gap_per_mm = spin(params.gap_per_mm, 0, 5, "", 2)
+        self.gap_per_mm.setSpecialValueText("ไม่ใช้ (ระยะเท่ากันทุกความหนา)")
+        form.addRow("ระยะห่างชิ้นงาน แผ่นหนา = ความหนา ×", self.gap_per_mm)
+        self.align = QCheckBox("หมุนชิ้นที่วาดเอียงให้ได้แผ่นตั้งต้นเล็กที่สุดก่อนวาง")
+        self.align.setChecked(params.align_parts)
+        form.addRow(self.align)
+        form.addRow(hint("ระยะห่างขั้นต่ำ ขอบแผ่น และหมุน 90° ตั้งที่หน้า วางแผนตัด – แผ่นหนาใช้ระยะที่มากกว่า "
+                         "(เช่น หนา 12 มม. × 1 = 12 มม.) กันความร้อนทำชิ้นข้างเคียงเสียรูป"))
+        lay.addWidget(nest)
+
+        gap = QGroupBox("Gap / Micro-joint – เว้นไม่ตัดบางจุดให้ชิ้นติดแผ่น (ไม่กระดก/ไม่ตกร่องโต๊ะ)")
+        form = QFormLayout(gap)
+        self.joints = QComboBox()
+        for key, label in laser.JOINTS.items():
+            self.joints.addItem(label, key)
+        self.joints.setCurrentIndex(max(0, self.joints.findData(params.joints)))
+        form.addRow("ใส่ที่", self.joints)
+        self.joint_small = spin(params.joint_small, 10, 2000, " มม.", 0)
+        form.addRow("ชิ้นเล็ก = ด้านยาวน้อยกว่า", self.joint_small)
+        self.joint_width = spin(params.joint_width, 0.1, 5, " มม.", 2)
+        form.addRow("ความกว้างที่เว้น", self.joint_width)
+        self.joint_count = QSpinBox()
+        self.joint_count.setRange(0, 20)
+        self.joint_count.setSpecialValueText("อัตโนมัติตามขนาด")
+        self.joint_count.setValue(int(params.joint_count))
+        self.joint_count.setMaximumWidth(160)
+        form.addRow("จำนวนจุดต่อชิ้น", self.joint_count)
+        form.addRow(hint("1 จุด = Gap ที่ปลายเส้นตัด · อัตโนมัติ: 2 จุดสำหรับชิ้นรอบไม่เกิน 600 มม. แล้วเพิ่ม 1 จุดทุก 600 มม. "
+                         "(สูงสุด 8) วางกลางด้านที่ยาวที่สุด · เส้นรอบนอกจะเป็นเส้นเปิด – ปิดตัวเลือก "
+                         "\u201cต่อเส้นอัตโนมัติ\u201d ตอนนำเข้าในซอฟต์แวร์ของเครื่อง หรือใส่ Gap ในเครื่องแทน"))
+        lay.addWidget(gap)
+        lay.addStretch(1)
+        scroll = QScrollArea()
+        scroll.setWidget(page)
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        return scroll
 
     def _add_row(self) -> None:
         self.speeds.insertRow(self.speeds.rowCount())
@@ -294,6 +374,10 @@ class LaserSettingsDialog(QDialog):
             setattr(p, key, w.text().strip() or getattr(laser.LaserParams(), key))
         p.mark_codes = self.mark.isChecked()
         p.sheet_outline = self.sheet.isChecked()
+        p.mark_bends, p.mark_tick = self.mark_bends.currentData(), self.mark_tick.value()
+        p.gap_per_mm, p.align_parts = self.gap_per_mm.value(), self.align.isChecked()
+        p.joints, p.joint_small = self.joints.currentData(), self.joint_small.value()
+        p.joint_width, p.joint_count = self.joint_width.value(), self.joint_count.value()
         p.machine = self.machine.currentText()
         for key, combo in self.colors.items():
             setattr(p, key, int(combo.currentData()))
@@ -680,10 +764,10 @@ class NestingPage(QWidget):
         demand = self.demand or laser.Demand()
         job_of = {p.key: p.job for p in demand.parts}
         rows = [["ต้องแก้", code, name, job, f"{why} – {qty:g} ชิ้น"] for job, code, name, qty, why in demand.missing]
-        rows += [["ต้องแก้" if i.level == laser.ERROR else "ควรตรวจ", i.code, i.name, job_of.get(i.key, ""), i.text]
-                 for i in self.issues]
+        rows += [[laser.LEVEL_TEXT.get(i.level, i.level), i.code, i.name, job_of.get(i.key, ""), i.text]
+                 for i in sorted(self.issues, key=lambda i: [laser.ERROR, laser.WARN, laser.INFO].index(i.level))]
         fill(self.checks, rows, status_col=0)
-        n = len(rows)
+        n = sum(1 for r in rows if r[0] != laser.LEVEL_TEXT[laser.INFO])
         self.tabs.setTabText(1, f"ตรวจก่อนตัด ({n})" if n else "ตรวจก่อนตัด")
 
     def _selected(self) -> None:
@@ -799,7 +883,7 @@ class NestingPage(QWidget):
             return
         params = self.laser_params()
         with tempfile.TemporaryDirectory() as tmp:
-            images = {p.no: str(laser.program_png(p, Path(tmp) / f"{p.no}.png")) for p in progs}
+            images = {p.no: str(laser.program_png(p, Path(tmp) / f"{p.no}.png", params=params)) for p in progs}
             laser.export_cut_order(progs, path, params, None, None, images)
         self.state.notify(f"บันทึก {Path(path).name} แล้ว")
 

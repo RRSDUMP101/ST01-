@@ -1,6 +1,7 @@
 """GUI smoke tests (run headless with QT_QPA_PLATFORM=offscreen)."""
 
 import os
+from collections import Counter
 
 import pytest
 
@@ -432,6 +433,73 @@ def test_laser_settings_dialog(app):
     dialog._use_machine()
     p = dialog.result_params()
     assert p.speed("STEEL", 3) == 4500 and p.bed_l == 3000 and p.machine.startswith("Fiber 3,000W")
+
+
+def test_precut_settings_tab(app):
+    from partlist_studio.core import laser
+    from partlist_studio.ui.pages.nesting import LaserSettingsDialog
+
+    dialog = LaserSettingsDialog(laser.LaserParams())
+    assert dialog.tabs.count() == 2 and dialog.tabs.tabText(1).startswith("ก่อนส่งตัด")
+    dialog.mark_bends.setCurrentIndex(dialog.mark_bends.findData("ticks"))
+    dialog.mark_tick.setValue(8)
+    dialog.joints.setCurrentIndex(dialog.joints.findData("small"))
+    dialog.joint_width.setValue(0.8)
+    dialog.joint_count.setValue(1)  # one Gap at the end of the contour
+    dialog.gap_per_mm.setValue(1.5)
+    dialog.align.setChecked(False)
+    p = laser.LaserParams.from_dict(dialog.result_params().to_dict())  # saved and read back
+    assert (p.mark_bends, p.mark_tick, p.joints, p.joint_width, p.joint_count) == ("ticks", 8, "small", 0.8, 1)
+    assert p.gap_per_mm == 1.5 and not p.align_parts and p.nest_params().gap_for(10) == 15
+    dialog.deleteLater()
+
+
+def test_drawing_dialog_precut_check(app, monkeypatch, tmp_path):
+    import ezdxf
+    from PySide6.QtWidgets import QFileDialog
+
+    from partlist_studio.core import cad_fix, dwg_io, laser
+    from partlist_studio.ui.dialogs import DrawingImportDialog
+
+    data = dwg_io.read_drawing(SAMPLES / "RRS-T-FIX_broken_lines.dxf")
+    params = laser.LaserParams(mark_bends="full")
+    dialog = DrawingImportDialog([data], dwg_io.DEFAULT_DENSITIES, laser_params=params)
+    assert dialog.tabs.tabText(2) == "ตรวจแบบก่อนตัด (แก้ 11 · ต้องแก้ 1)"
+    table = dialog.check_table
+    assert table.rowCount() == len(data.fixes) and table.item(0, 0).text() == "ต้องแก้แบบ"
+    assert "ปลายห่าง 3.0 มม." in table.item(0, 3).text()
+    states = [table.item(r, 0).text() for r in range(table.rowCount())]
+    assert states.count("แก้แล้ว") == 11 and states.count("ข้อมูล") == 4
+    codes = {table.item(r, 2).text() for r in range(table.rowCount()) if table.item(r, 1).text().startswith("ต่อเส้น")}
+    assert codes == {"RRS-T-101", "RRS-T-104"}
+    assert "ต้องแก้ในแบบ 1 จุด" in dialog.info_labels["open"].text()
+    table.selectRow(0)  # zooms to the corner that does not meet
+    assert dialog.preview._focus_item is not None
+    # the drawing office can have the repaired lines back, ready for the laser software
+    out = tmp_path / "clean.dxf"
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *a, **k: (str(out), ""))
+    dialog._save_clean()
+    ents = list(ezdxf.readfile(out).modelspace())
+    layers = Counter(e.dxf.layer for e in ents)
+    assert layers[params.layer_outer] == 3 and layers[params.layer_inner] == 1 and layers[params.layer_mark] == 2
+    assert not any(e.dxftype() in ("TEXT", "MTEXT") for e in ents)
+    # read again as drawn: the side panel falls apart, nothing is repaired
+    dialog.fix_on.setChecked(False)
+    dialog._recheck()
+    assert not dialog.drawings[0].fixes and dialog.check_table.rowCount() == 0
+    assert "RRS-T-101" not in [c.part.part_no for c in dialog.candidates[0]]
+    # and with a wider tolerance the 3 mm corner is joined too
+    dialog.fix_on.setChecked(True)
+    dialog.fix_tol.setValue(3.5)
+    dialog._recheck()
+    assert "RRS-T-103" in [c.part.part_no for c in dialog.candidates[0]]
+    assert all(f.fixed for f in dialog.drawings[0].fixes) and dialog.drawings[0].gap_tol == 3.5
+    assert dialog.table.rowCount() == len(dialog.candidates[0])
+    dialog.accept()
+    [(_d, parts)] = dialog.selected_parts()
+    side = next(p for p in parts if p.part_no == "RRS-T-101")
+    assert side.bend_lines and any(t.startswith(cad_fix.FIX_LABELS[cad_fix.FIX_GAP]) for t in side.cad_fixes)
+    dialog.deleteLater()
 
 
 def test_parts_ready_tab_readiness_tickets_and_scan(window, app, monkeypatch, tmp_path):

@@ -32,6 +32,8 @@
 7. **เทียบ Rev.** แบบ / Part List – เพิ่ม ตัด จำนวน ขนาด วัสดุ รูปคลี่
 8. **ชิ้นส่วนพร้อมประกอบ แยก 10 กลุ่มประกอบ** – สต็อก 6 ช่องต่อรหัส (พร้อม · จอง · ใช้ได้ · ระหว่างผลิต · จะได้ · ขาด),
    ตำแหน่งเก็บ, ป้าย QR ชั้นวาง
+9. **ตรวจและแก้แบบก่อนส่งตัด** – ต่อมุมที่ต่อไม่สนิท ตัดเส้นเกิน ลบเส้นซ้ำ แยกเส้นพับ ลบตัวเลข `90` ที่ลืมลบ อัตโนมัติ ·
+   ใส่ **Mark** (รหัส, เส้นพับ) · **Nest** (ระยะห่างตามความหนา, หมุนชิ้นที่วาดเอียง) · **Gap / micro-joint** ([docs/PRE_CUT_CHECK.md](docs/PRE_CUT_CHECK.md))
 
 รายละเอียดการวิเคราะห์ระบบ DWG ↔ สโตร์ ↔ ผลิต: [docs/DWG_INTEGRATION.md](docs/DWG_INTEGRATION.md)
 การเชื่อม Express / Google Sheet / ไฟล์ Excel ของบริษัท: [docs/EXPRESS_INTEGRATION.md](docs/EXPRESS_INTEGRATION.md)
@@ -39,6 +41,7 @@
 ปรับเมนูให้เป็นเส้นทางงานเดียว 6 ขั้น + ปุ่มขั้นต่อไป: [docs/UI_FLOW_REDESIGN.md](docs/UI_FLOW_REDESIGN.md)
 ระบบสต็อกชิ้นส่วนรอประกอบ + การผลิตถึงประกอบ (กลุ่มประกอบ, ใบงาน QR, ความพร้อมประกอบ – ระยะ 1 ทำแล้ว): [docs/STOCK_PRODUCTION_DESIGN.md](docs/STOCK_PRODUCTION_DESIGN.md)
 จากแบบ DWG สู่เครื่องตัดเลเซอร์: [docs/LASER_CUTTING.md](docs/LASER_CUTTING.md)
+ตรวจและแก้แบบก่อนส่งตัด · Mark · Nest · Gap: [docs/PRE_CUT_CHECK.md](docs/PRE_CUT_CHECK.md)
 
 ## ติดตั้ง / รัน
 

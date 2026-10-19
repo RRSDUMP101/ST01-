@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from PySide6.QtCore import QUrl
 from PySide6.QtGui import QDesktopServices
-from PySide6.QtWidgets import (QComboBox, QDoubleSpinBox, QFileDialog, QFormLayout, QHBoxLayout, QHeaderView, QLabel,
-                               QLineEdit, QScrollArea, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QFormLayout, QHBoxLayout, QHeaderView,
+                               QLabel, QLineEdit, QScrollArea, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
 from ...core.dwg_io import DEFAULT_DENSITIES, THICKNESS_MODES, find_converter
 from ...core.models import to_number
@@ -82,6 +82,25 @@ class SettingsPage(QWidget):
         self.thk_default.setMaximumWidth(160)
         self.thk_default.valueChanged.connect(lambda v: setattr(self.state.settings, "default_thickness", v))
         form.addRow("ความหนาเริ่มต้น / ที่กำหนด", self.thk_default)
+        fix_row = QHBoxLayout()
+        self.auto_fix = QCheckBox("แก้เส้นตัดอัตโนมัติตอนนำเข้า")
+        self.auto_fix.setToolTip("ต่อมุมที่ต่อไม่สนิท ตัดเส้นเกินมุม ลบเส้นซ้ำ/เส้นเกิน แยกเส้นพับ (ไม่ตัด) "
+                                 "และลบตัวเลข/ตัวอักษรที่เป็นเส้นในชิ้นงาน – ทุกจุดแสดงในแท็บ ตรวจแบบก่อนตัด")
+        self.auto_fix.setChecked(s.auto_fix)
+        self.auto_fix.toggled.connect(lambda on: setattr(self.state.settings, "auto_fix", on))
+        fix_row.addWidget(self.auto_fix)
+        fix_row.addWidget(QLabel("ต่อปลายเส้นที่ห่างไม่เกิน"))
+        self.gap_tol = QDoubleSpinBox()
+        self.gap_tol.setRange(0.05, 5.0)
+        self.gap_tol.setDecimals(2)
+        self.gap_tol.setSingleStep(0.1)
+        self.gap_tol.setSuffix(" mm")
+        self.gap_tol.setValue(s.gap_tol)
+        self.gap_tol.setMaximumWidth(120)
+        self.gap_tol.valueChanged.connect(lambda v: setattr(self.state.settings, "gap_tol", v))
+        fix_row.addWidget(self.gap_tol)
+        fix_row.addStretch(1)
+        form.addRow("ตรวจแบบก่อนตัด", fix_row)
         cut.body.addLayout(form)
         hint = QLabel("แนะนำให้ฝ่ายเขียนแบบวาดรูปคลี่บนเลเยอร์เดียวกันเสมอ เช่น <b>CUT</b> และใช้ Title Block ที่มี "
                       "Attribute: DWG_NO, TITLE, MATERIAL, THK, QTY, REV · ถ้าแบบเดียวมีหลายชิ้น ให้เขียนป้ายไว้ใน"

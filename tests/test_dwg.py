@@ -1,6 +1,8 @@
+import math
 import shutil
 import stat
 import sys
+from collections import Counter
 
 import pytest
 
@@ -369,3 +371,70 @@ def test_material_line_under_a_stacked_label(tmp_path):
     assert got[0] == (16, dwg_io.QTY_FROM_PART) and not data.note_material
     assert [(c.part.material, c.material_source) for c in cands] == [("Aluminium", dwg_io.MAT_FROM_PART),
                                                                      ("", dwg_io.MAT_MISSING)]
+
+
+def test_broken_lines_repaired_before_cutting():
+    from partlist_studio.core import cad_fix as cf
+
+    data = dwg_io.read_drawing(SAMPLES / "RRS-T-FIX_broken_lines.dxf")
+    kinds = Counter(f.kind for f in data.fixes)
+    assert kinds == {cf.FIX_GAP: 2, cf.FIX_OVERSHOOT: 2, cf.FIX_DUPLICATE: 1, cf.FIX_DUP_LOOP: 1, cf.FIX_STRAY: 4,
+                     cf.FIX_GLYPH: 1, cf.FIX_BEND: 2, cf.FIX_TEXT: 2, cf.FIX_OPEN: 1}
+    cands = {c.part.part_no: c.part for c in dwg_io.drawing_to_candidates(data)}
+    assert sorted(cands) == ["RRS-T-101", "RRS-T-102", "RRS-T-104"]  # 103 is 3 mm open: not guessed
+    side = cands["RRS-T-101"]
+    assert len(side.outline) == 2 and side.spec == "t3 x 300 x 150"  # the round hole kept, '90' and the mark not
+    assert side.weight == pytest.approx((300 * 150 - math.pi * 100) * 3 * 7.85e-6, rel=0.01)
+    assert side.bend_lines == [[(150.0, 0.0), (150.0, 150.0)], [(230.0, 0.0), (230.0, 150.0)]]
+    assert any(t.startswith("ต่อเส้นที่ต่อไม่สนิท 1 จุด (ห่างสุด 0.30") for t in side.cad_fixes)
+    assert "ข้อความในชิ้นงาน (ไม่ส่งไปตัด): 90, UP 90° R 0" in side.cad_fixes
+    [unfixed] = [f for f in data.fixes if not f.fixed]
+    assert data.open_chains == 1 and "ปลายห่าง 3.0 มม." in unfixed.text
+    assert {k for k, _pts in data.removed} >= {cf.FIX_BEND, cf.FIX_STRAY, cf.FIX_GLYPH, cf.FIX_OPEN}
+    # read as drawn: the side panel falls apart into its bend panels and the letters
+    raw = dwg_io.read_drawing(SAMPLES / "RRS-T-FIX_broken_lines.dxf", repair=False)
+    assert not raw.fixes and raw.open_chains > 1 and "RRS-T-101" not in {
+        c.part.part_no for c in dwg_io.drawing_to_candidates(raw)}
+    # wider tolerance: the 3 mm corner is joined too
+    wide = dwg_io.read_drawing(SAMPLES / "RRS-T-FIX_broken_lines.dxf", gap_tol=3.5)
+    assert "RRS-T-103" in {c.part.part_no for c in dwg_io.drawing_to_candidates(wide)} and wide.open_chains == 0
+
+
+def test_assembly_drawing_lines_not_repaired():
+    data = dwg_io.read_drawing(SAMPLES / "RRS-AS-100_tailgate_assembly.dxf")
+    assert data.bom and not data.fixes and data.gap_tol == 0 and "BOM" in data.repair_note
+
+
+def test_repair_lines_cases():
+    from partlist_studio.core import cad_fix as cf
+
+    def rect(x0, y0, w, h):
+        return [[(x0, y0), (x0 + w, y0)], [(x0 + w, y0), (x0 + w, y0 + h)], [(x0 + w, y0 + h), (x0, y0 + h)],
+                [(x0, y0 + h), (x0, y0)]]
+
+    def run(lines, **kw):
+        return cf.repair_lines([(pts, "CUT") for pts in lines], **kw)
+
+    lines = rect(0, 0, 100, 50)
+    lines[3] = [(0, 50), (0, 0.3)]
+    r = run(lines)
+    assert [round(abs(cf.signed_area(p)))for p, _l in r.loops] == [5000] and r.fixes[0].kind == cf.FIX_GAP
+    assert not run(lines, gap_tol=0.2).loops  # wider than allowed: left open
+    lines = rect(0, 0, 100, 50)
+    lines[0] = [(-2, 0), (103, 0)]  # past both corners
+    r = run(lines)
+    assert len(r.loops) == 1 and [p.spur for p in r.pieces] == [True, True]
+    lines = rect(0, 0, 100, 50)
+    lines[0], lines[1] = [(0, 0), (105, 0)], [(100, 0.4), (100, 50)]  # stops short of a line running past it
+    r = run(lines)
+    assert len(r.loops) == 1 and r.fixes[0].kind == cf.FIX_GAP and round(r.fixes[0].size, 1) == 0.4
+    r = run(rect(0, 0, 100, 50) + [[(30, 0), (30, 50)]])  # a line across the part from edge to edge: a bend line
+    assert len(r.loops) == 1 and r.bends == [((30.0, 0.0), (30.0, 50.0))]
+    r = run(rect(0, 0, 100, 50) + rect(40, 20, 10, 10) + [[(0, 25), (40, 25)]])  # a line joining hole and edge
+    assert sorted(round(abs(cf.signed_area(p))) for p, _l in r.loops) == [100, 5000] and len(r.pieces) == 1
+    r = run(rect(0, 0, 100, 50) + [[(0, 0), (100, 0)]])  # drawn twice
+    assert len(r.loops) == 1 and r.fixes[0].kind == cf.FIX_DUPLICATE
+    lines = rect(0, 0, 100, 50)
+    lines[0], lines[3] = [(-1, 0), (100, 0)], [(0, 50), (0, -1)]  # both lines run on past the corner they cross at
+    r = run(lines)
+    assert len(r.loops) == 1 and [(p.spur, round(p.length)) for p in r.pieces] == [(True, 1), (True, 1)]

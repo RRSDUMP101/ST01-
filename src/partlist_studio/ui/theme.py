@@ -63,9 +63,11 @@ STATUS_COLORS = {
     "กำลังตัด": "#E08A1E",
     "ตัดแล้ว": "#2E9D5B",
     "ต้องแก้": "#D64545",
+    "แก้แล้ว": "#2E9D5B",
 }
 
 ERROR_BG = QColor("#FDECEC")
+OK_BG = QColor("#E8F6EE")
 WARN_BG = QColor("#FFF6E5")
 
 

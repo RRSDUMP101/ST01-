@@ -107,6 +107,67 @@ def frame_set():
     doc.saveas(OUT / "RRS-T-SET_frame_parts.dxf")
 
 
+def broken_lines():
+    """A drawing sent before it was checked: corners that do not meet, a line past the corner, a line drawn twice,
+    bend lines on the cut layer, the bend angle '90' left as text and as exploded lines, a centre mark on the
+    cut layer and one part whose corner is too far apart to join by itself."""
+    doc = ezdxf.new("R2010")
+    doc.header["$INSUNITS"] = 4
+    for name in ("CUT", "TITLE", "FRAME", "TEXT", "BEND"):
+        doc.layers.add(name)
+    doc.layers.get("BEND").dxf.linetype = "DASHED" if "DASHED" in doc.linetypes else "CONTINUOUS"
+    msp = doc.modelspace()
+    _frame(msp, 840, 420)
+    _title_block(doc, msp, origin=(670, 0), values={"DWG_NO": "RRS-T-FIX", "TITLE": "ชุดแผ่นทดสอบแก้เส้น",
+                                                    "MATERIAL": "SS400", "THK": "3", "QTY": "1", "REV": "A"})
+
+    def line(a, b, layer="CUT"):
+        msp.add_line(a, b, dxfattribs={"layer": layer})
+
+    def text(value, x, y, height=5, layer="TEXT"):
+        msp.add_text(value, height=height, dxfattribs={"layer": layer}).set_placement((x, y))
+
+    # 1: lines with a 0.3 mm gap, an overshoot, the top drawn twice, a bend line on the cut layer and one on BEND
+    line((17, 200), (320, 200))  # 3 mm past the corner
+    line((320, 200), (320, 350))
+    line((320, 350), (20, 350))
+    line((20, 350), (320, 350))  # drawn twice
+    line((20, 350), (20, 200.3))  # 0.3 mm short of the corner
+    line((170, 200), (170, 350))  # bend line drawn on the cut layer
+    line((250, 200), (250, 350), "BEND")
+    msp.add_circle((290, 275), 10, dxfattribs={"layer": "CUT"})
+    line((275, 275), (305, 275))  # centre mark of the hole on the cut layer
+    line((290, 260), (290, 290))
+    text("90", 175, 320)
+    text("UP 90%%d R 0", 255, 320, 4)
+    nine = [(60, 300), (66, 300), (66, 310), (60, 310), (60, 304), (64, 304), (64, 302), (60, 302)]
+    zero = [(70, 300), (74, 300), (76, 303), (76, 307), (74, 310), (70, 310), (68, 307), (68, 303)]
+    msp.add_lwpolyline(nine, close=True, dxfattribs={"layer": "CUT"})  # '90' exploded into lines
+    msp.add_lwpolyline([(61.5, 305.5), (64.5, 305.5), (64.5, 308.5), (61.5, 308.5)], close=True,
+                       dxfattribs={"layer": "CUT"})
+    msp.add_lwpolyline(zero, close=True, dxfattribs={"layer": "CUT"})
+    msp.add_lwpolyline([(70.5, 302.5), (73.5, 302.5), (73.5, 307.5), (70.5, 307.5)], close=True,
+                       dxfattribs={"layer": "CUT"})
+    text("RRS-T-101 แผ่นข้าง t3 2 ชิ้น M=Steel", 30, 215)
+    # 2: one polyline drawn twice on top of itself
+    for _ in range(2):
+        msp.add_lwpolyline([(360, 200), (460, 200), (460, 260), (360, 260)], close=True, dxfattribs={"layer": "CUT"})
+    text("RRS-T-102 ฉากยึด t3 4 ชิ้น", 360, 190)
+    # 3: a corner 3 mm apart - too far to join by itself: the drawing must be corrected
+    line((500, 203), (500, 240))
+    line((500, 240), (580, 240))
+    line((580, 240), (580, 200))
+    line((580, 200), (500, 200))
+    text("RRS-T-103 แผ่นปิด t2 1 ชิ้น", 500, 190)
+    # 4: the right side stops 0.4 mm short of the bottom, which runs 5 mm past it
+    line((360, 300), (465, 300))
+    line((460, 300.4), (460, 350))
+    line((460, 350), (360, 350))
+    line((360, 350), (360, 300))
+    text("RRS-T-104 แผ่นรอง t3 2 ชิ้น", 360, 290)
+    doc.saveas(OUT / "RRS-T-FIX_broken_lines.dxf")
+
+
 def assembly():
     doc = ezdxf.new("R2010")
     doc.header["$INSUNITS"] = 4
@@ -279,6 +340,7 @@ def main() -> int:
     OUT.mkdir(exist_ok=True)
     side_panel()
     frame_set()
+    broken_lines()
     assembly()
     zwcad_tableexport_csv()
     stock_csv()

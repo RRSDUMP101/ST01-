@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import (QGridLayout, QHBoxLayout, QLabel, QLineEdit, QScrollArea, QSpinBox,
+from PySide6.QtWidgets import (QGridLayout, QHBoxLayout, QLabel, QLineEdit, QScrollArea,
                                QVBoxLayout, QWidget)
 
 from ...core.models import STATUSES
 from .. import theme
 from ..state import AppState
-from ..widgets import Card, KpiCard, PageHeader, StatusChipRow, button
+from ..widgets import Card, KpiCard, PageHeader, StatusChipRow, Stepper, button
 from ..workflow import next_action, workflow_steps
 
 INFO_FIELDS = [
@@ -81,10 +81,7 @@ class DashboardPage(QWidget):
             r, c = divmod(i, 2)
             form_grid.addWidget(QLabel(label), r, c * 2)
             form_grid.addWidget(edit, r, c * 2 + 1)
-        self.build_qty = QSpinBox()
-        self.build_qty.setRange(1, 9999)
-        self.build_qty.setSuffix(" คัน")
-        self.build_qty.setButtonSymbols(QSpinBox.NoButtons)
+        self.build_qty = Stepper(1, 9999, "คัน")
         self.build_qty.valueChanged.connect(self._build_changed)
         self.build_qty.setToolTip("จำนวนคันของ Part List นี้ – แก้ที่นี่ที่เดียว ทุกหน้าใช้ค่านี้ "
                                   "(งานที่เปิดแล้ว แก้จำนวนคันที่หน้างานผลิต)")

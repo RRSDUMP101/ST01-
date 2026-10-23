@@ -147,6 +147,7 @@ QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox, QPlainTextEdit {{
 }}
 QComboBox::drop-down {{ border: none; width: 22px; }}
 QAbstractSpinBox {{ padding-right: 8px; }}
+QPushButton#Stepper {{ font-size: 16px; font-weight: 700; padding: 2px 0; min-height: 28px; }}
 QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QPlainTextEdit:focus {{ border-color: {NAVY}; }}
 
 QTableView, QTreeWidget, QListWidget#Plain {{

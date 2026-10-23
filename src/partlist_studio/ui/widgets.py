@@ -5,9 +5,9 @@ from __future__ import annotations
 import traceback
 
 from PySide6.QtCore import QObject, QPointF, QRectF, QRunnable, Qt, QThreadPool, Signal
-from PySide6.QtGui import QBrush, QColor, QPainter, QPainterPath, QPen, QPolygonF
+from PySide6.QtGui import QBrush, QColor, QIntValidator, QPainter, QPainterPath, QPen, QPolygonF
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QFrame, QGraphicsScene, QGraphicsView, QHBoxLayout,
-                               QHeaderView, QLabel, QPushButton, QStyle, QStyledItemDelegate, QTableWidget,
+                               QHeaderView, QLabel, QLineEdit, QPushButton, QStyle, QStyledItemDelegate, QTableWidget,
                                QTableWidgetItem, QVBoxLayout, QWidget)
 
 from . import theme
@@ -62,6 +62,75 @@ def fill(t: QTableWidget, rows: list[list], status_col: int | None = None, data:
 
 def selected_rows(t: QTableWidget) -> list[int]:
     return sorted({i.row() for i in t.selectedIndexes()})
+
+
+class Stepper(QWidget):
+    """A whole number with − and + buttons beside it: [ − ] [ 3 ] คัน [ + ]. Type the number or step it.
+    (A styled QSpinBox without its arrow buttons draws no text at all - a Qt quirk - so this is used instead.)"""
+
+    valueChanged = Signal(int)
+
+    def __init__(self, minimum: int = 1, maximum: int = 9999, suffix: str = "", parent=None):
+        super().__init__(parent)
+        self._min, self._max, self._value = minimum, maximum, minimum
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(6)
+        self.minus = QPushButton("−")
+        self.plus = QPushButton("+")
+        for b, tip in ((self.minus, "ลด 1"), (self.plus, "เพิ่ม 1")):
+            b.setFixedWidth(40)
+            b.setToolTip(tip)
+            b.setAutoRepeat(True)  # hold to keep stepping
+            b.setObjectName("Stepper")
+        self.edit = QLineEdit(str(minimum))
+        self.edit.setValidator(QIntValidator(minimum, maximum, self))
+        self.edit.setAlignment(Qt.AlignCenter)
+        self.edit.setMinimumWidth(70)
+        self.edit.setMaximumWidth(110)
+        lay.addWidget(self.minus)
+        lay.addWidget(self.edit)
+        self.unit = QLabel(suffix.strip())
+        lay.addWidget(self.unit)
+        lay.addWidget(self.plus)
+        lay.addStretch(1)
+        self.minus.clicked.connect(lambda: self.setValue(self._value - 1, emit=True))
+        self.plus.clicked.connect(lambda: self.setValue(self._value + 1, emit=True))
+        self.edit.textEdited.connect(self._typed)
+        self.edit.editingFinished.connect(lambda: self.edit.setText(str(self._value)))
+        self._sync()
+
+    def value(self) -> int:
+        return self._value
+
+    def setRange(self, minimum: int, maximum: int) -> None:  # noqa: N802 - like QSpinBox
+        self._min, self._max = minimum, maximum
+        self.edit.setValidator(QIntValidator(minimum, maximum, self))
+        self.setValue(self._value)
+
+    def setValue(self, value: int, emit: bool = True) -> None:  # noqa: N802 - like QSpinBox
+        value = max(self._min, min(self._max, int(value)))
+        changed = value != self._value
+        self._value = value
+        self._sync()
+        if changed and emit and not self.signalsBlocked():
+            self.valueChanged.emit(value)
+
+    def setToolTip(self, text: str) -> None:  # noqa: N802
+        super().setToolTip(text)
+        self.edit.setToolTip(text)
+
+    def _typed(self, text: str) -> None:
+        if text.strip().isdigit():
+            self.setValue(int(text), emit=True)
+
+    def _sync(self) -> None:
+        text = self.edit.text().strip()
+        typing = self.edit.hasFocus() and text.isdigit() and int(text) == self._value  # leave what is being typed
+        if not typing and text != str(self._value):
+            self.edit.setText(str(self._value))
+        self.minus.setEnabled(self._value > self._min)
+        self.plus.setEnabled(self._value < self._max)
 
 
 class BarDelegate(QStyledItemDelegate):

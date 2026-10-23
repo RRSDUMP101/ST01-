@@ -669,3 +669,29 @@ def test_laser_fill_free_space_by_hand(window, app, monkeypatch):
 
     again = AppState(data_dir=state.data_dir())
     assert len(again.cut_queue.find(prog.no).placements) == len(prog.placements)  # saved
+
+
+def test_build_quantity_stepper_shows_and_steps(window, app):
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+
+    dash = window.pages["dashboard"]
+    window.go("dashboard")
+    stepper = dash.build_qty
+    stepper.setValue(3)
+    app.processEvents()
+    assert stepper.edit.text() == "3" and stepper.edit.width() > 40  # the number is there and visible
+    assert window.state.partlist.info.build_qty == 3
+    stepper.plus.click()
+    stepper.plus.click()
+    assert stepper.value() == 5 and window.state.partlist.info.build_qty == 5
+    stepper.minus.click()
+    assert window.state.partlist.info.build_qty == 4
+    stepper.edit.setFocus()
+    stepper.edit.selectAll()
+    QTest.keyClicks(stepper.edit, "12")  # typed
+    assert window.state.partlist.info.build_qty == 12
+    stepper.setValue(1)
+    assert not stepper.minus.isEnabled()  # never below 1 car
+    QTest.keyClick(stepper.edit, Qt.Key_Tab)
+    assert stepper.edit.text() == "1"

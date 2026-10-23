@@ -268,3 +268,51 @@ def test_bend_lines_and_fixes_kept_in_library_and_programs():
     prog = laser.CutProgram.from_dict(progs[0].to_dict())
     key = next(k for k, it in prog.items.items() if it["code"] == "RRS-T-101")
     assert prog.nest_part(key).bend_lines == back.bend_lines
+
+
+def test_nest_parts_by_hand_in_free_space():
+    square = [(0.0, 0.0), (400.0, 0.0), (400.0, 300.0), (0.0, 300.0)]
+    big = nesting.NestPart("j", "RRS-T-019", "ฝาข้าง", "SS400", 3, 400, 300, 2, outline=[square])
+    params = laser.LaserParams()
+    nest = params.nest_params()
+    [group] = nesting.plan([big], None, nest)
+    sheet = group.sheets[0]
+    before = [(p.x, p.y) for p in sheet.placements]
+    assert nesting.free_pct(sheet, nest) > 0.8
+    lib = laser.FlatLibrary()
+    lib.add_parts([Part(part_no="RRS-A-033", name="ตะขอฝาท้าย", material="SS400", thickness=3,
+                        outline=[[(0, 0), (80, 0), (80, 40), (0, 40)]]),
+                   Part(part_no="RRS-A-099", name="หนาอื่น", material="SS400", thickness=6,
+                        outline=[[(0, 0), (50, 0), (50, 50), (0, 50)]])])
+    flats = laser.flats_for(lib, group.family, 3)
+    assert [f.code for f in flats] == ["RRS-A-033"]  # same material and thickness only
+    hook = laser.extra_part(flats[0])
+    assert nesting.add_to_group(group, 0, hook, 5, nest) == 5
+    assert [(p.x, p.y) for p in sheet.placements[:2]] == before  # the parts already there do not move
+    extra = group.parts[-1]
+    assert extra.key.startswith(laser.EXTRA_KEY) and extra.qty == 5 and not extra.job
+    boxes = [(p.x, p.y, p.x + p.w, p.y + p.h) for p in sheet.placements]
+    for i, a in enumerate(boxes):  # nothing overlaps, everything keeps the gap and the edge margin
+        assert a[0] >= nest.margin - 1e-6 and a[1] >= nest.margin - 1e-6
+        assert a[2] <= sheet.width - nest.margin + 1e-6 and a[3] <= sheet.height - nest.margin + 1e-6
+        for b in boxes[i + 1:]:
+            assert a[2] + nest.gap <= b[0] + 1e-6 or b[2] + nest.gap <= a[0] + 1e-6 or \
+                a[3] + nest.gap <= b[1] + 1e-6 or b[3] + nest.gap <= a[1] + 1e-6
+    # into a program in the queue: every sheet of it, as many as fit
+    queue = laser.CutQueue()
+    [prog] = laser.make_programs([group], queue, params)
+    minutes, use = prog.minutes, prog.utilization
+    n = laser.add_to_program(prog, hook, 0, params)
+    assert n > 20 and prog.minutes > minutes and prog.utilization > use
+    assert sum(1 for p in prog.placements if p["key"] == hook.key) == 5 + n
+    assert prog.items[hook.key]["extra"] and "เพิ่มเอง RRS-A-033" in prog.note
+    assert laser.add_to_program(prog, hook, 0, params) == 0  # full now
+    back = laser.CutProgram.from_dict(prog.to_dict())
+    assert len(back.placements) == len(prog.placements)
+    thick = laser.extra_part(lib.get("RRS-A-099"))
+    with pytest.raises(ValueError):
+        laser.add_to_program(prog, thick, 1, params)  # another thickness
+    done, _pd = laser.apply_cut(prog, 1, [], None)  # extra pieces belong to no job: nothing recorded on jobs
+    assert done == 0
+    with pytest.raises(ValueError):
+        laser.add_to_program(prog, hook, 1, params)  # not waiting any more

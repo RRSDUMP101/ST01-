@@ -213,6 +213,21 @@ def main() -> int:
     settings_dialog.tabs.setCurrentIndex(1)
     shot(settings_dialog, "14f_laser_precut_settings.png")
     settings_dialog.close()
+    from partlist_studio.core import laser as laser_mod
+    from partlist_studio.ui.pages.nesting import FillDialog
+
+    prog = next((p for p in cut_page._programs if p.status == laser_mod.ST_WAIT), None)
+    if prog is not None:  # nest a part by hand in the free space of a program
+        params = cut_page.laser_params()
+        sheet, keys = laser_mod.program_sheet(prog)
+        fill_dialog = FillDialog(f"โปรแกรม {prog.no} (เพิ่มทุกแผ่น × {prog.repeat})",
+                                 laser_mod.flats_for(state.flats, prog.family, prog.thickness),
+                                 [(f"{prog.no} · {prog.label} · {prog.sheet_size}", sheet,
+                                   [prog.nest_part(k) for k in keys])], params.nest_params(), True, w)
+        fill_dialog.show()
+        fill_dialog.qty.setValue(6)
+        shot(fill_dialog, "14g_laser_fill_free_space.png")
+        fill_dialog.close()
     w.go("stock")
     w.pages["stock"].tabs.setCurrentIndex(2)
     w.pages["stock"].replenish.run()

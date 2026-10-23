@@ -625,3 +625,47 @@ def test_stock_check_matches_drawing_parts_by_name(window, app, tmp_path):
     page.clear_matches()  # matched again from its code and name
     assert state.partlist.parts[2].stock_code == ""
     assert dict((p.part_no, m.method) for p, m in state.part_matches)["RRS-T-009"] == pm.M_CHECK
+
+
+def test_laser_fill_free_space_by_hand(window, app, monkeypatch):
+    from partlist_studio.core import dwg_io, laser, production
+    from partlist_studio.ui.pages import nesting as page_mod
+
+    state = window.state
+    data = dwg_io.read_drawing(SAMPLES / "RRS-T-SET_frame_parts.dxf")
+    parts = [c.part for c in dwg_io.drawing_to_candidates(data)]
+    state.flats.add_parts(parts)
+    state.jobs.append(production.job_from_parts("SO6910-021", parts, 1, None, False))
+    state.save_jobs()
+    page = window.pages["nesting"]
+    page.source.setCurrentIndex(page.source.findData(page_mod.SRC_JOBS))
+    page.run()
+    row = next(r for r, g in enumerate(page._row_group) if g.thickness == 3)
+    page.table.selectRow(row)
+    assert page.fill_plan_btn.isEnabled()
+    group = page._group()
+    before = sum(len(s.placements) for s in group.sheets)
+    seen = {}
+
+    def run_dialog(dialog):  # pick the 3 mm part, ask for 4 pieces
+        seen["codes"] = [f.code for f in dialog._shown]
+        dialog.qty.setValue(4)
+        seen["info"] = dialog.info.text()
+        return 1
+
+    monkeypatch.setattr(page_mod.FillDialog, "exec", run_dialog)
+    page.fill_plan()
+    assert seen["codes"] == ["RRS-T-001"] and "วาง RRS-T-001 ได้ 4 ชิ้น/แผ่น" in seen["info"]
+    assert sum(len(s.placements) for s in group.sheets) == before + 4
+    page.make_programs()
+    prog = next(p for p in state.cut_queue.programs if p.thickness == 3)
+    assert sum(1 for p in prog.placements if p["key"].startswith(laser.EXTRA_KEY)) == 4
+    page.programs.selectRow(page._programs.index(prog))
+    count = len(prog.placements)
+    monkeypatch.setattr(page_mod.FillDialog, "exec", lambda dialog: (dialog.qty.setValue(0), 1)[1])  # fill it up
+    page.fill_program()
+    assert len(prog.placements) > count and "เพิ่มเอง RRS-T-001" in prog.note
+    from partlist_studio.ui.state import AppState
+
+    again = AppState(data_dir=state.data_dir())
+    assert len(again.cut_queue.find(prog.no).placements) == len(prog.placements)  # saved

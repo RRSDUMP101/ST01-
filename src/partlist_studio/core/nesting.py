@@ -203,6 +203,55 @@ def pack(parts: list[NestPart], sheet_w: float, sheet_h: float, params: NestPara
     return [s for s, _p in sheets], too_big
 
 
+def free_space(sheet: SheetLayout, params: NestParams) -> _MaxRects:
+    """The free rectangles of a sheet that already has parts on it (gap and edge margin kept)."""
+    g, m = params.gap, params.margin
+    packer = _MaxRects(sheet.width - 2 * m + g, sheet.height - 2 * m + g)
+    for pl in sheet.placements:
+        packer._split((pl.x - m, pl.y - m, pl.w + g, pl.h + g))
+    return packer
+
+
+def fill_sheet(sheet: SheetLayout, part_index: int, part: NestPart, qty: int, params: NestParams) -> int:
+    """Put up to `qty` more pieces of `part` (qty <= 0: as many as fit) in the free space of the sheet.
+    Returns the pieces placed - the ones that fit; the parts already there do not move."""
+    g, m = params.gap, params.margin
+    packer = free_space(sheet, params)
+    placed = 0
+    while qty <= 0 or placed < qty:
+        spot = packer.insert(part.width + g, part.height + g, params.rotate)
+        if spot is None:
+            break
+        x, y, rw, rh, rot = spot
+        sheet.placements.append(Placement(part_index, x + m, y + m, rw - g, rh - g, rot))
+        placed += 1
+        if placed >= 10000:
+            break
+    return placed
+
+
+def free_pct(sheet: SheetLayout, params: NestParams) -> float:
+    """Share of the usable sheet not covered by the parts' rectangles (with their gap)."""
+    g, m = params.gap, params.margin
+    usable = max(1e-6, (sheet.width - 2 * m + g) * (sheet.height - 2 * m + g))
+    used = sum((pl.w + g) * (pl.h + g) for pl in sheet.placements)
+    return max(0.0, 1 - used / usable)
+
+
+def add_to_group(group: NestGroup, sheet_index: int, part: NestPart, qty: int, params: NestParams) -> int:
+    """Nest a part by hand in the free space of one sheet of a plan (filler pieces, ตัดเพิ่มเอง)."""
+    from dataclasses import replace as _replace
+
+    index = next((i for i, p in enumerate(group.parts) if p.key == part.key), None)
+    if index is None:
+        group.parts.append(_replace(part, qty=0))
+        index = len(group.parts) - 1
+    gp = _replace(params, gap=group.gap or params.gap_for(group.thickness))
+    placed = fill_sheet(group.sheets[sheet_index], index, group.parts[index], qty, gp)
+    group.parts[index].qty += placed
+    return placed
+
+
 def _pack_on(items: list[NestPart], which: list[int], sheet: tuple[float, float, str, str],
              params: NestParams) -> tuple[list[SheetLayout], list[int]]:
     """Pack the parts `which` on one sheet size; returns the sheets and the parts that did not fit."""

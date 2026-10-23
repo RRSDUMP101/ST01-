@@ -4,6 +4,7 @@ library of flat patterns (คลังรูปคลี่) that links the draw
 from __future__ import annotations
 
 import tempfile
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 
@@ -90,6 +91,33 @@ class SheetView(QGraphicsView):
         for raw in prog.placements:
             pl = Placement(0, raw["x"], raw["y"], raw["w"], raw["h"], raw["rotated"])
             self._part(prog.nest_part(raw["key"]), pl, 0, part_pen, hole_pen)
+        self._fit()
+
+    def show_layout(self, sheet: nesting.SheetLayout | None, parts: list, label: str = "", new_from: int | None = None,
+                    params: nesting.NestParams | None = None) -> None:
+        """One sheet; placements from index `new_from` on are drawn green (pieces being added), free space shaded."""
+        self.scene().clear()
+        if sheet is None:
+            return
+        sheet_pen, part_pen, hole_pen = self._pens()
+        self._sheet(0, sheet.width, sheet.height, label or sheet.size, sheet_pen)
+        if params is not None:  # the free rectangles the new pieces can go in
+            free_pen = QPen(QColor("#2E9D5B"))
+            free_pen.setCosmetic(True)
+            free_pen.setStyle(Qt.DotLine)
+            m = params.margin
+            base = nesting.SheetLayout(sheet.width, sheet.height,
+                                       placements=sheet.placements[:new_from] if new_from is not None else sheet.placements)
+            for fx, fy, fw, fh in nesting.free_space(base, params).free:
+                w, h = fw - params.gap, fh - params.gap
+                if w > 1 and h > 1:
+                    self.scene().addRect(fx + m, -(fy + m) - h, w, h, free_pen, QBrush(QColor(46, 157, 91, 25)))
+        new_pen = QPen(QColor("#2ECC71"))
+        new_pen.setCosmetic(True)
+        new_pen.setWidthF(1.5)
+        for i, pl in enumerate(sheet.placements):
+            is_new = new_from is not None and i >= new_from
+            self._part(parts[pl.part], pl, 0, new_pen if is_new else part_pen, hole_pen)
         self._fit()
 
     def show_flat(self, flat: laser.FlatPattern | None) -> None:
@@ -385,6 +413,108 @@ class LaserSettingsDialog(QDialog):
         return p
 
 
+class FillDialog(QDialog):
+    """เพิ่มชิ้นลงที่ว่าง: pick a flat pattern of the same material and thickness and nest it by hand in the free
+    space of a sheet (as many as asked, or as many as fit). The parts already there do not move."""
+
+    HEADERS = ["รหัส", "ชิ้นส่วน", "ขนาด (มม.)", "พื้นที่ (ม²)"]
+
+    def __init__(self, title: str, flats: list, sheets: list[tuple[str, nesting.SheetLayout, list]],
+                 params: nesting.NestParams, align: bool = True, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("เพิ่มชิ้นลงที่ว่างบนแผ่น")
+        self.resize(1100, 720)
+        self.flats, self.sheets, self.params, self.align = flats, sheets, params, align
+        lay = QVBoxLayout(self)
+        head = QLabel(f"<b>{title}</b> · เลือกชิ้นจากคลังรูปคลี่ที่วัสดุ/ความหนาเดียวกับแผ่น แล้วใส่จำนวน "
+                      "– โปรแกรมวางในที่ว่าง (กรอบเขียว) โดยเว้นระยะห่างชิ้นและขอบแผ่น ชิ้นเดิมไม่ขยับ")
+        head.setWordWrap(True)
+        lay.addWidget(head)
+        row = QHBoxLayout()
+        self.sheet = QComboBox()
+        for label, _sheet, _parts in sheets:
+            self.sheet.addItem(label)
+        self.sheet.setVisible(len(sheets) > 1)
+        self.sheet.currentIndexChanged.connect(self._trial)
+        if len(sheets) > 1:
+            row.addWidget(QLabel("แผ่น"))
+            row.addWidget(self.sheet)
+        self.search = QLineEdit()
+        self.search.setPlaceholderText("ค้นหา รหัส / ชื่อ …")
+        self.search.setClearButtonEnabled(True)
+        self.search.textChanged.connect(self._fill)
+        row.addWidget(self.search, 1)
+        row.addWidget(QLabel("จำนวนต่อแผ่น"))
+        self.qty = QSpinBox()
+        self.qty.setRange(0, 9999)
+        self.qty.setSpecialValueText("เต็มที่ว่าง")
+        self.qty.setValue(0)
+        self.qty.valueChanged.connect(self._trial)
+        row.addWidget(self.qty)
+        lay.addLayout(row)
+        split = QSplitter(Qt.Horizontal)
+        self.list = table(self.HEADERS, [140, 200, 110, 80])
+        self.list.itemSelectionChanged.connect(self._trial)
+        split.addWidget(self.list)
+        self.view = SheetView()
+        split.addWidget(self.view)
+        split.setSizes([480, 620])
+        lay.addWidget(split, 1)
+        self.info = QLabel()
+        self.info.setObjectName("Hint")
+        lay.addWidget(self.info)
+        box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        self.ok = box.button(QDialogButtonBox.Ok)
+        self.ok.setText("เพิ่มลงแผ่น")
+        self.ok.setProperty("kind", "primary")
+        box.button(QDialogButtonBox.Cancel).setText("ยกเลิก")
+        box.accepted.connect(self.accept)
+        box.rejected.connect(self.reject)
+        lay.addWidget(box)
+        self.placed = 0
+        self._shown: list = []
+        self._fill()
+
+    def _fill(self) -> None:
+        text = self.search.text().strip().lower()
+        self._shown = [f for f in self.flats if not text or text in f"{f.code} {f.name}".lower()]
+        fill(self.list, [[f.code, f.name, "{:.0f} x {:.0f}".format(*f.size), round(f.net_area / 1e6, 4)]
+                         for f in self._shown])
+        if self._shown:
+            self.list.selectRow(0)
+        else:
+            self._trial()
+
+    def flat(self):
+        rows = selected_rows(self.list)
+        return self._shown[rows[0]] if rows and rows[0] < len(self._shown) else None
+
+    def part(self) -> nesting.NestPart | None:
+        flat = self.flat()
+        return laser.extra_part(flat, self.align) if flat is not None else None
+
+    def sheet_index(self) -> int:
+        return max(0, self.sheet.currentIndex())
+
+    def _trial(self, *_args) -> None:
+        label, sheet, parts = self.sheets[self.sheet_index()]
+        part = self.part()
+        trial = nesting.SheetLayout(sheet.width, sheet.height, list(sheet.placements), sheet.code, sheet.name)
+        self.placed = nesting.fill_sheet(trial, len(parts), part, self.qty.value(), self.params) if part else 0
+        self.view.show_layout(trial, list(parts) + ([part] if part else []), label, len(sheet.placements), self.params)
+        free = nesting.free_pct(trial, self.params)
+        if part is None:
+            self.info.setText("ไม่มีรูปคลี่ที่วัสดุ/ความหนาเดียวกับแผ่นนี้ในคลังรูปคลี่" if not self.flats else "เลือกชิ้นส่วน")
+        elif self.placed == 0:
+            self.info.setText(f"{part.code} ({part.width:.0f} x {part.height:.0f} มม.) ไม่มีที่ว่างพอบนแผ่นนี้")
+        else:
+            want = self.qty.value()
+            self.info.setText(f"วาง {part.code} ได้ {self.placed} ชิ้น/แผ่น"
+                              + (f" (ขอ {want} – ที่ว่างพอแค่ {self.placed})" if want and self.placed < want else "")
+                              + f" · ที่ว่างเหลือประมาณ {free:.0%} ของแผ่น · ชิ้นที่เพิ่มไม่มีงานผลิต (ตัดเก็บสต็อก/สำรอง)")
+        self.ok.setEnabled(self.placed > 0)
+
+
 class CutDialog(QDialog):
     """บันทึกตัดแล้ว: sheets cut, who cut them, the offcut left."""
 
@@ -524,6 +654,14 @@ class NestingPage(QWidget):
         self.summary.setWordWrap(True)
         params.body.addWidget(self.summary)
         lay.addWidget(params)
+        plan_tools = QHBoxLayout()
+        self.fill_plan_btn = button("เพิ่มชิ้นลงที่ว่าง…", tooltip="เลือกชิ้นจากคลังรูปคลี่ (วัสดุ/ความหนาเดียวกัน) "
+                                                                 "วางเพิ่มในที่ว่างของแผ่นในแผนที่เลือก")
+        self.fill_plan_btn.clicked.connect(self.fill_plan)
+        self.fill_plan_btn.setEnabled(False)
+        plan_tools.addWidget(self.fill_plan_btn)
+        plan_tools.addStretch(1)
+        lay.addLayout(plan_tools)
         split = QSplitter(Qt.Vertical)
         self.table = table(nesting.PLAN_HEADERS, [120, 70, 260, 110, 110, 80, 90, 70, 80, 60, 90, 300])
         self.table.itemSelectionChanged.connect(self._selected)
@@ -568,6 +706,8 @@ class NestingPage(QWidget):
                 ("เริ่มตัด ▶", self.start_cut, "", "เปลี่ยนสถานะเป็น กำลังตัด"),
                 ("บันทึกตัดแล้ว ✓…", self.record_cut, "primary",
                  "ชิ้นงานของงานผ่านขั้น ตัด และร่างใบ PD จ่ายแผ่นเหล็ก"),
+                ("เพิ่มชิ้นลงที่ว่าง…", self.fill_program, "",
+                 "โปรแกรมที่ยังรอตัด: เลือกชิ้นจากคลังรูปคลี่ วางเพิ่มในที่ว่างของแผ่น (ทุกแผ่นของโปรแกรม)"),
                 ("ยกเลิกโปรแกรม", self.cancel_program, "", "ชิ้นที่ยังไม่ตัดกลับไปให้วางแผนใหม่ได้"),
                 ("ลบ", self.delete_program, "", "ลบออกจากคิว")):
             b = button(text, kind, tip) if kind else button(text, tooltip=tip)
@@ -693,6 +833,7 @@ class NestingPage(QWidget):
         fill(self.table, [])
         self.view.show_group(None)
         self.make_btn.setEnabled(False)
+        self.fill_plan_btn.setEnabled(False)
         self.summary.setText(text)
 
     def run(self) -> None:
@@ -774,6 +915,58 @@ class NestingPage(QWidget):
         rows = selected_rows(self.table)
         if rows and rows[0] < len(self._row_group):
             self.view.show_group(self._row_group[rows[0]])
+        self.fill_plan_btn.setEnabled(bool(rows))
+
+    def _group(self) -> nesting.NestGroup | None:
+        rows = selected_rows(self.table)
+        return self._row_group[rows[0]] if rows and rows[0] < len(self._row_group) else None
+
+    def fill_plan(self) -> None:
+        group = self._group()
+        if group is None or not group.sheets:
+            return
+        params = self.laser_params()
+        nest = replace(params.nest_params(), gap=group.gap or params.nest_params().gap_for(group.thickness))
+        sheets = [(f"แผ่นที่ {n} · {s.size} · ที่ว่าง {nesting.free_pct(s, nest):.0%}", s, group.parts)
+                  for n, s in enumerate(group.sheets, start=1)]
+        dialog = FillDialog(f"แผน {group.family} หนา {group.thickness:g} มม.",
+                            laser.flats_for(self.state.flats, group.family, group.thickness), sheets, nest,
+                            params.align_parts, self)
+        if dialog.exec() and dialog.part() is not None:
+            n = nesting.add_to_group(group, dialog.sheet_index(), dialog.part(), dialog.qty.value(), params.nest_params())
+            rows = nesting.plan_rows(self.groups)
+            fill(self.table, rows)
+            self.table.selectRow(self._row_group.index(group))
+            self.view.show_group(group)
+            self.state.notify(f"เพิ่ม {dialog.part().code} {n} ชิ้นลงแผ่นที่ {dialog.sheet_index() + 1}")
+        dialog.deleteLater()
+
+    def fill_program(self) -> None:
+        prog = self._program()
+        if prog is None:
+            return
+        if prog.status != laser.ST_WAIT or prog.cut_sheets:
+            self.actions.error("เพิ่มชิ้นไม่ได้", "เพิ่มชิ้นได้เฉพาะโปรแกรมที่ยังรอตัด")
+            return
+        params = self.laser_params()
+        nest = replace(params.nest_params(), gap=params.nest_params().gap_for(prog.thickness))
+        sheet, keys = laser.program_sheet(prog)
+        parts = [prog.nest_part(k) for k in keys]
+        label = f"{prog.no} · {prog.label} · {prog.sheet_size} × {prog.repeat} แผ่น · ที่ว่าง {nesting.free_pct(sheet, nest):.0%}"
+        dialog = FillDialog(f"โปรแกรม {prog.no} (เพิ่มทุกแผ่น × {prog.repeat})",
+                            laser.flats_for(self.state.flats, prog.family, prog.thickness), [(label, sheet, parts)],
+                            nest, params.align_parts, self)
+        if dialog.exec() and dialog.part() is not None:
+            try:
+                n = laser.add_to_program(prog, dialog.part(), dialog.qty.value(), params)
+            except ValueError as exc:
+                self.actions.error("เพิ่มชิ้นไม่ได้", str(exc))
+                n = 0
+            if n:
+                self.state.save_laser()
+                self._refresh_laser()
+                self.state.notify(f"เพิ่ม {dialog.part().code} {n} ชิ้น/แผ่น × {prog.repeat} แผ่น ลงโปรแกรม {prog.no}")
+        dialog.deleteLater()
 
     def make_programs(self) -> None:
         if not self.groups or self.demand is None:
@@ -781,6 +974,7 @@ class NestingPage(QWidget):
         progs = laser.make_programs(self.groups, self.state.cut_queue, self.laser_params(), self.demand.source)
         self.groups = []
         self.make_btn.setEnabled(False)
+        self.fill_plan_btn.setEnabled(False)
         self.state.save_laser()
         self._refresh_jobs()
         self.tabs.setCurrentIndex(2)

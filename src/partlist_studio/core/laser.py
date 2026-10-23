@@ -29,7 +29,8 @@ from .cad_fix import FIX_LABELS, FIX_OPEN_IN_PART
 from .dwg_io import outline_net_area
 from .models import PartList
 from .movements import DocLine, Ledger, StockDoc
-from .nesting import NestGroup, NestParams, NestPart, Placement, nest_parts_from, place_point
+from .nesting import (NestGroup, NestParams, NestPart, Placement, SheetLayout, best_orientation, fill_sheet,
+                      nest_parts_from, place_point)
 from .stock import _key, material_family
 
 CUT_STEP = "ตัด"
@@ -667,26 +668,91 @@ def make_programs(groups: list[NestGroup], queue: CutQueue, params: LaserParams,
             prog = CutProgram(no=queue.next_no(), material=g.material, family=g.family, thickness=g.thickness,
                               sheet_w=sheet.width, sheet_h=sheet.height, sheet_code=sheet.code or g.sheet_code,
                               sheet_name=sheet.name or g.sheet_name, repeat=repeat, source=source)
-            length = pierces = area = 0.0
             for pl in sheet.placements:
                 p = g.parts[pl.part]
-                prog.items.setdefault(p.key, {"code": p.code, "name": p.name, "job": p.job, "width": p.width,
-                                              "height": p.height, "outline": p.outline, "bends": p.bend_lines})
+                prog.items.setdefault(p.key, _program_item(p))
                 prog.placements.append({"key": p.key, "x": pl.x, "y": pl.y, "w": pl.w, "h": pl.h,
                                         "rotated": pl.rotated})
-                if p.outline:
-                    lp, n = cut_metrics(p.outline)
-                else:
-                    lp, n = 2 * (p.width + p.height), 1
-                length += lp
-                pierces += n
-                area += p.area
-            prog.cut_length, prog.pierces = length, int(pierces)
-            prog.minutes = cut_minutes(length, int(pierces), g.family, g.thickness, params) + params.sheet_minutes
-            prog.utilization = area / (sheet.width * sheet.height) if sheet.width and sheet.height else 0
+            program_metrics(prog, params)
             out.append(prog)
     queue.programs.extend(out)
     return out
+
+
+def _program_item(p: NestPart) -> dict:
+    item = {"code": p.code, "name": p.name, "job": p.job, "width": p.width, "height": p.height,
+            "outline": p.outline, "bends": p.bend_lines}
+    if p.key.startswith(EXTRA_KEY):
+        item["extra"] = True
+    return item
+
+
+def program_metrics(prog: CutProgram, params: LaserParams) -> None:
+    """Cut length, pierces, minutes and steel use of one sheet of the program, from its placements."""
+    length = pierces = area = 0.0
+    for raw in prog.placements:
+        p = prog.nest_part(raw["key"])
+        lp, n = cut_metrics(p.outline) if p.outline else (2 * (p.width + p.height), 1)
+        length += lp
+        pierces += n
+        area += outline_net_area(p.outline) if p.outline else p.width * p.height
+    prog.cut_length, prog.pierces = length, int(pierces)
+    prog.minutes = cut_minutes(length, int(pierces), prog.family, prog.thickness, params) + params.sheet_minutes
+    prog.utilization = area / (prog.sheet_w * prog.sheet_h) if prog.sheet_w and prog.sheet_h else 0
+
+
+EXTRA_KEY = "extra:"  # pieces nested by hand into free space (no job: cut for stock / spare)
+
+
+def extra_part(flat: FlatPattern, align: bool = True) -> NestPart:
+    """A flat pattern from the library as a piece to nest by hand (ตัดเพิ่มเอง)."""
+    w, h = flat.size
+    part = NestPart(key=EXTRA_KEY + _key(flat.code), code=flat.code, name=flat.name, material=flat.material or "SS400",
+                    thickness=flat.thickness, width=w, height=h, qty=0, net_area=flat.net_area,
+                    outline=flat.outline, bend_lines=flat.bend_lines, fixes=flat.fixes)
+    return best_orientation(part) if align else part
+
+
+def flats_for(library: FlatLibrary, family: str, thickness: float) -> list[FlatPattern]:
+    """Flat patterns of the library that are cut from this material and thickness."""
+    return [f for f in library.items() if f.outline and abs(f.thickness - thickness) < 1e-6
+            and material_family(f.material or "SS400") == family]
+
+
+def program_sheet(prog: CutProgram) -> tuple[SheetLayout, list[str]]:
+    """The program's sheet as a layout (placement.part = index in the returned key list)."""
+    keys: list[str] = []
+    sheet = SheetLayout(prog.sheet_w, prog.sheet_h, code=prog.sheet_code, name=prog.sheet_name)
+    for raw in prog.placements:
+        if raw["key"] not in keys:
+            keys.append(raw["key"])
+        sheet.placements.append(Placement(keys.index(raw["key"]), raw["x"], raw["y"], raw["w"], raw["h"],
+                                          raw["rotated"]))
+    return sheet, keys
+
+
+def add_to_program(prog: CutProgram, part: NestPart, qty: int, params: LaserParams) -> int:
+    """Nest more pieces of `part` by hand in the free space of a program that is not cut yet.
+    qty per sheet (<= 0: as many as fit); the program's other parts do not move. Returns pieces per sheet."""
+    if prog.status != ST_WAIT or prog.cut_sheets:
+        raise ValueError("เพิ่มชิ้นได้เฉพาะโปรแกรมที่ยังรอตัด")
+    if material_family(part.material) != prog.family or abs(part.thickness - prog.thickness) > 1e-6:
+        raise ValueError(f"ชิ้นนี้ {part.material} t{part.thickness:g} ไม่ใช่แผ่นของโปรแกรม ({prog.label})")
+    sheet, keys = program_sheet(prog)
+    nest = params.nest_params()
+    from dataclasses import replace as _replace
+
+    nest = _replace(nest, gap=nest.gap_for(prog.thickness))
+    before = len(sheet.placements)
+    placed = fill_sheet(sheet, len(keys), part, qty, nest)
+    if placed:
+        prog.items.setdefault(part.key, _program_item(part))
+        for pl in sheet.placements[before:]:
+            prog.placements.append({"key": part.key, "x": pl.x, "y": pl.y, "w": pl.w, "h": pl.h,
+                                    "rotated": pl.rotated})
+        program_metrics(prog, params)
+        prog.note = (prog.note + " · " if prog.note else "") + f"เพิ่มเอง {part.code} × {placed}/แผ่น"
+    return placed
 
 
 def apply_cut(prog: CutProgram, sheets: int, jobs, ledger: Ledger | None = None, operator: str = "",

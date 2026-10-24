@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QFileDialog, QHBoxLayout, QHea
 from ...core.company_files import (SHEET_STEEL, export_steel_issue, export_stock_count, read_company_workbook,
                                    sheet_names)
 from ...core.express import read_express_file
-from ...core.part_match import M_CHECK, M_NONE, M_STOCK_CODE, match_parts
+from ...core.part_match import CHECK, M_NONE, M_STOCK_CODE, match_parts
 from ...core.stock import (ST_LOW, ST_MISSING, ST_OK, ST_SHORT, StockList, apply_status_to_parts,
                            check_requirements, export_requirements)
 from ..actions import TABLE_FILTER
@@ -132,13 +132,16 @@ class StockPage(QWidget):
         ml = QVBoxLayout(match_page)
         ml.setContentsMargins(0, 6, 0, 0)
         hint = QLabel("ชิ้นส่วนแต่ละรายการหารายการสต็อก: รหัสสโตร์ใน Part List → รหัสในแบบ (ตรง / ตารางเทียบรหัส) → "
+                      "รหัสชิ้นส่วนเดียวกัน (RRS-ยี่ห้อ-เลขชิ้นส่วน: T Toyota · I Isuzu · M Mitsubishi · F Ford · "
+                      "N Nissan · A = ทุกยี่ห้อ เช่น RRS-T-039 เต้า1 = RRS-A-039-NO1-PR) → "
                       "ชื่อชิ้นส่วน (ชื่อ เลขชิ้นส่วนในรหัส รุ่นรถ ความสูงคอก ความยาวกระบะ ซ้าย/ขวา) → วัสดุ/ความหนา · "
+                      "ยี่ห้อรถเลือกได้ที่หน้าภาพรวม (ไม่เลือก = อ่านจากรหัสในแบบ) · "
                       "ชิ้นในแบบที่ไม่ระบุซ้าย/ขวา แบ่งจำนวนให้รหัสซ้ายและขวาอย่างละครึ่ง")
         hint.setObjectName("Hint")
         hint.setWordWrap(True)
         ml.addWidget(hint)
         self.match_table = table(["รหัสในแบบ", "ชื่อชิ้นส่วน", "รหัสสินค้า (สต็อก)", "ชื่อในสต็อก", "คงเหลือ",
-                                  "การจับคู่", "ตัวเลือกอื่น"], [110, 190, 230, 260, 70, 140, 300])
+                                  "การจับคู่", "อ่านรหัส / ตัวเลือกอื่น"], [110, 190, 230, 260, 70, 170, 340])
         ml.addWidget(self.match_table, 1)
         mrow = QHBoxLayout()
         self.confirm_btn = button("ยืนยันรหัสที่เลือก → รหัสสโตร์ใน Part List", "primary",
@@ -319,7 +322,7 @@ class StockPage(QWidget):
         for line in self.state.requirements:
             counts[line.status] = counts.get(line.status, 0) + 1
         named = sum(1 for _p, m in self.state.part_matches if m.method not in (M_NONE,) and m.score < 99)
-        check = sum(1 for _p, m in self.state.part_matches if m.method == M_CHECK)
+        check = sum(1 for _p, m in self.state.part_matches if m.to_check)
         self.state.notify("ตรวจวัตถุดิบเทียบสต็อกแล้ว: " + " · ".join(f"{k} {v}" for k, v in counts.items())
                           + (f" · จับคู่จากชื่อ {named} รายการ" if named else "")
                           + (f" (ควรตรวจ {check} – แท็บ จับคู่ชิ้นส่วน ↔ สต็อก)" if check else ""))
@@ -332,11 +335,10 @@ class StockPage(QWidget):
             names = " / ".join(i.name for i, _s in m.items)
             on_hand = " / ".join(f"{i.on_hand:g}" for i, _s in m.items)
             rows.append([part.part_no, part.name, codes, names, on_hand, m.method if m.items else M_NONE,
-                         "; ".join(m.alternatives[:3])])
-        order = {M_CHECK: 0, M_NONE: 1}
-        idx = sorted(range(len(rows)), key=lambda i: order.get(rows[i][5], 2))
+                         "; ".join(([m.note] if m.note else []) + m.alternatives[:3])])
+        idx = sorted(range(len(rows)), key=lambda i: 0 if rows[i][5] in CHECK else 1 if rows[i][5] == M_NONE else 2)
         fill(self.match_table, [rows[i] for i in idx], status_col=5, data=[i for i in idx])
-        check = sum(1 for r in rows if r[5] == M_CHECK)
+        check = sum(1 for r in rows if r[5] in CHECK)
         none = sum(1 for r in rows if r[5] == M_NONE)
         self.check_tabs.setTabText(1, "จับคู่ชิ้นส่วน ↔ สต็อก" + (
             f" (ควรตรวจ {check} · ไม่พบ {none})" if check or none else ""))
@@ -347,7 +349,7 @@ class StockPage(QWidget):
         picked = [self.match_table.item(r, 0).data(Qt.UserRole) for r in selected_rows(self.match_table)]
         matches = self.state.part_matches
         if not picked and only_check:
-            picked = [i for i, (_p, m) in enumerate(matches) if m.method == M_CHECK]
+            picked = [i for i, (_p, m) in enumerate(matches) if m.to_check]
         return [matches[i] for i in picked if 0 <= i < len(matches)]
 
     def confirm_matches(self) -> None:

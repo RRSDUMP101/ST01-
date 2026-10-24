@@ -451,8 +451,10 @@ def check_requirements(partlist: PartList, stock: StockList, build_qty: int | No
                 code=item.code, name=item.name, unit=item.unit, required=0, on_hand=item.on_hand,
                 min_qty=item.min_qty, max_qty=item.max_qty, location=item.location, unit_cost=item.unit_cost))
             line.methods.append(method)
-            if method not in (M_CODE, M_STOCK_CODE, M_XREF, M_MATERIAL):  # found by its name: say from what
+            if method not in (M_CODE, M_STOCK_CODE, M_XREF, M_MATERIAL):  # another code or the name: say from what
                 line.add_note(f"จากแบบ {label} {part.name if part.part_no else ''}".strip() + f" ({method})")
+                if match.note:
+                    line.add_note(match.note)
             if share < 1:
                 line.add_note("ชิ้นในแบบไม่ระบุซ้าย/ขวา – แบ่งจำนวนครึ่งหนึ่งต่อข้าง")
             explicit = method != M_MATERIAL
@@ -491,7 +493,7 @@ def apply_status_to_parts(partlist: PartList, stock: StockList, lines: list[Requ
                           matches: list | None = None) -> int:
     """Write the check result back to the Part List (status + stock code). Returns rows changed.
     The stock code is kept only for sure matches (a name match to check is left for a person)."""
-    from .part_match import M_CHECK, M_STOCK_CODE, match_parts
+    from .part_match import M_STOCK_CODE, match_parts
 
     status_by_code = {line.code: line.status for line in lines if line.code}
     changed = 0
@@ -503,7 +505,7 @@ def apply_status_to_parts(partlist: PartList, stock: StockList, lines: list[Requ
         if not items:
             new_status = "รอตรวจ"
         else:
-            if not part.stock_code and match.method not in (M_CHECK, M_STOCK_CODE) and all(i.code for i in items):
+            if not part.stock_code and not match.to_check and match.method != M_STOCK_CODE and all(i.code for i in items):
                 part.stock_code = " / ".join(i.code for i in items)
             short = any(status_by_code.get(i.code, ST_OK) == ST_SHORT for i in items)
             new_status = "ขาด" if short else "พร้อม"
@@ -516,7 +518,7 @@ def apply_status_to_parts(partlist: PartList, stock: StockList, lines: list[Requ
 
 
 MATCH_HEADERS = ["รหัสในแบบ", "ชื่อชิ้นส่วน", "แบบ", "รหัสสินค้า (สต็อก)", "ชื่อในสต็อก", "คงเหลือ", "การจับคู่",
-                 "ตัวเลือกอื่น"]
+                 "อ่านรหัส / ตัวเลือกอื่น"]
 
 
 def match_rows(matches: list) -> list[list]:
@@ -527,7 +529,7 @@ def match_rows(matches: list) -> list[list]:
     for part, m in matches:
         out.append([part.part_no, part.name, part.drawing_no, " / ".join(i.code for i, _s in m.items),
                     " / ".join(i.name for i, _s in m.items), " / ".join(f"{i.on_hand:g}" for i, _s in m.items),
-                    m.method if m.items else M_NONE, "; ".join(m.alternatives[:3])])
+                    m.method if m.items else M_NONE, "; ".join(([m.note] if m.note else []) + m.alternatives[:3])])
     return out
 
 

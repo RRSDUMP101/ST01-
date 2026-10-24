@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import (QGridLayout, QHBoxLayout, QLabel, QLineEdit, QScrollArea,
+from PySide6.QtWidgets import (QComboBox, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QScrollArea,
                                QVBoxLayout, QWidget)
 
 from ...core.models import STATUSES
+from ...core.part_match import ALL_BRANDS, BRAND_LETTERS, FROM_DASHBOARD, brand_label, drawing_contexts
 from .. import theme
 from ..state import AppState
 from ..widgets import Card, KpiCard, PageHeader, StatusChipRow, Stepper, button
@@ -16,6 +17,8 @@ INFO_FIELDS = [
     ("so_no", "เลขที่ SO"), ("customer", "ลูกค้า"), ("vehicle_model", "รุ่นรถ"), ("job_type", "แบบงาน"),
     ("drawing_no", "เลขที่แบบหลัก"), ("revision", "Rev."), ("prepared_by", "ผู้จัดทำ"), ("created", "วันที่"),
 ]
+
+AUTO_BRAND = "อัตโนมัติ (จากรหัสในแบบ)"
 
 # what each step of the work path is for (the step bar and this page use the same 6 steps)
 FLOW_HELP = {
@@ -87,6 +90,18 @@ class DashboardPage(QWidget):
                                   "(งานที่เปิดแล้ว แก้จำนวนคันที่หน้างานผลิต)")
         form_grid.addWidget(QLabel("จำนวนผลิต (คัน)"), 4, 0)
         form_grid.addWidget(self.build_qty, 4, 1)
+        # the 2nd place of the part codes (RRS-T-039): which brand's stock items the parts are; A items go with any
+        self.brand = QComboBox()
+        self.brand.addItem(AUTO_BRAND, "")
+        for letter, name in BRAND_LETTERS.items():
+            if letter != ALL_BRANDS:
+                self.brand.addItem(f"{letter} – {name}", letter)
+        self.brand.setToolTip("ยี่ห้อรถของงานนี้ = ตัวอักษรหลักที่ 2 ของรหัสชิ้นส่วน (RRS-T-039: T = Toyota) "
+                              "ใช้เทียบรหัสกับสต็อกอัตโนมัติ – รหัส A (ALL) ในสต็อกใช้ได้กับทุกยี่ห้อ "
+                              "เช่น RRS-T-039 เต้า1 = RRS-A-039-NO1-PR · อัตโนมัติ = อ่านจากรหัสในแบบ DWG")
+        self.brand.currentIndexChanged.connect(self._brand_changed)
+        form_grid.addWidget(QLabel("ยี่ห้อรถ (รหัสหลักที่ 2)"), 4, 2)
+        form_grid.addWidget(self.brand, 4, 3)
         info_card.body.addLayout(form_grid)
         info_card.body.addStretch(1)
         row.addWidget(info_card, 3)
@@ -187,6 +202,17 @@ class DashboardPage(QWidget):
             setattr(info, key, value.strip())
             self.state.mark_dirty()
 
+    def _brand_changed(self, _index: int) -> None:
+        letter = self.brand.currentData() or ""
+        info = self.state.partlist.info
+        if info.vehicle_brand == letter:
+            return
+        info.vehicle_brand = letter
+        self.state.mark_dirty()
+        stock_page = getattr(self.actions.window, "pages", {}).get("stock")
+        if stock_page is not None and self.state.stock.items and self.state.partlist.parts:
+            stock_page.auto_check()  # match the parts to the stock again for this brand
+
     def _build_changed(self, value: int) -> None:
         if self.state.partlist.info.build_qty != value:
             self.state.partlist.info.build_qty = value
@@ -200,6 +226,12 @@ class DashboardPage(QWidget):
         self.build_qty.blockSignals(True)
         self.build_qty.setValue(max(1, pl.info.build_qty))
         self.build_qty.blockSignals(False)
+        found = sorted({c.brand for c in drawing_contexts(pl).values() if c.brand and c.brand_from != FROM_DASHBOARD})
+        self.brand.blockSignals(True)
+        self.brand.setItemText(0, f"อัตโนมัติ: {', '.join(brand_label(b) for b in found)}" if found else AUTO_BRAND)
+        index = self.brand.findData(pl.info.vehicle_brand)
+        self.brand.setCurrentIndex(max(0, index))
+        self.brand.blockSignals(False)
         build = max(1, pl.info.build_qty)
         self.k_items.set_value(f"{len(pl.parts):,}")
         self.k_qty.set_value(f"{pl.total_qty * build:,.0f}")

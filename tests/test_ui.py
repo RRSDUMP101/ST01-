@@ -597,34 +597,46 @@ def test_stock_check_matches_drawing_parts_by_name(window, app, tmp_path):
     state = window.state
     state.partlist.parts.extend([Part(part_no="RRS-T-027", name="หูช้าง", drawing_no="toyota-4", qty=2),
                                  Part(part_no="RRS-T-003", name="ราง 4 คู่หน้าเฟรมบน", drawing_no="toyota-4"),
-                                 Part(part_no="RRS-T-009", name="กระดูกข้างเฟรมบน", drawing_no="toyota-4", qty=2)])
+                                 Part(part_no="RRS-T-009", name="กระดูกข้างเฟรมบน", drawing_no="toyota-4", qty=2),
+                                 Part(part_no="RRS-T-037", name="ชิ้นที่ 5", drawing_no="toyota-4")])
     wb = openpyxl.Workbook()
     wb.active.title = "คำแนะนำ"
     ws = wb.create_sheet("นับสต็อก")
     ws.append(["รหัสสินค้า", "รายการ", "ยอดคงเหลือ", "หน่วย"])
     for row in (("RRS-A-027-L", "หูช้าง(ซ้าย)", 5, "ชิ้น"), ("RRS-A-027-R", "หูช้าง(ขวา)", 0, "ชิ้น"),
                 ("RRS-A-003", "ราง 4 คู่หน้าเฟรม(ใช้กับทุกรุ่น)", 10, "ชิ้น"),
-                ("RRS-T-009-L", "กระดูกข้าง T(ซ้าย)", 2, "ชิ้น"), ("RRS-T-009-R-", "กระดูกข้าง T(ขวา)", 2, "ชิ้น")):
+                ("RRS-T-009-L", "กระดูกข้าง T(ซ้าย)", 2, "ชิ้น"), ("RRS-T-009-R-", "กระดูกข้าง T(ขวา)", 2, "ชิ้น"),
+                ("RRS-I-009-L", "กระดูกข้าง I (ซ้าย)", 4, "ชิ้น"), ("RRS-I-009-R", "กระดูกข้าง I (ขวา)", 4, "ชิ้น"),
+                ("RRS-A-037-PR", "บังโคลนพื้นเรียบ", 4, "ชิ้น")):
         ws.append(list(row))
     path = tmp_path / "count.xlsx"
     wb.save(path)
     page = window.pages["stock"]
     page.import_stock(str(path))  # importing the stock checks the Part List against it at once
-    assert state.requirements and len(state.part_matches) == 3
+    assert state.requirements and len(state.part_matches) == 4
     assert page.check_tabs.tabText(1) == "จับคู่ชิ้นส่วน ↔ สต็อก (ควรตรวจ 1 · ไม่พบ 0)"
     table = page.match_table
-    assert table.item(0, 0).text() == "RRS-T-009" and table.item(0, 5).text() == pm.M_CHECK  # to check first
-    assert table.item(0, 2).text() == "RRS-T-009-L / RRS-T-009-R-"
+    assert table.item(0, 0).text() == "RRS-T-037" and table.item(0, 5).text() == pm.M_PART_CHECK  # to check first
+    assert table.item(0, 2).text() == "RRS-A-037-PR" and "A = ทุกยี่ห้อ" in table.item(0, 6).text()
+    methods = dict((p.part_no, m.method) for p, m in state.part_matches)
+    assert methods["RRS-T-009"] == pm.M_PART_NO and methods["RRS-T-003"] == pm.M_PART_NO
     headers = [page.req_model.headerData(c, Qt.Horizontal) for c in range(page.req_model.columnCount())]
     assert headers[-1] == "การจับคู่"
     page.confirm_matches()  # nothing selected: every row to check
-    assert state.partlist.parts[2].stock_code == "RRS-T-009-L / RRS-T-009-R-"
-    assert dict((p.part_no, m.method) for p, m in state.part_matches)["RRS-T-009"] == pm.M_STOCK_CODE
+    assert state.partlist.parts[3].stock_code == "RRS-A-037-PR"
+    assert dict((p.part_no, m.method) for p, m in state.part_matches)["RRS-T-037"] == pm.M_STOCK_CODE
     assert page.check_tabs.tabText(1) == "จับคู่ชิ้นส่วน ↔ สต็อก"
-    table.selectRow(next(r for r in range(table.rowCount()) if table.item(r, 0).text() == "RRS-T-009"))
+    table.selectRow(next(r for r in range(table.rowCount()) if table.item(r, 0).text() == "RRS-T-037"))
     page.clear_matches()  # matched again from its code and name
-    assert state.partlist.parts[2].stock_code == ""
-    assert dict((p.part_no, m.method) for p, m in state.part_matches)["RRS-T-009"] == pm.M_CHECK
+    assert state.partlist.parts[3].stock_code == ""
+    assert dict((p.part_no, m.method) for p, m in state.part_matches)["RRS-T-037"] == pm.M_PART_CHECK
+    # the brand chosen on the dashboard (2nd place of the codes): Isuzu items instead of the drawing's T
+    dash = window.pages["dashboard"]
+    assert dash.brand.itemText(0) == "อัตโนมัติ: T (Toyota)"  # read from the drawing's codes
+    dash.brand.setCurrentIndex(dash.brand.findData("I"))
+    assert state.partlist.info.vehicle_brand == "I"
+    match = dict((p.part_no, m) for p, m in state.part_matches)["RRS-T-009"]  # checked again at once
+    assert [i.code for i, _s in match.items] == ["RRS-I-009-L", "RRS-I-009-R"]
 
 
 def test_laser_fill_free_space_by_hand(window, app, monkeypatch):

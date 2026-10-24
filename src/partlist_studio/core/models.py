@@ -102,6 +102,7 @@ class ProjectInfo:
     so_no: str = ""
     customer: str = ""
     vehicle_model: str = ""
+    vehicle_brand: str = ""  # letter in the 2nd place of the part codes: T / I / M / F / N ('' = from the drawing)
     job_type: str = ""
     drawing_no: str = ""
     revision: str = ""

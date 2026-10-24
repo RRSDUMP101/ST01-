@@ -33,9 +33,10 @@ _BRAND_WORDS = {
     "CRANE": ["เครน", "CRANE"],
     "MITYX": ["MITY", "MIGHTY"],
     "SUZUKI": ["SUZUKI"],
+    "FORD": ["FORD", "ฟอร์ด", "RANGER"],
 }
 _CODE_BRAND = {"RRS-T": "TOYOTA", "RRS-M": "MITSU", "RRS-M1": "MITSU", "RRS-I": "ISUZU", "RRS-N": "NISSAN",
-               "RRS-S": "SUZUKI"}
+               "RRS-S": "SUZUKI", "RRS-F": "FORD"}
 # Words in the BOM sheets -> words used in Express names
 _SYNONYMS = [("ปิดหน้าเฟรมล่าง", "หน้าเฟรมล่าง"), ("ปิดหลังเฟรมล่าง", "ท้ายเฟรมล่าง"), ("ปิดท้ายเฟรม", "ท้ายเฟรม"),
              ("ด้านข้างเฟรม", "ข้างเฟรม"), ("ตัวเสริมท้าย", "เสริมท้ายเฟรมล่าง"), ("หูล็อค", "หูล็อก"),
@@ -152,13 +153,15 @@ def _numbers(text: str) -> set[str]:
 
 
 def _core(text: str) -> str:
-    t = (text or "").replace("\xa0", " ")
+    t = _ORDINAL.sub("", (text or "").replace("\xa0", " "))
     t = _RAILS.sub("", t).replace(" ", "")  # "ซองเสา 2ราว" is the 2-rail ซองเสา, not a ราว
     for a, b in _SYNONYMS:
         t = t.replace(a, b)
     return _NOISE.sub("", t).strip()
 
 
+# "เต้าที่ 1" / "เต้าพื้นเรียบเบอร์ 1" / "ขาเซฟตี้ตัวที่1": the word before the number of a numbered part
+_ORDINAL = re.compile(r"(?:เบอร์|ตัวที่|ชิ้นที่|อันที่|ที่|NO\.?)\s*(?=\d)", re.IGNORECASE)
 # "ซองเสา 2ราว(ซ้าย)" -> the version for 2-rail (60 cm) stalls
 _RAILS = re.compile(r"(?<=\S)\s+([234])\s*ราว")
 _RAIL_HEIGHT = {"2": "60", "3": "80", "4": "84"}

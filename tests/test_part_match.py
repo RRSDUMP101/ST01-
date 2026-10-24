@@ -23,6 +23,16 @@ STOCK = [
     ("RRS-A-021-80", "เหล็กฉากฝาข้าง 80", 8, "ชิ้น"),
     ("RRS-A-068-L", "หูล็อกฝาท้าย ซ้าย", 4, "ชิ้น"),
     ("RRS-A-069-R", "หูล็อกฝาท้าย ขวา", 4, "ชิ้น"),
+    ("RRS-I-009-R", "กระดูกข้าง I (ขวา)", 9, "ชิ้น"),
+    ("RRS-A-025", "หูบนตัวใน", 6, "ชิ้น"),
+    ("RRS-A-026-L", "หูบนตัวนอก(ซ้าย)", 6, "ชิ้น"),
+    ("RRS-A-026-R", "หูบนตัวนอก(ขวา)", 6, "ชิ้น"),
+    ("RRS-A-020-161CM", "ฝาท้าย (161cm)", 3, "ชิ้น"),
+    ("RRS-A-020-169CM", "ฝาท้าย (169cm)", 3, "ชิ้น"),
+    ("RRS-A-037-PR", "บังโคลนพื้นเรียบ", 4, "ชิ้น"),
+    ("RRS-A-039-NO1-PR", "เต้าพื้นเรียบเบอร์ 1", 8, "ชิ้น"),
+    ("RRS-A-040-NO2-PR", "เต้าพื้นเรียบเบอร์ 2", 8, "ชิ้น"),
+    ("RRS-A-041-NO3-PR", "เต้าพื้นเรียบเบอร์ 3", 8, "ชิ้น"),
     ("01-B00 -0005", "เหล็กแผ่นดำ 4 มม.4x8ฟุต", 14, "แผ่น"),
 ]
 
@@ -31,8 +41,8 @@ def _stock():
     return StockList(items=[StockItem(code=c, name=n, on_hand=q, unit=u) for c, n, q, u in STOCK])
 
 
-def _drawing(*rows):
-    parts = [Part(part_no=code, name=name, drawing_no="toyota-4", qty=qty) for code, name, qty in rows]
+def _drawing(*rows, drawing_no="toyota-4"):
+    parts = [Part(part_no=code, name=name, drawing_no=drawing_no, qty=qty) for code, name, qty in rows]
     return PartList(parts=parts)
 
 
@@ -48,7 +58,7 @@ def test_code_first_then_name_with_the_drawing_context():
     assert ctx.heights == {"80"} and ctx.lengths == {"250"} and "toyota" in ctx.text.lower()
     m = _match(pl)
     assert (m["RRS-T-002"].method, m["RRS-T-002"].item.code) == (pm.M_CODE, "RRS-T-002")  # the same code
-    assert (m["RRS-T-003"].method, m["RRS-T-003"].item.code) == (pm.M_NAME, "RRS-A-003")  # same number, by name
+    assert (m["RRS-T-003"].method, m["RRS-T-003"].item.code) == (pm.M_PART_NO, "RRS-A-003")  # 003, A = every brand
     assert m["RRS-T-001"].item.code == "RRS-A-001-250"  # body length from พื้น250 of the same drawing
     assert m["RRS-T-021"].item.code == "RRS-A-021-80"  # stall height from เสา80 of the same drawing
     assert m["RRS-T-050"].method == pm.M_NONE and not m["RRS-T-050"].items  # not in the stock file: not guessed
@@ -58,29 +68,33 @@ def test_left_and_right_items_share_an_unsided_part():
     m = _match(_drawing(("RRS-T-027", "หูช้าง", 2), ("RRS-T-034", "หูล็อคฝาท้าย", 2),
                         ("RRS-T-009", "กระดูกข้างเฟรมบน", 2)))
     assert [(i.code, s) for i, s in m["RRS-T-027"].items] == [("RRS-A-027-L", 0.5), ("RRS-A-027-R", 0.5)]
-    assert m["RRS-T-027"].method == pm.M_NAME  # the only close candidate was the other side
+    assert m["RRS-T-027"].method == pm.M_PART_NO  # 027, A = every brand: the left and the right item
     # Express numbers the two sides differently (068 / 069): found by the name
     assert [i.code for i, _s in m["RRS-T-034"].items] == ["RRS-A-068-L", "RRS-A-069-R"]
-    # same part number, Express name inside the drawing name, the drawing's model (T) before I and every model
+    # same part number: the drawing's brand (T) before every brand (A, P4) and another brand (I)
     assert [i.code for i, _s in m["RRS-T-009"].items] == ["RRS-T-009-L", "RRS-T-009-R-"]
-    assert m["RRS-T-009"].method == pm.M_CHECK
+    assert m["RRS-T-009"].method == pm.M_PART_NO and m["RRS-T-009"].note == "เลขชิ้นส่วน 009 ตรงกัน · T (Toyota)"
 
 
 def test_check_uses_the_matches_and_keeps_sure_codes():
     pl = _drawing(("RRS-T-027", "หูช้าง", 2), ("RRS-T-003", "ราง 4 คู่หน้าเฟรมบน", 1),
-                  ("RRS-T-009", "กระดูกข้างเฟรมบน", 2), ("RRS-T-050", "ฟันปลากันสะบัดตัวล่าง", 1))
+                  ("RRS-T-009", "กระดูกข้างเฟรมบน", 2), ("RRS-T-050", "ฟันปลากันสะบัดตัวล่าง", 1),
+                  ("RRS-T-037", "ชิ้นที่ 5", 1))
     stock = _stock()
     lines = {line.code or line.name: line for line in check_requirements(pl, stock, build_qty=3)}
     left, right = lines["RRS-A-027-L"], lines["RRS-A-027-R"]
     assert (left.required, left.status, right.required, right.status) == (3, "พอ", 3, "ขาด")  # 2 × 3 cars ÷ 2 sides
-    assert left.method == pm.M_NAME and "จากแบบ RRS-T-027 หูช้าง" in left.note and "ซ้าย/ขวา" in left.note
-    assert lines["RRS-A-003"].required == 3 and lines["RRS-T-009-L"].method == pm.M_CHECK
+    assert left.method == pm.M_PART_NO and "จากแบบ RRS-T-027 หูช้าง" in left.note and "ซ้าย/ขวา" in left.note
+    assert "A = ทุกยี่ห้อ ใช้กับ T (Toyota)" in left.note
+    assert lines["RRS-A-003"].required == 3 and lines["RRS-T-009-L"].method == pm.M_PART_NO
+    assert lines["RRS-A-037-PR"].method == pm.M_PART_CHECK  # same number, another name: to check
     missing = next(line for line in lines.values() if line.status == "ไม่พบในสต็อก")
     assert missing.parts == ["RRS-T-050"] and missing.method == pm.M_NONE
     apply_status_to_parts(pl, stock, list(lines.values()))
     codes = {p.part_no: p.stock_code for p in pl.parts}
     assert codes["RRS-T-027"] == "RRS-A-027-L / RRS-A-027-R" and codes["RRS-T-003"] == "RRS-A-003"
-    assert codes["RRS-T-009"] == ""  # to check: left for a person
+    assert codes["RRS-T-009"] == "RRS-T-009-L / RRS-T-009-R-"
+    assert codes["RRS-T-037"] == ""  # to check: left for a person
     assert {p.part_no: p.status for p in pl.parts}["RRS-T-027"] == "ขาด"
     # next time the stock code is used as it is (both sides)
     again = _match(pl, stock)["RRS-T-027"]
@@ -92,3 +106,56 @@ def test_check_uses_the_matches_and_keeps_sure_codes():
 def test_drawing_context_numbers(name, lengths, heights):
     ctx = pm.drawing_contexts(_drawing(("RRS-T-001", name, 1)))["toyota-4"]
     assert (ctx.lengths, ctx.heights) == (lengths, heights)
+
+
+@pytest.mark.parametrize("code, parts", [
+    ("RRS-A-039-NO01-PR", ("RRS", "A", "039", ("NO01", "PR"))), ("RRS-T-039", ("RRS", "T", "039", ())),
+    ("RRS-A1-030-R", ("RRS", "A", "030", ("R",))), ("RRS-T-009-R-", ("RRS", "T", "009", ("R",))),
+    ("rrs-f-002 ", ("RRS", "F", "002", ())), ("01-B00 -0005", None), ("RRS-T", None)])
+def test_split_code(code, parts):
+    found = pm.split_code(code)
+    assert (found and (found.prefix, found.brand, found.number, found.rest)) == parts
+
+
+def test_a_items_go_with_every_brand():
+    """RRS-T-039 เต้า1 (T = Toyota) is RRS-A-039-NO1-PR เต้าพื้นเรียบเบอร์ 1 (A = every brand)."""
+    m = _match(_drawing(("RRS-T-039", "เต้า1", 2), ("RRS-T-040", "เต้าที่ 2", 2), ("RRS-T-041", "เต้า3", 2),
+                        ("RRS-T-042", "เต้า4", 2)))
+    for code, item in (("RRS-T-039", "RRS-A-039-NO1-PR"), ("RRS-T-040", "RRS-A-040-NO2-PR"),
+                       ("RRS-T-041", "RRS-A-041-NO3-PR")):
+        assert (m[code].method, m[code].item.code) == (pm.M_PART_NO, item)
+    assert m["RRS-T-039"].note == "เลขชิ้นส่วน 039 ตรงกัน · A = ทุกยี่ห้อ ใช้กับ T (Toyota)"
+    assert m["RRS-T-042"].method == pm.M_NONE  # no 042 in the stock: not one of the other numbers
+    # the letter of a Ford drawing; the user's own spelling NO01
+    stock = _stock()
+    stock.items.append(StockItem(code="RRS-A-043-NO01-PR", name="กันเป๋พื้นเรียบเบอร์ 1", on_hand=1))
+    m = _match(_drawing(("RRS-F-027", "หูช้าง", 2), ("RRS-F-043", "กันเป๋ 1", 1), drawing_no="ranger"), stock)
+    assert [i.code for i, _s in m["RRS-F-027"].items] == ["RRS-A-027-L", "RRS-A-027-R"]
+    assert m["RRS-F-027"].note == "เลขชิ้นส่วน 027 ตรงกัน · A = ทุกยี่ห้อ ใช้กับ F (Ford)"
+    assert (m["RRS-F-043"].method, m["RRS-F-043"].item.code) == (pm.M_PART_NO, "RRS-A-043-NO01-PR")
+
+
+def test_brand_from_the_dashboard():
+    pl = _drawing(("RRS-T-009", "กระดูกข้างเฟรมบน", 2))
+    assert pm.drawing_contexts(pl)["toyota-4"].brand == "T"  # read from the codes of the drawing
+    pl.info.vehicle_brand = "I"  # chosen on the dashboard: Isuzu items (and A), not the drawing's T
+    ctx = pm.drawing_contexts(pl)["toyota-4"]
+    assert (ctx.brand, ctx.brand_from) == ("I", pm.FROM_DASHBOARD)
+    m = _match(pl)["RRS-T-009"]
+    assert [i.code for i, _s in m.items] == ["RRS-I-009-L", "RRS-I-009-R"] and m.method == pm.M_PART_NO
+    assert m.note == "เลขชิ้นส่วน 009 ตรงกัน · I (Isuzu)"
+    # no letter in the codes: the brand written in the drawing
+    assert pm.drawing_contexts(_drawing(("", "หูช้าง", 1), drawing_no="ISUZU D-MAX"))["ISUZU D-MAX"].brand == "I"
+
+
+def test_same_number_but_another_part_or_size():
+    m = _match(_drawing(("RRS-T-025", "หูบนตัวนอก", 2), ("RRS-T-026", "หูบนตัวใน", 1), ("RRS-T-020", "ฝาท้าย161", 1),
+                        ("RRS-T-040", "เต้า3", 1)))
+    # Express numbers หูบนตัวใน 025 and หูบนตัวนอก 026, the drawing the other way round: found by the name
+    assert [i.code for i, _s in m["RRS-T-025"].items] == ["RRS-A-026-L", "RRS-A-026-R"]
+    assert m["RRS-T-025"].method == pm.M_NAME and m["RRS-T-026"].item.code == "RRS-A-025"
+    assert (m["RRS-T-020"].method, m["RRS-T-020"].item.code) == (pm.M_PART_NO, "RRS-A-020-161CM")  # not 169 cm
+    assert m["RRS-T-040"].method == pm.M_PART_CHECK and m["RRS-T-040"].note.endswith("แต่เบอร์ 2 ≠ 3")  # 040 เต้า3?
+    part = Part(part_no="RRS-T-040", name="เต้า3")
+    no2 = next(i for i in _stock().items if i.code == "RRS-A-040-NO2-PR")
+    assert pm.variant_conflict(part, no2, pm.DrawingContext()) == "เบอร์ 2 ≠ 3"

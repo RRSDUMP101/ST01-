@@ -1,4 +1,5 @@
-"""PDF of the job tickets (ใบงาน A6 แนวนอน) and the shelf labels (ป้ายชั้นวาง A4 3 × 8 ดวง 70 × 37 มม.).
+"""PDF of the job tickets (ใบงาน A6 แนวนอน: 1 per A6, or 2 / 4 / 8 per A4 with cut lines) and the shelf
+labels (ป้ายชั้นวาง A4 3 × 8 ดวง 70 × 37 มม.).
 
 Drawn with Qt so the Thai text uses the program's font and the QR is sharp vector squares.
 """
@@ -262,21 +263,99 @@ def _paint_ticket(p: QPainter, mm: _Mm, t: Ticket, printed: str) -> None:
     _text(p, mm(76, 92, 68, 7), f"พิมพ์ {printed}", 7, color=MUTED, flags=Qt.AlignRight | Qt.AlignVCenter)
 
 
-def write_tickets_pdf(path: str | Path, tickets: list[Ticket]) -> int:
-    """ใบงาน: one A6 landscape page per ticket (print on A6 paper/sticker, or 4 per A4 with the printer's
-    'pages per sheet')."""
-    writer = _writer(path, QPageSize.A6, True)
+TICKET_W, TICKET_H = 148.0, 105.0  # A6 landscape
+PRINT_MARGIN = 5.0  # mm the printers leave white at the edge of an A4 sheet
+# per sheet -> (paper, landscape, columns, rows)
+TICKET_LAYOUTS = {1: (QPageSize.A6, True, 1, 1), 2: (QPageSize.A4, False, 1, 2), 4: (QPageSize.A4, True, 2, 2),
+                  8: (QPageSize.A4, False, 2, 4)}
+TICKET_LAYOUT_TEXT = {1: "A6 · 1 ใบ/แผ่น", 2: "A4 · 2 ใบ/แผ่น", 4: "A4 · 4 ใบ/แผ่น", 8: "A4 · 8 ใบ/แผ่น (เล็ก)"}
+
+
+def ticket_cells(per_page: int) -> tuple[float, list[tuple[float, float]]]:
+    """(scale, [(x, y) mm of each ticket on the sheet]): A6 tickets in a grid inside the printable area of
+    the paper, as large as they fit (4 per A4 = 95 %, 8 per A4 = 68 %)."""
+    _size, landscape, cols, rows = TICKET_LAYOUTS[per_page]
+    if per_page == 1:
+        return 1.0, [(0.0, 0.0)]
+    page_w, page_h = (297.0, 210.0) if landscape else (210.0, 297.0)
+    cell_w, cell_h = (page_w - 2 * PRINT_MARGIN) / cols, (page_h - 2 * PRINT_MARGIN) / rows
+    scale = min(1.0, cell_w / TICKET_W, cell_h / TICKET_H)
+    w, h = TICKET_W * scale, TICKET_H * scale
+    x0, y0 = (page_w - cols * w) / 2, (page_h - rows * h) / 2  # the grid in the middle of the sheet
+    return scale, [(x0 + c * w, y0 + r * h) for r in range(rows) for c in range(cols)]
+
+
+def _cut_lines(p: QPainter, mm: _Mm, per_page: int, scale: float, cells: list[tuple[float, float]]) -> None:
+    """Dashed lines between the tickets of a sheet: cut along them."""
+    _size, _landscape, cols, rows = TICKET_LAYOUTS[per_page]
+    w, h = TICKET_W * scale, TICKET_H * scale
+    x0, y0 = cells[0]
+    pen = QPen(LINE, mm.v(0.2))
+    pen.setStyle(Qt.DashLine)
+    p.save()
+    p.setPen(pen)
+    for c in range(cols + 1):
+        p.drawLine(QPointF(mm.v(x0 + c * w), mm.v(y0)), QPointF(mm.v(x0 + c * w), mm.v(y0 + rows * h)))
+    for r in range(rows + 1):
+        p.drawLine(QPointF(mm.v(x0), mm.v(y0 + r * h)), QPointF(mm.v(x0 + cols * w), mm.v(y0 + r * h)))
+    p.restore()
+
+
+def write_tickets_pdf(path: str | Path, tickets: list[Ticket], per_page: int = 1) -> int:
+    """ใบงาน: per_page = 1 (A6 landscape paper or sticker), 2 / 4 / 8 on A4 with dashed cut lines.
+    Returns the number of tickets."""
+    if per_page not in TICKET_LAYOUTS:
+        per_page = 1
+    size, landscape, _cols, _rows = TICKET_LAYOUTS[per_page]
+    writer = _writer(path, size, landscape)
     mm = _Mm(writer.resolution())
+    scale, cells = ticket_cells(per_page)
     printed = _now_text()
     p = QPainter(writer)
     try:
         for i, t in enumerate(tickets):
-            if i:
+            n = i % len(cells)
+            if i and n == 0:
                 writer.newPage()
+            if n == 0 and per_page > 1:
+                _cut_lines(p, mm, per_page, scale, cells)
+            p.save()
+            p.translate(mm.v(cells[n][0]), mm.v(cells[n][1]))
+            p.scale(scale, scale)
             _paint_ticket(p, mm, t, printed)
+            p.restore()
     finally:
         p.end()
     return len(tickets)
+
+
+def tickets_page_image(tickets: list[Ticket], per_page: int, dpi: int = 60) -> QImage:
+    """First sheet of the tickets as a picture (preview, documentation)."""
+    _size, landscape, _cols, _rows = TICKET_LAYOUTS[per_page]
+    w, h = (297.0, 210.0) if landscape else (210.0, 297.0)
+    if per_page == 1:
+        w, h = TICKET_W, TICKET_H
+    k = dpi / 25.4
+    image = QImage(round(w * k), round(h * k), QImage.Format_RGB32)
+    image.setDotsPerMeterX(round(dpi / 0.0254))
+    image.setDotsPerMeterY(round(dpi / 0.0254))
+    image.fill(Qt.white)
+    mm = _Mm(dpi)
+    scale, cells = ticket_cells(per_page)
+    p = QPainter(image)
+    p.setRenderHint(QPainter.TextAntialiasing, True)
+    try:
+        if per_page > 1:
+            _cut_lines(p, mm, per_page, scale, cells)
+        for t, (x, y) in zip(tickets, cells):
+            p.save()
+            p.translate(mm.v(x), mm.v(y))
+            p.scale(scale, scale)
+            _paint_ticket(p, mm, t, _now_text())
+            p.restore()
+    finally:
+        p.end()
+    return image
 
 
 def ticket_image(t: Ticket, dpi: int = 150) -> QImage:

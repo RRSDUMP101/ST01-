@@ -113,13 +113,16 @@ class ProductionPage(QWidget):
                 ("บันทึกจำนวน…", self.record_qty, "บันทึกจำนวนชิ้นที่ผ่านขั้นหนึ่ง", ""),
                 ("แก้ขั้นตอน…", self.edit_route, "ขั้นตอนการผลิตของแถวที่เลือก", ""),
                 ("พิมพ์ใบงาน (QR)…", self.print_tickets,
-                 "ใบงาน A6 ต่อชิ้นส่วน: QR รูปชิ้นงาน ขั้นตอน และที่เก็บ (แถวที่เลือก หรือทุกชิ้นที่ต้องผลิต)", ""),
+                 ("ใบงานต่อชิ้นส่วน: QR รูป 2D จากแบบ รหัส ขนาด ขั้นตอน และที่เก็บ (แถวที่เลือก หรือทุกชิ้นที่ต้องผลิต) · "
+                  "เลือกจำนวนใบต่อแผ่นที่ช่องข้าง ๆ"), ""),
                 ("สร้างใบเบิก/รับ (PD · FR)", self.make_documents,
                  "ร่าง PD วัตถุดิบ + PD จ่ายชิ้นส่วนประกอบ + FR รับชิ้นงานเสร็จ → ตรวจและบันทึกในหน้า เบิก/รับ สต็อก",
                  "accent")):
             b = button(text, kind, tip) if kind else button(text, tooltip=tip)
             b.clicked.connect(slot)
             tools.addWidget(b)
+            if slot == self.print_tickets:
+                tools.addWidget(self._ticket_layout_box())
         tools.addStretch(1)
         rl.addLayout(tools)
 
@@ -449,6 +452,22 @@ class ProductionPage(QWidget):
             self.state.notify(f"บันทึก {Path(path).name} แล้ว")
 
     # ---- tickets, picking list, scan ---------------------------------------
+    def _ticket_layout_box(self) -> QComboBox:
+        """How many tickets per sheet: A6 paper/sticker, or 2 / 4 / 8 on A4 (remembered)."""
+        from ..printing import TICKET_LAYOUT_TEXT
+
+        self.ticket_layout = QComboBox()
+        for per_page, text in TICKET_LAYOUT_TEXT.items():
+            self.ticket_layout.addItem(text, per_page)
+        self.ticket_layout.setToolTip("จำนวนใบงานต่อแผ่น: A6 = กระดาษ/สติกเกอร์ A6 · A4 = หลายใบต่อแผ่น มีเส้นประให้ตัด "
+                                      "(4 ใบ = ขนาดเกือบเต็ม A6 · 8 ใบ = ใบเล็กลง)")
+        saved = self.state.settings.get("tickets/per_page", "4")
+        index = self.ticket_layout.findData(int(saved) if saved.isdigit() else 4)
+        self.ticket_layout.setCurrentIndex(max(0, index))
+        self.ticket_layout.currentIndexChanged.connect(
+            lambda _i: self.state.settings.set("tickets/per_page", str(self.ticket_layout.currentData())))
+        return self.ticket_layout
+
     def print_tickets(self) -> None:
         job = self._job()
         if job is None:
@@ -462,10 +481,13 @@ class ProductionPage(QWidget):
         path = self.actions.save_path("ใบงาน (PDF)", f"ใบงาน_{job.job_no}.pdf", "PDF (*.pdf)")
         if not path:
             return
-        from ..printing import open_document, write_tickets_pdf
+        from ..printing import TICKET_LAYOUT_TEXT, open_document, write_tickets_pdf
 
-        n = write_tickets_pdf(path, tickets)
-        self.state.notify(f"บันทึก {Path(path).name} แล้ว ({n} ใบ · A6 แนวนอน · สแกน QR ที่ช่อง สแกนใบงาน)")
+        per_page = self.ticket_layout.currentData() or 1
+        n = write_tickets_pdf(path, tickets, per_page)
+        sheets = -(-n // per_page)
+        self.state.notify(f"บันทึก {Path(path).name} แล้ว ({n} ใบ · {TICKET_LAYOUT_TEXT[per_page]} = {sheets} แผ่น"
+                          + (" · ตัดตามเส้นประ" if per_page > 1 else "") + " · สแกน QR ที่ช่อง สแกนใบงาน)")
         open_document(path)
 
     def export_kitting(self) -> None:

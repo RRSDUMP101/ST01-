@@ -256,6 +256,10 @@ def main() -> int:
     ticket = catalog_mod.job_tickets(laser_job, [0], state.catalog, state.stock, state.flats,
                                      state.cut_queue.programs)[0]
     ticket_image(ticket, 160).save(str(out / "12c_job_ticket.png"))
+    from partlist_studio.ui.printing import tickets_page_image
+
+    sheet = catalog_mod.job_tickets(laser_job, None, state.catalog, state.stock, state.flats, state.cut_queue.programs)
+    tickets_page_image(sheet, 4, 90).save(str(out / "12d_job_tickets_a4.png"))
     prod.tabs.setCurrentIndex(0)
     w.go("express")
     w.pages["express"].audit_codes()

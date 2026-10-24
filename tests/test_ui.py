@@ -550,6 +550,11 @@ def test_parts_ready_tab_readiness_tickets_and_scan(window, app, monkeypatch, tm
     prod.parts.clearSelection()
     prod.print_tickets()  # nothing selected: every part the job makes
     assert (tmp_path / "ใบงาน_SO-R1.pdf").read_bytes()[:4] == b"%PDF"
+    assert prod.ticket_layout.currentData() == 4  # 4 tickets per A4 unless another layout was chosen
+    prod.ticket_layout.setCurrentIndex(prod.ticket_layout.findData(8))
+    assert state.settings.get("tickets/per_page") == "8"
+    prod.print_tickets()
+    assert (tmp_path / "ใบงาน_SO-R1.pdf").read_bytes()[:4] == b"%PDF"
     prod.export_kitting()
     assert (tmp_path / "ใบจัดชุด_SO-R1.xlsx").is_file()
     prod.scan.setText(qr.ticket_payload("SO-R1", 1, "RRS-T-024-L-84", 4))
@@ -707,3 +712,32 @@ def test_build_quantity_stepper_shows_and_steps(window, app):
     assert not stepper.minus.isEnabled()  # never below 1 car
     QTest.keyClick(stepper.edit, Qt.Key_Tab)
     assert stepper.edit.text() == "1"
+
+
+def test_tickets_several_per_a4(app, tmp_path):
+    import re
+
+    from partlist_studio.core import catalog, dwg_io, laser, production
+    from partlist_studio.ui import printing
+
+    data = dwg_io.read_drawing(SAMPLES / "RRS-T-SET_frame_parts.dxf")
+    parts = [c.part for c in dwg_io.drawing_to_candidates(data)]
+    lib = laser.FlatLibrary()
+    lib.add_parts(parts)
+    job = production.job_from_parts("SO-A4", parts, 1, None, False)
+    tickets = catalog.job_tickets(job, None, catalog.Catalog(), None, lib) * 2  # 10 tickets
+    for per_page, sheets in ((1, 10), (2, 5), (4, 3), (8, 2)):
+        scale, cells = printing.ticket_cells(per_page)
+        _size, landscape, cols, rows = printing.TICKET_LAYOUTS[per_page]
+        page_w, page_h = (297, 210) if landscape else (210, 297)
+        assert len(cells) == per_page == cols * rows
+        if per_page > 1:  # inside the printable area of the A4 sheet
+            assert all(x >= printing.PRINT_MARGIN - 1e-6 and y >= printing.PRINT_MARGIN - 1e-6 for x, y in cells)
+            assert all(x + printing.TICKET_W * scale <= page_w - printing.PRINT_MARGIN + 1e-6 and
+                       y + printing.TICKET_H * scale <= page_h - printing.PRINT_MARGIN + 1e-6 for x, y in cells)
+        path = tmp_path / f"t{per_page}.pdf"
+        assert printing.write_tickets_pdf(path, tickets, per_page) == 10
+        assert len(re.findall(rb"/Type\s*/Page[^s]", path.read_bytes())) == sheets
+    assert printing.ticket_cells(4)[0] == pytest.approx(200 / 210)  # 4 per A4: 95 % of A6
+    image = printing.tickets_page_image(tickets, 4, 40)
+    assert image.width() > image.height()  # A4 landscape

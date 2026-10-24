@@ -425,7 +425,8 @@ class ProductionPage(QWidget):
         info = pl.info
         job = job_from_parts(job_no.strip(), pl.parts, max(1, info.build_qty), self.state.stock, use_stock,
                              self.state.jobs, model=info.job_type or info.drawing_no, customer=info.customer,
-                             vehicle=info.vehicle_model, title=" ".join(x for x in (info.job_type, info.vehicle_model) if x))
+                             vehicle=info.vehicle_model, title=" ".join(x for x in (info.job_type, info.vehicle_model) if x),
+                             body=info.job_type, brand=info.vehicle_brand)
         self.state.jobs.append(job)
         self.state.save_jobs()
         self.state.notify(f"เปิดงาน {job.job_no} {len(job.parts)} รายการ")

@@ -207,7 +207,7 @@ class ModelsPage(QWidget):
             self.actions.error("เลขที่งานซ้ำ", f"มีงาน {job_no} แล้ว")
             return
         job = job_from_parts(job_no, dialog.parts(), dialog.sets.value(), self.state.stock,
-                             dialog.use_stock.isChecked(), self.state.jobs, model=model.name, title=model.title,
+                             dialog.use_stock.isChecked(), self.state.jobs, model=model.name, title=model.title, body=model.name,
                              customer=dialog.customer.text().strip(), variant=dialog.variant_text,
                              due=dialog.due.date().toString("yyyy-MM-dd"))
         self.state.jobs.append(job)

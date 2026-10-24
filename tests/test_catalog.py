@@ -6,6 +6,7 @@ from conftest import SAMPLES
 
 from partlist_studio.core import catalog, dwg_io, laser, nesting, production, qr
 from partlist_studio.core.express import read_express_file
+from partlist_studio.core.models import Part
 from partlist_studio.core.stock import StockItem, StockList
 
 
@@ -146,6 +147,23 @@ def test_tickets_labels_and_qr():
     assert t.route == [("ตัด", 0, 48), ("พับ", 0, 48)] and "พื้นที่สุทธิ" not in t.remark
     scan = qr.parse_payload(t.payload)
     assert (scan.kind, scan.job_no, scan.line, scan.code, scan.qty) == ("job", "SO6910-015", 1, "RRS-T-001", 48)
+    # the form: DWG code, Express code, 2D of the drawing with its size, vehicle, body model; the Part List
+    # details (material, size) in the QR after the six fields the program reads
+    assert (t.drawing_code, t.express_code, t.express_note) == ("RRS-T-001", "", "")  # no stock file given
+    assert t.size == "150 × 60 มม. · หนา 3 มม." and t.vehicle == "Toyota" and t.body == "คอกสูง 3 ราว"
+    assert scan.details == ["RRS-T-001", "", "Steel t3", "150x60", "เฟรมบน"]
+    stock = StockList(items=[StockItem(code="RRS-A-001-250", name="เฟรมบน 250", on_hand=1)])
+    job.brand, job.vehicle = "T", "REVO"
+    [t2] = catalog.job_tickets(job, [0], cat, stock, lib, queue.programs)
+    assert (t2.express_code, t2.vehicle) == ("RRS-A-001-250", "Toyota · REVO")  # 001, A = every brand
+    assert qr.parse_payload(t2.payload).details[:2] == ["RRS-T-001", "RRS-A-001-250"]
+    [t3] = catalog.job_tickets(job, [2], cat, stock, lib, queue.programs)
+    assert (t3.express_code, t3.express_note) == ("", "ยังไม่มีในสต็อก")
+    from partlist_studio.ui.printing import TICKET_ROWS, ticket_rows
+
+    rows = ticket_rows(t3)
+    assert [label for label, _v in rows][:6] == TICKET_ROWS and rows[1][1] == "ยังไม่มีในสต็อก"
+    assert dict(rows)["ขนาด"] == "100 × 80 มม. · หนา 4 มม." and dict(rows)["วัสดุ"].startswith("SS400 t4")
     matrix = qr.qr_matrix(t.payload)
     assert len(matrix) >= 21 and all(len(row) == len(matrix) for row in matrix)
 
@@ -154,3 +172,21 @@ def test_tickets_labels_and_qr():
     assert qr.parse_payload(label.payload).code == "RRS-T-001" and qr.parse_payload(label.payload).kind == "item"
     assert qr.parse_payload("RRS-T-001").kind == "text"
     assert qr.ticket_payload("SO|1", 2, "A|B", 1.5) == "RRS1|J|SO/1|2|A/B|1.5"  # the separator never comes from data
+
+
+def test_job_keeps_the_dwg_code_next_to_the_stock_code():
+    """A Part List row tied to an Express code, and a model row: the ticket shows both codes."""
+    parts = [Part(part_no="RRS-T-039", name="เต้า1", stock_code="RRS-A-039-NO1-PR", qty=2, spec="t5",
+                  material="SS400", thickness=5),
+             Part(part_no="RRS-T-024-L-84", name="บังอาย Champ 84(ซ้าย)", stock_code="RRS-T-024-L-84",
+                  remark="รหัสเดิม RRS-T-024")]
+    job = production.job_from_parts("SO-1", parts, 1, None, False, body="กระบะดั้มพ์คอกสูง 3 ราว", brand="T")
+    first, model_row = job.parts
+    assert (first.code, first.drawing_code, first.spec, first.material) == ("RRS-A-039-NO1-PR", "RRS-T-039", "t5", "SS400")
+    assert (model_row.code, model_row.drawing_code) == ("RRS-T-024-L-84", "RRS-T-024")
+    again = production.Job.from_dict(job.to_dict())
+    assert again.body == "กระบะดั้มพ์คอกสูง 3 ราว" and again.parts[0].drawing_code == "RRS-T-039"
+    t, t2 = catalog.job_tickets(again)
+    assert (t.drawing_code, t.express_code, t.material, t.size) == ("RRS-T-039", "RRS-A-039-NO1-PR", "SS400 t5", "t5")
+    assert (t.vehicle, t.body) == ("Toyota", "กระบะดั้มพ์คอกสูง 3 ราว")
+    assert (t2.drawing_code, t2.express_code) == ("RRS-T-024", "RRS-T-024-L-84")

@@ -69,6 +69,11 @@ class JobPart:
     remark: str = ""
     image: str = ""
     issued: float = 0  # issued to assembly (PD/OU)
+    drawing_code: str = ""  # code of the part in the DWG (code is the stock/Express code once matched)
+    drawing_no: str = ""
+    spec: str = ""  # size / spec from the Part List: 't3 x 150 x 60'
+    material: str = ""
+    thickness: float = 0
 
     @property
     def to_make(self) -> float:
@@ -164,6 +169,8 @@ class Job:
     created: str = field(default_factory=lambda: date.today().isoformat())
     status: str = JOB_OPEN
     variant: str = ""  # brand / height chosen
+    body: str = ""  # รุ่นกระบะที่ผลิต: 'กระบะดั้มพ์คอกสูง 3 ราว'
+    brand: str = ""  # letter of the vehicle brand in the part codes: T / I / M / F / N ('' = from the codes)
     parts: list[JobPart] = field(default_factory=list)
     log: list[LogEntry] = field(default_factory=list)
     docs: list[str] = field(default_factory=list)  # document numbers made for the job
@@ -257,8 +264,12 @@ def job_from_parts(job_no: str, parts: list[Part], sets: float, stock: StockList
     reserved = reserved_by_jobs(other_jobs or [])
     for p in parts:
         code = p.stock_code or p.part_no
+        old = re.search(r"รหัสเดิม\s+(\S+)", p.remark or "")  # a model row: the code of the sheet
+        drawing = old.group(1) if old and p.part_no == p.stock_code else p.part_no
         jp = JobPart(item_no=p.item_no, code=code, name=p.name, qty_per_set=p.qty, required=p.qty * sets,
-                     route=route_for(p.name, p.process), unit=p.unit or "ชิ้น", remark=p.remark, image=p.image)
+                     route=route_for(p.name, p.process), unit=p.unit or "ชิ้น", remark=p.remark, image=p.image,
+                     drawing_code=drawing, drawing_no=p.drawing_no, spec=p.spec, material=p.material,
+                     thickness=p.thickness)
         if use_stock and stock is not None and code:
             item = find_by_code(code, stock)
             if item is not None:

@@ -419,9 +419,17 @@ class Ticket:
     route: list = field(default_factory=list)  # [(step, done, need)]
     to: str = ""  # where it goes when finished
     due: str = ""  # dd/mm/yyyy (พ.ศ.)
-    image: str = ""  # picture of the part (Parts List All Model)
-    outline: list = field(default_factory=list)  # flat pattern loops (mm) when there is no picture
+    image: str = ""  # picture of the part (Parts List All Model) when there is no 2D from a drawing
+    outline: list = field(default_factory=list)  # 2D of the part from its DWG: flat pattern loops (mm)
     remark: str = ""
+    drawing_code: str = ""  # รหัส Part ตามแบบ DWG
+    express_code: str = ""  # รหัส Part Express (stock code; 'A / B' for a left and a right item)
+    express_note: str = ""  # 'ควรตรวจ' / 'ยังไม่มีในสต็อก'
+    vehicle: str = ""  # ยี่ห้อ / รุ่นรถ: 'Toyota · REVO'
+    body: str = ""  # รุ่นกระบะที่ผลิต: 'กระบะดั้มพ์คอกสูง 3 ราว'
+    size: str = ""  # '150 × 60 มม. · หนา 3 มม.'
+    drawing: str = ""  # where the 2D comes from: 'RRS-T-SET Rev.B'
+    bends: list = field(default_factory=list)  # bend lines of the 2D
 
 
 def _thai_date(iso: str) -> str:
@@ -434,7 +442,10 @@ def _thai_date(iso: str) -> str:
 
 def job_tickets(job, indexes: list[int] | None = None, catalog: Catalog | None = None, stock: StockList | None = None,
                 flats=None, programs=None, xref_lookup=None) -> list[Ticket]:
-    """One ticket per part of the job (default: the parts the job makes), with the QR, the route and where it goes."""
+    """One ticket per part of the job (default: the parts the job makes): the QR with the Part List details,
+    the DWG and the Express code, the 2D of the part from its drawing and its size, the vehicle and the body
+    model, the route and where it goes. A part not yet tied to a stock code gets it from the code matching
+    of the stock check (part_match: RRS-T-039 -> RRS-A-039-NO1-PR)."""
     from .laser import job_key
     from .qr import ticket_payload
 
@@ -442,32 +453,107 @@ def job_tickets(job, indexes: list[int] | None = None, catalog: Catalog | None =
     find = code_finder(stock)
     if indexes is None:
         indexes = [i for i, p in enumerate(job.parts) if p.to_make > 0]
+    indexes = [i for i in indexes if 0 <= i < len(job.parts)]
     head = [job.title or job.model, job.vehicle, f"{job.sets:g} คัน", f"ลูกค้า {job.customer}" if job.customer else ""]
     job_text = " · ".join(x for x in dict.fromkeys(head) if x)
+    matches = _express_matches(job, indexes, find, stock)
+    body = job.body or job.model or job.title
     out = []
     for i in indexes:
-        if not 0 <= i < len(job.parts):
-            continue
         p = job.parts[i]
         item = find(p.code)
-        flat = flats.get(p.code, xref_lookup) if (flats is not None and p.code) else None
-        material = ""
-        if flat is not None:
-            material = " ".join(x for x in (flat.material, f"t{flat.thickness:g}" if flat.thickness else "") if x)
+        flat = None
+        if flats is not None:
+            flat = flats.get(p.drawing_code, xref_lookup) or flats.get(p.code, xref_lookup)
+        drawing_code = p.drawing_code or (flat.code if flat else "") or ("" if item else p.code)
+        express, note = _express_code(p, item, matches.get(i), stock)
+        thickness = (flat.thickness if flat else 0) or p.thickness
+        material = " ".join(x for x in ((flat.material if flat else "") or p.material,
+                                        f"t{thickness:g}" if thickness else "") if x)
+        size, size_qr = _part_size(flat, p.spec)
         key = job_key(job.job_no, i)
         progs = [f"{prog.no} {prog.status}" for prog in (programs or []) if key in prog.items]
         group = catalog.group_of(item.code if item else p.code, p.name)
         location = catalog.location_of(p.code, item)
         to = " · ".join(x for x in (f"เก็บที่ {location}" if location else "", f"กลุ่ม{group_name(group)}") if x)
         image = p.image if p.image and Path(p.image).is_file() else ""
+        drawing = ""
+        if flat is not None:
+            drawing = " ".join(x for x in (flat.drawing_no or Path(flat.source).stem,
+                                           f"Rev.{flat.revision}" if flat.revision else "") if x)
         out.append(Ticket(
-            no=f"{job.job_no}/{i + 1:02d}", payload=ticket_payload(job.job_no, i + 1, p.code, p.to_make),
+            no=f"{job.job_no}/{i + 1:02d}",
+            payload=ticket_payload(job.job_no, i + 1, p.code, p.to_make, drawing_code, express, material, size_qr,
+                                   p.name),
             job_no=job.job_no, job_text=job_text, code=p.code, name=p.name, qty=p.to_make, unit=p.unit or "ชิ้น",
             material=material, program=", ".join(progs),
             route=[(s, min(p.done_at(s), p.to_make), p.to_make) for s in p.route], to=to,
             due=_thai_date(job.due) if job.due else "", image=image,
-            outline=[] if image or flat is None else flat.outline, remark=_ticket_remark(p.remark)))
+            outline=flat.outline if flat else [], remark=_ticket_remark(p.remark),
+            drawing_code=drawing_code, express_code=express, express_note=note,
+            vehicle=_vehicle_text(job, drawing_code or p.code), body=body, size=size, drawing=drawing,
+            bends=flat.bend_lines if flat else []))
     return out
+
+
+def _express_matches(job, indexes: list[int], find, stock: StockList | None) -> dict:
+    """index -> part_match.PartMatch of the parts whose code is not a stock code yet."""
+    from .models import Part, PartList, ProjectInfo
+    from .part_match import match_parts
+
+    if stock is None or not stock.items:
+        return {}
+    todo = [i for i in indexes if find(job.parts[i].code) is None and not _tied(job.parts[i])]
+    if not todo:
+        return {}
+    parts = [Part(part_no=job.parts[i].drawing_code or job.parts[i].code, name=job.parts[i].name,
+                  drawing_no=job.parts[i].drawing_no or job.model, spec=job.parts[i].spec) for i in todo]
+    info = ProjectInfo(vehicle_model=job.vehicle or job.variant, vehicle_brand=job.brand,
+                       job_type=job.body or job.model)
+    return {i: m for i, (_p, m) in zip(todo, match_parts(PartList(info=info, parts=parts), stock))}
+
+
+def _tied(part) -> bool:
+    """The job part carries a stock code of its own (Part List stock code, or a model row's Express code)."""
+    return bool(part.drawing_code) and _key(part.code) != _key(part.drawing_code)
+
+
+def _express_code(part, item, match, stock: StockList | None) -> tuple[str, str]:
+    if item is not None:
+        return item.code, ""
+    if _tied(part):
+        return part.code, ""
+    if match is not None and match.items:
+        return " / ".join(i.code for i, _s in match.items), "ควรตรวจ" if match.to_check else ""
+    return "", "ยังไม่มีในสต็อก" if stock is not None and stock.items else ""
+
+
+def _mm(v: float) -> str:
+    return f"{v:.0f}" if abs(v - round(v)) < 0.05 else f"{v:.1f}"
+
+
+def _part_size(flat, spec: str) -> tuple[str, str]:
+    """('150 × 60 มม. · หนา 3 มม.', '150x60') from the 2D of the drawing, else the spec of the Part List."""
+    if flat is not None and flat.outline:
+        w, h = flat.size
+        text = f"{_mm(w)} × {_mm(h)} มม." + (f" · หนา {flat.thickness:g} มม." if flat.thickness else "")
+        return text, f"{_mm(w)}x{_mm(h)}"
+    return spec, spec
+
+
+def _vehicle_text(job, code: str) -> str:
+    """ยี่ห้อ / รุ่นรถ: the brand of the job (dashboard) or of the 2nd place of the code, and the vehicle model."""
+    from .part_match import ALL_BRANDS, BRAND_LETTERS, split_code
+
+    letter = job.brand
+    if not letter:
+        parts = split_code(code)
+        letter = parts.brand if parts else ""
+    brand = BRAND_LETTERS.get(letter, "") if letter != ALL_BRANDS else ""
+    vehicle = job.vehicle or job.variant
+    if brand and brand.upper() in vehicle.upper():
+        brand = ""
+    return " · ".join(x for x in (brand, vehicle) if x)
 
 
 _AUTO_REMARK = ("พื้นที่สุทธิ", "ระยะตัด", "รู ")  # written by the drawing import: not for the shop floor

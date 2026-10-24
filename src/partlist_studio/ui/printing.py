@@ -102,31 +102,70 @@ def draw_qr(p: QPainter, rect: QRectF, text: str) -> None:
     p.restore()
 
 
-def draw_outline(p: QPainter, rect: QRectF, loops: list) -> None:
-    """Flat pattern (mm, y up) fitted in rect: outline + holes."""
+def draw_outline(p: QPainter, rect: QRectF, loops: list, bends: list | None = None, dims: bool = False) -> None:
+    """Flat pattern (mm, y up) fitted in rect: outline + holes, bend lines dashed, and with dims the overall
+    width and height written along the bottom and the left side."""
     pts = [pt for loop in loops for pt in loop]
     if not pts:
         return
     xs, ys = [x for x, _y in pts], [y for _x, y in pts]
     w, h = max(xs) - min(xs) or 1, max(ys) - min(ys) or 1
-    scale = min(rect.width() / w, rect.height() / h) * 0.9
-    cx, cy = rect.center().x(), rect.center().y()
+    pad = min(rect.width(), rect.height()) * 0.12 if dims else 0
+    area = rect.adjusted(pad, 0, 0, -pad)
+    scale = min(area.width() / w, area.height() / h) * 0.9
+    cx, cy = area.center().x(), area.center().y()
     mx, my = (max(xs) + min(xs)) / 2, (max(ys) + min(ys)) / 2
+
+    def at(x: float, y: float) -> QPointF:
+        return QPointF(cx + (x - mx) * scale, cy - (y - my) * scale)
+
     path = QPainterPath()
     path.setFillRule(Qt.OddEvenFill)
     for loop in loops:
         if len(loop) < 2:
             continue
-        path.moveTo(QPointF(cx + (loop[0][0] - mx) * scale, cy - (loop[0][1] - my) * scale))
+        path.moveTo(at(*loop[0]))
         for x, y in loop[1:]:
-            path.lineTo(QPointF(cx + (x - mx) * scale, cy - (y - my) * scale))
+            path.lineTo(at(x, y))
         path.closeSubpath()
+    line_w = max(1.0, rect.width() / 250)
     p.save()
     p.setRenderHint(QPainter.Antialiasing, True)
-    p.setPen(QPen(QColor(theme.NAVY), max(1.0, rect.width() / 250)))
+    p.setPen(QPen(QColor(theme.NAVY), line_w))
     p.setBrush(QColor("#E3EBF5"))
     p.drawPath(path)
+    if bends:
+        pen = QPen(QColor("#D64545"), line_w)
+        pen.setStyle(Qt.DashLine)
+        p.setPen(pen)
+        for line in bends:
+            if len(line) >= 2:
+                p.drawLine(at(*line[0]), at(*line[-1]))
+    if dims:
+        left, right = at(min(xs), min(ys)).x(), at(max(xs), min(ys)).x()
+        top, bottom = at(min(xs), max(ys)).y(), at(min(xs), min(ys)).y()
+        p.setPen(QPen(MUTED, line_w * 0.6))
+        y = bottom + pad * 0.3
+        x = left - pad * 0.3
+        tick = pad * 0.15
+        p.drawLine(QPointF(left, y), QPointF(right, y))
+        p.drawLine(QPointF(x, top), QPointF(x, bottom))
+        for px in (left, right):
+            p.drawLine(QPointF(px, y - tick), QPointF(px, y + tick))
+        for py in (top, bottom):
+            p.drawLine(QPointF(x - tick, py), QPointF(x + tick, py))
+        _text(p, QRectF(left, y, right - left, pad * 0.7), _dim(w), 6, color=MUTED, flags=Qt.AlignHCenter | Qt.AlignTop)
+        p.save()
+        p.translate(x, (top + bottom) / 2)
+        p.rotate(-90)
+        _text(p, QRectF(-(bottom - top) / 2, -pad * 0.75, bottom - top, pad * 0.7), _dim(h), 6, color=MUTED,
+              flags=Qt.AlignHCenter | Qt.AlignBottom)
+        p.restore()
     p.restore()
+
+
+def _dim(v: float) -> str:
+    return f"{v:.0f}" if abs(v - round(v)) < 0.05 else f"{v:.1f}"
 
 
 def _draw_image(p: QPainter, rect: QRectF, path: str) -> bool:
@@ -154,50 +193,73 @@ def _checkbox(p: QPainter, rect: QRectF, done: bool, pen_w: float) -> None:
     p.restore()
 
 
+TICKET_ROWS = ["รหัสตามแบบ DWG", "รหัส Express", "ยี่ห้อ / รุ่นรถ", "รุ่นกระบะ", "ขนาด", "วัสดุ"]
+
+
+def ticket_rows(t: Ticket) -> list[tuple[str, str]]:
+    """The labelled lines of a ticket (the remark only when there is one)."""
+    express = t.express_code + (f" ({t.express_note})" if t.express_code and t.express_note else "")
+    material = " · ".join(x for x in (t.material, t.program) if x)
+    rows = list(zip(TICKET_ROWS, [t.drawing_code, express or t.express_note, t.vehicle, t.body, t.size, material]))
+    rows = [(label, value or "–") for label, value in rows]
+    if t.remark:
+        rows.append(("หมายเหตุ", t.remark))
+    return rows
+
+
 def _paint_ticket(p: QPainter, mm: _Mm, t: Ticket, printed: str) -> None:
     p.setPen(QPen(LINE, mm.v(0.3)))
     p.setBrush(Qt.NoBrush)
     p.drawRect(mm(3, 3, 142, 99))
-    _text(p, mm(6, 5, 104, 8), f"ใบงาน  {t.no}", 14, True, fit=True)
-    _text(p, mm(6, 13, 104, 12), " · ".join(x for x in (t.job_no, t.job_text) if x), 9, color=MUTED, wrap=True,
-          flags=Qt.AlignLeft | Qt.AlignTop)
-    draw_qr(p, mm(112, 4, 32, 32), t.payload)
-    _text(p, mm(110, 35.5, 36, 4), "สแกนเพื่อบันทึก/ค้นหา", 6, color=MUTED, flags=Qt.AlignCenter)
+    _text(p, mm(6, 5, 102, 8), f"ใบงาน  {t.no}", 14, True, fit=True)
+    _text(p, mm(6, 13, 102, 5.5), " · ".join(x for x in (t.job_no, t.job_text) if x), 8, color=MUTED, fit=True)
+    draw_qr(p, mm(110, 4, 34, 34), t.payload)
+    _text(p, mm(108, 37.5, 38, 3.5), "สแกน: งาน · รหัส · วัสดุ · ขนาด", 5.5, color=MUTED, flags=Qt.AlignCenter,
+          fit=True, min_pt=4.5)
 
-    box = mm(6, 27, 46, 46)
+    # 2D of the part from its drawing (else its picture)
+    box = mm(6, 20, 50, 52)
     p.setPen(QPen(LINE, mm.v(0.25)))
     p.drawRect(box)
     inner = box.adjusted(mm.v(1), mm.v(1), -mm.v(1), -mm.v(1))
-    if not (t.image and _draw_image(p, inner, t.image)):
-        if t.outline:
-            draw_outline(p, inner, t.outline)
-        else:
-            _text(p, inner, "ไม่มีรูป", 8, color=MUTED, flags=Qt.AlignCenter)
+    if t.outline:
+        draw_outline(p, inner, t.outline, t.bends, dims=True)
+        caption = "รูป 2D จากแบบ DWG" + (f" {t.drawing}" if t.drawing else "")
+    elif t.image and _draw_image(p, inner, t.image):
+        caption = "รูปชิ้นงาน"
+    else:
+        _text(p, inner, "ไม่มีรูป", 8, color=MUTED, flags=Qt.AlignCenter)
+        caption = ""
+    if caption:
+        _text(p, mm(6, 72.3, 50, 3.6), caption, 6, color=MUTED, fit=True, min_pt=4.5)
 
-    _text(p, mm(56, 27, 54, 7), t.code or "(ไม่มีรหัส)", 12, True, fit=True)
-    _text(p, mm(56, 34, 54, 8), t.name, 11, fit=True, min_pt=7)
-    _text(p, mm(56, 42, 88, 9), f"จำนวน {t.qty:g} {t.unit}", 15, True)
-    info = " · ".join(x for x in (t.material, t.program) if x)
-    if info:
-        _text(p, mm(56, 51, 88, 6), info, 9, color=MUTED, fit=True)
+    _text(p, mm(59, 20, 49, 7), t.name or t.code or "(ไม่มีชื่อ)", 12, True, fit=True, min_pt=7)
+    _text(p, mm(59, 27, 49, 7), f"จำนวน {t.qty:g} {t.unit}", 13, True, fit=True)
     if t.to:
-        _text(p, mm(56, 57.5, 88, 6.5), "→ " + t.to, 10, True, color=QColor(theme.NAVY), fit=True)
-    if t.remark:
-        _text(p, mm(56, 64, 88, 9), t.remark, 8, color=MUTED, wrap=True, flags=Qt.AlignLeft | Qt.AlignTop)
+        _text(p, mm(59, 34.3, 49, 6), "→ " + t.to, 9, True, color=QColor(theme.NAVY), fit=True)
+    rows = ticket_rows(t)
+    step = 36.0 / max(6, len(rows))
+    for n, (label, value) in enumerate(rows):
+        y = 41.5 + n * step
+        if n:
+            p.setPen(QPen(LINE, mm.v(0.15)))
+            p.drawLine(QPointF(mm.v(59), mm.v(y)), QPointF(mm.v(144), mm.v(y)))
+        _text(p, mm(59, y, 23, step), label, 6.5, color=MUTED)
+        _text(p, mm(82, y, 62, step), value, 9 if n < 2 else 8.5, n < 2, fit=True, min_pt=5.5)
 
     steps = t.route or [("เสร็จ", 0, t.qty)]
     width = min(34.0, 136.0 / len(steps))
-    for i, (step, done, need) in enumerate(steps):
+    for i, (step_name, done, need) in enumerate(steps):
         x = 6 + i * width
-        cell = mm(x, 76, width - 2, 12)
+        cell = mm(x, 79, width - 2, 11)
         p.setPen(QPen(LINE, mm.v(0.25)))
         p.drawRect(cell)
-        _checkbox(p, mm(x + 1.5, 79, 6, 6), need > 0 and done >= need, mm.v(0.3))
-        _text(p, mm(x + 9, 76.5, width - 11.5, 6), step, 10, True, fit=True)
-        _text(p, mm(x + 9, 82, width - 11.5, 5.5), f"{done:g} / {need:g}", 8, color=MUTED)
+        _checkbox(p, mm(x + 1.5, 81.5, 6, 6), need > 0 and done >= need, mm.v(0.3))
+        _text(p, mm(x + 9, 79.3, width - 11.5, 5.5), step_name, 10, True, fit=True)
+        _text(p, mm(x + 9, 84.5, width - 11.5, 5), f"{done:g} / {need:g}", 8, color=MUTED)
     if t.due:
-        _text(p, mm(6, 91, 70, 7), f"กำหนดส่ง {t.due}", 10, True)
-    _text(p, mm(76, 91, 68, 7), f"พิมพ์ {printed}", 7, color=MUTED, flags=Qt.AlignRight | Qt.AlignVCenter)
+        _text(p, mm(6, 92, 70, 7), f"กำหนดส่ง {t.due}", 10, True)
+    _text(p, mm(76, 92, 68, 7), f"พิมพ์ {printed}", 7, color=MUTED, flags=Qt.AlignRight | Qt.AlignVCenter)
 
 
 def write_tickets_pdf(path: str | Path, tickets: list[Ticket]) -> int:

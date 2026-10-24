@@ -183,7 +183,7 @@ def main() -> int:
     state.save_laser()
     laser_job = production.job_from_parts("SO6910-016", frame_parts, 2, None, False, model="ชุดเฟรมกระบะ",
                                           title="ชุดเฟรมกระบะ (แบบ RRS-T-SET)", customer="บจก. ขนส่งตัวอย่าง",
-                                          due="2026-10-28")
+                                          due="2026-10-28", vehicle="REVO 2.50", body="กระบะดั้มพ์คอกสูง 3 ราว")
     state.jobs = [job, laser_job]
     state.save_jobs()
     cut_page = w.pages["nesting"]

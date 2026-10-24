@@ -619,22 +619,22 @@ def test_stock_check_matches_drawing_parts_by_name(window, app, tmp_path):
     page = window.pages["stock"]
     page.import_stock(str(path))  # importing the stock checks the Part List against it at once
     assert state.requirements and len(state.part_matches) == 4
-    assert page.check_tabs.tabText(1) == "จับคู่ชิ้นส่วน ↔ สต็อก (ควรตรวจ 1 · ไม่พบ 0)"
+    assert page.check_tabs.tabText(1) == "จับคู่ชิ้นส่วน ↔ สต็อก (ใกล้เคียง 1 · ไม่พบ 0)"
     table = page.match_table
-    assert table.item(0, 0).text() == "RRS-T-037" and table.item(0, 5).text() == pm.M_PART_CHECK  # to check first
+    assert table.item(0, 0).text() == "RRS-T-037" and table.item(0, 5).text() == pm.M_PART_CLOSE  # close first
     assert table.item(0, 2).text() == "RRS-A-037-PR" and "A = ทุกยี่ห้อ" in table.item(0, 6).text()
     methods = dict((p.part_no, m.method) for p, m in state.part_matches)
     assert methods["RRS-T-009"] == pm.M_PART_NO and methods["RRS-T-003"] == pm.M_PART_NO
     headers = [page.req_model.headerData(c, Qt.Horizontal) for c in range(page.req_model.columnCount())]
     assert headers[-1] == "การจับคู่"
-    page.confirm_matches()  # nothing selected: every row to check
+    page.confirm_matches()  # nothing selected: every row matched from a close result
     assert state.partlist.parts[3].stock_code == "RRS-A-037-PR"
     assert dict((p.part_no, m.method) for p, m in state.part_matches)["RRS-T-037"] == pm.M_STOCK_CODE
     assert page.check_tabs.tabText(1) == "จับคู่ชิ้นส่วน ↔ สต็อก"
     table.selectRow(next(r for r in range(table.rowCount()) if table.item(r, 0).text() == "RRS-T-037"))
     page.clear_matches()  # matched again from its code and name
     assert state.partlist.parts[3].stock_code == ""
-    assert dict((p.part_no, m.method) for p, m in state.part_matches)["RRS-T-037"] == pm.M_PART_CHECK
+    assert dict((p.part_no, m.method) for p, m in state.part_matches)["RRS-T-037"] == pm.M_PART_CLOSE
     # the brand chosen on the dashboard (2nd place of the codes): Isuzu items instead of the drawing's T
     dash = window.pages["dashboard"]
     assert dash.brand.itemText(0) == "อัตโนมัติ: T (Toyota)"  # read from the drawing's codes

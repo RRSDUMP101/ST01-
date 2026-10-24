@@ -19,10 +19,13 @@ usually the same, the rest is told by the name. So a part is looked up, first ma
    stall height, body length, left/right and model; the part number in its code weighs strongly.
    The model, stall height and body length come from the whole drawing (TOYOTA, เสา80, พื้น250).
    Express keeps the left and the right part apart: a flat pattern without a side is split between both.
-5. still nothing: the item of the same part number whose name or size differs, marked to check.
-6. nothing found: check_requirements falls back to the raw material (same material and thickness).
+5. the item of the same part number whose name or size differs (ชิ้นที่ 5 = RRS-A-037-PR บังโคลนพื้นเรียบ)
+6. a name match that is not clear, then a name that is the same once the spelling is made the same
+   (บังโครน = บังโคลน) - not another number of a numbered part (เต้า4 is not เต้าเบอร์ 1)
+7. nothing found: check_requirements falls back to the raw material (same material and thickness).
 
-Every match says how it was found; a name match that is not clear is marked to check.
+Close results (several variants near each other, 5 and 6) are matched all the same - the material check and
+the Part List use them - and say so (ใกล้เคียง) with the other choices, so a person can change one.
 """
 
 from __future__ import annotations
@@ -39,15 +42,16 @@ M_STOCK_CODE = "รหัสสโตร์ใน Part List"
 M_CODE = "รหัสตรง"
 M_XREF = "ตารางเทียบรหัส"
 M_PART_NO = "รหัสชิ้นส่วนเดียวกัน"
-M_PART_CHECK = "รหัสเดียวกัน – ควรตรวจ"
+M_PART_CLOSE = "รหัสเดียวกัน (ใกล้เคียง)"
 M_NAME = "จับคู่จากชื่อ"
-M_CHECK = "จากชื่อ – ควรตรวจ"
+M_NAME_CLOSE = "ชื่อใกล้เคียง"
 M_MATERIAL = "วัสดุ/ความหนา"
 M_NONE = "ไม่พบ"
-SURE = {M_STOCK_CODE, M_CODE, M_XREF, M_PART_NO, M_NAME, M_MATERIAL}
-CHECK = {M_CHECK, M_PART_CHECK}  # found, a person should look
-METHOD_ORDER = [M_NONE, M_CHECK, M_PART_CHECK, M_MATERIAL, M_NAME, M_PART_NO, M_XREF, M_CODE,
+SURE = {M_STOCK_CODE, M_CODE, M_XREF, M_PART_NO, M_PART_CLOSE, M_NAME, M_NAME_CLOSE, M_MATERIAL}
+CLOSE = {M_PART_CLOSE, M_NAME_CLOSE}  # matched from a close result: listed first with the other choices
+METHOD_ORDER = [M_NONE, M_NAME_CLOSE, M_PART_CLOSE, M_MATERIAL, M_NAME, M_PART_NO, M_XREF, M_CODE,
                 M_STOCK_CODE]  # weakest first
+NEAR_NAME = 0.9  # names alike once the spelling is the same (บังโครน / บังโคลน)
 
 # The 2nd place of a code (RRS-T-039): the brand of the vehicle. A (ALL) = used with every brand.
 ALL_BRANDS = "A"
@@ -83,8 +87,8 @@ class PartMatch:
         return self.method in SURE
 
     @property
-    def to_check(self) -> bool:
-        return self.method in CHECK
+    def close(self) -> bool:
+        return self.method in CLOSE
 
     def describe(self, part: Part) -> str:
         """'RRS-T-024 บังอาย80 → RRS-T-024-80-L / RRS-A-024-80 (จับคู่จากชื่อ)'."""
@@ -194,12 +198,18 @@ def match_part(part: Part, stock: StockList, context: DrawingContext | None = No
     same, loose = match_by_part_no(part, pool, context)
     if same is not None:
         return same
-    match = PartMatch()
+    named = PartMatch()
     if part.name and part.process != "ซื้อสำเร็จ":
-        match = match_by_name(part, pool, context)
-    if not match.items and loose:
-        return _loose_match(part, loose, context) or match
-    return match
+        named = match_by_name(part, pool, context)
+    if named.items and named.method == M_NAME:
+        return named
+    if loose:  # the code says it is this part though the name or the size differs
+        return _loose_match(part, loose, pool, context)
+    if named.items:
+        return named
+    if part.name and part.process != "ซื้อสำเร็จ":
+        return match_near_name(part, pool, context) or named
+    return named
 
 
 def _part_brand(code: CodeParts, context: DrawingContext) -> str:
@@ -237,10 +247,10 @@ def _name_context(part: Part, context: DrawingContext, letter: str = ""):
 
 
 def match_by_part_no(part: Part, stock: StockList,
-                     context: DrawingContext) -> tuple[PartMatch | None, list[tuple[StockItem, str]]]:
+                     context: DrawingContext) -> tuple[PartMatch | None, list[tuple[float, StockItem, str]]]:
     """The item(s) with the same part number for the vehicle's brand or every brand (A):
     RRS-T-039 เต้า1 -> RRS-A-039-NO1-PR เต้าพื้นเรียบเบอร์ 1. Returns (match, loose): loose are items of the
-    same number whose name or size differs (with why) – used only when nothing else is found."""
+    same number whose name or size differs: (score, item, why)."""
     from .express_codes import _code_side, _core, _item_side, _numbers, _score, _side, _tokens, _word_score
 
     own = split_code(part.part_no)
@@ -268,7 +278,8 @@ def match_by_part_no(part: Part, stock: StockList,
         conflict = variant_conflict(part, item, context)
         score = _score(row, ctx, item, row_core, row_nums, row_words, frozenset()) if part.name else 0
         if score <= 0 or conflict:
-            loose.append((item, conflict or "ชื่อต่างกัน"))
+            why = conflict or (f"ชื่อในแบบ {part.name} ≠ {item.name}" if part.name else "ไม่มีชื่อในแบบ")
+            loose.append((score + (1.5 if code.brand == letter else 0), item, why))
             continue
         score += 1.5 if code.brand == letter else 0  # the vehicle's own item before the one for every brand
         score += sum(1 for x in own.rest if x in code.rest and x not in ("L", "R"))
@@ -277,34 +288,70 @@ def match_by_part_no(part: Part, stock: StockList,
         return None, loose
     scored.sort(key=lambda t: -t[0])
     best_s, best = scored[0]
-    items = [(best, 1.0)]
-    rivals = scored[1:]
-    side = _item_side(best)
-    if side and not want:  # Express has left and right apart: half each
-        other = (_counterpart(best, side, StockList(items=[i for _s, i in scored]))
-                 or _counterpart(best, side, stock))
-        if other is not None:
-            items = sorted([(best, 0.5), (other, 0.5)], key=lambda t: _item_side(t[0]) != "L")
-            rivals = [(s, i) for s, i in rivals if i is not other]
+    items = _paired(part, best, [i for _s, i in scored], stock)  # Express has left and right apart: half each
+    rivals = [(s, i) for s, i in scored[1:] if all(i is not x for x, _share in items)]
     lead = best_s - rivals[0][0] if rivals else 99
     alternatives = [f"{i.code} {i.name}" for s, i in rivals[:3] if s >= best_s - 3]
-    method = M_PART_NO if lead >= 1.5 else M_PART_CHECK
+    method = M_PART_NO if lead >= 1.5 else M_PART_CLOSE  # close variants: the best one, the others listed
     return PartMatch(items, method, round(best_s, 1), alternatives, _brand_note(own, best, letter)), loose
 
 
-def _loose_match(part: Part, loose: list[tuple[StockItem, str]], context: DrawingContext) -> PartMatch | None:
-    """Nothing else found: the one item (or left/right pair) of the same part number, to check."""
-    from .express_codes import _item_side
+def _paired(part: Part, best: StockItem, near: list[StockItem], stock: StockList) -> list[tuple[StockItem, float]]:
+    """best alone, or with its other side half each when the drawing part has no side."""
+    from .express_codes import _code_side, _item_side, _side
 
-    items = [i for i, _why in loose]
-    sides = {_item_side(i) for i in items}
-    if not (len(items) == 1 or (len(items) == 2 and sides == {"L", "R"})):
-        return None
-    items.sort(key=lambda i: _item_side(i) != "L")
+    side = _item_side(best)
+    if side and not (_side(part.name) or _code_side(part.part_no)):
+        other = _counterpart(best, side, StockList(items=near)) or _counterpart(best, side, stock)
+        if other is not None:
+            return sorted([(best, 0.5), (other, 0.5)], key=lambda t: _item_side(t[0]) != "L")
+    return [(best, 1.0)]
+
+
+def _loose_match(part: Part, loose: list[tuple[float, StockItem, str]], stock: StockList,
+                 context: DrawingContext) -> PartMatch:
+    """The item of the same part number though its name or size differs (the nearest one when there are
+    several), matched as a close result with why."""
+    ranked = sorted(loose, key=lambda t: -t[0])
+    score, best, why = ranked[0]
+    items = _paired(part, best, [i for _s, i, _w in ranked], stock)
+    taken = {id(i) for i, _s in items}
     own = split_code(part.part_no)  # loose items come from match_by_part_no: the code is read
-    why = "; ".join(dict.fromkeys(w for _i, w in loose))
-    note = _brand_note(own, items[0], _part_brand(own, context)) + f" แต่{why}"
-    return PartMatch([(i, 1 / len(items)) for i in items], M_PART_CHECK, 5.0, note=note)
+    note = _brand_note(own, best, _part_brand(own, context)) + f" · {why}"
+    alternatives = [f"{i.code} {i.name}" for _s, i, _w in ranked if id(i) not in taken][:3]
+    return PartMatch(items, M_PART_CLOSE, round(max(score, 5.0), 1), alternatives, note)
+
+
+def match_near_name(part: Part, stock: StockList, context: DrawingContext) -> PartMatch | None:
+    """A name that is the same once the spelling is the same (บังโครน -> RRS-A-037-PR บังโคลนพื้นเรียบ), of the
+    vehicle's brand or every brand, not another size or number of it (เต้า4 is not เต้าเบอร์ 1)."""
+    import difflib
+
+    from .express_codes import _code_side, _core, _item_side, _side
+
+    core = _core(part.name)
+    if len(core) < 3:
+        return None
+    own = split_code(part.part_no)
+    letter = _part_brand(own, context) if own else context.brand
+    want = _side(part.name) or _code_side(part.part_no)
+    near = []
+    for item in stock.items:
+        code = split_code(item.code)
+        if code is None or code.brand not in (ALL_BRANDS, letter) or (want and _item_side(item) not in (want, "")):
+            continue
+        ratio = difflib.SequenceMatcher(None, core, _core(item.name)).ratio()
+        if ratio >= NEAR_NAME and not variant_conflict(part, item, context):
+            near.append((ratio + (0.05 if code.brand == letter else 0), item))
+    if not near:
+        return None
+    near.sort(key=lambda t: -t[0])
+    ratio, best = near[0]
+    items = _paired(part, best, [i for _r, i in near], stock)
+    taken = {id(i) for i, _s in items}
+    return PartMatch(items, M_NAME_CLOSE, round(10 * ratio, 1), [f"{i.code} {i.name}" for _r, i in near
+                                                                   if id(i) not in taken][:3],
+                     f"ชื่อใกล้เคียง: {part.name} ≈ {best.name}")
 
 
 def _sizes(text: str) -> set[float]:
@@ -361,7 +408,7 @@ def match_by_name(part: Part, stock: StockList, context: DrawingContext) -> Part
     if best.status not in (ST_AUTO, ST_CHECK, ST_EXACT) or not best.code:
         return PartMatch(alternatives=best.alternatives)
     item = _find_code(best.code, pool)
-    method = M_NAME if best.status in (ST_AUTO, ST_EXACT) else M_CHECK
+    method = M_NAME if best.status in (ST_AUTO, ST_EXACT) else M_NAME_CLOSE
     match = PartMatch([(item, 1.0)], method, best.score, best.alternatives)
     side = _item_side(item)
     if side and not _side(part.name):  # Express has left and right apart: half each

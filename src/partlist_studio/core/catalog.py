@@ -424,7 +424,7 @@ class Ticket:
     remark: str = ""
     drawing_code: str = ""  # รหัส Part ตามแบบ DWG
     express_code: str = ""  # รหัส Part Express (stock code; 'A / B' for a left and a right item)
-    express_note: str = ""  # 'ควรตรวจ' / 'ยังไม่มีในสต็อก'
+    express_note: str = ""  # 'ยังไม่มีในสต็อก'
     vehicle: str = ""  # ยี่ห้อ / รุ่นรถ: 'Toyota · REVO'
     body: str = ""  # รุ่นกระบะที่ผลิต: 'กระบะดั้มพ์คอกสูง 3 ราว'
     size: str = ""  # '150 × 60 มม. · หนา 3 มม.'
@@ -524,7 +524,7 @@ def _express_code(part, item, match, stock: StockList | None) -> tuple[str, str]
     if _tied(part):
         return part.code, ""
     if match is not None and match.items:
-        return " / ".join(i.code for i, _s in match.items), "ควรตรวจ" if match.to_check else ""
+        return " / ".join(i.code for i, _s in match.items), ""
     return "", "ยังไม่มีในสต็อก" if stock is not None and stock.items else ""
 
 

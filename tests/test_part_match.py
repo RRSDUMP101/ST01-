@@ -87,14 +87,14 @@ def test_check_uses_the_matches_and_keeps_sure_codes():
     assert left.method == pm.M_PART_NO and "จากแบบ RRS-T-027 หูช้าง" in left.note and "ซ้าย/ขวา" in left.note
     assert "A = ทุกยี่ห้อ ใช้กับ T (Toyota)" in left.note
     assert lines["RRS-A-003"].required == 3 and lines["RRS-T-009-L"].method == pm.M_PART_NO
-    assert lines["RRS-A-037-PR"].method == pm.M_PART_CHECK  # same number, another name: to check
+    assert lines["RRS-A-037-PR"].method == pm.M_PART_CLOSE  # same number, another name: a close result
     missing = next(line for line in lines.values() if line.status == "ไม่พบในสต็อก")
     assert missing.parts == ["RRS-T-050"] and missing.method == pm.M_NONE
     apply_status_to_parts(pl, stock, list(lines.values()))
     codes = {p.part_no: p.stock_code for p in pl.parts}
     assert codes["RRS-T-027"] == "RRS-A-027-L / RRS-A-027-R" and codes["RRS-T-003"] == "RRS-A-003"
     assert codes["RRS-T-009"] == "RRS-T-009-L / RRS-T-009-R-"
-    assert codes["RRS-T-037"] == ""  # to check: left for a person
+    assert codes["RRS-T-037"] == "RRS-A-037-PR"  # close results are matched all the same
     assert {p.part_no: p.status for p in pl.parts}["RRS-T-027"] == "ขาด"
     # next time the stock code is used as it is (both sides)
     again = _match(pl, stock)["RRS-T-027"]
@@ -155,7 +155,27 @@ def test_same_number_but_another_part_or_size():
     assert [i.code for i, _s in m["RRS-T-025"].items] == ["RRS-A-026-L", "RRS-A-026-R"]
     assert m["RRS-T-025"].method == pm.M_NAME and m["RRS-T-026"].item.code == "RRS-A-025"
     assert (m["RRS-T-020"].method, m["RRS-T-020"].item.code) == (pm.M_PART_NO, "RRS-A-020-161CM")  # not 169 cm
-    assert m["RRS-T-040"].method == pm.M_PART_CHECK and m["RRS-T-040"].note.endswith("แต่เบอร์ 2 ≠ 3")  # 040 เต้า3?
+    assert m["RRS-T-040"].method == pm.M_PART_CLOSE and m["RRS-T-040"].note.endswith("· เบอร์ 2 ≠ 3")  # by the code
     part = Part(part_no="RRS-T-040", name="เต้า3")
     no2 = next(i for i in _stock().items if i.code == "RRS-A-040-NO2-PR")
     assert pm.variant_conflict(part, no2, pm.DrawingContext()) == "เบอร์ 2 ≠ 3"
+
+
+def test_close_results_are_matched():
+    """Close variants, the same code with another name, a name spelt another way: matched, marked ใกล้เคียง."""
+    m = _match(_drawing(("RRS-T-021", "เหล็กฉากฝาข้าง", 1), ("RRS-T-038", "ขาบังโครน", 1),
+                        ("RRS-T-037", "ชิ้นที่ 5", 1), drawing_no="T-SET"))
+    side = m["RRS-T-021"]  # no stall height in this drawing: 40 or 80, the first one and the other listed
+    assert side.method == pm.M_PART_CLOSE and side.sure and side.close
+    assert side.item.code in ("RRS-A-021-40", "RRS-A-021-80") and side.alternatives[0].startswith("RRS-A-021-")
+    rows = {p.name: x for p, x in pm.match_parts(_drawing(("", "บังโครน", 1), ("", "เต้า4", 1)), _stock())}
+    mud = rows["บังโครน"]
+    assert (mud.method, mud.item.code) == (pm.M_NAME_CLOSE, "RRS-A-037-PR")  # บังโครน = บังโคลน
+    assert mud.note == "ชื่อใกล้เคียง: บังโครน ≈ บังโคลนพื้นเรียบ"
+    assert not rows["เต้า4"].items  # the same word, another number: not เต้าเบอร์ 1
+    assert not m["RRS-T-038"].items  # ขาบังโครน is the bracket, not the mudguard
+    assert m["RRS-T-037"].item.code == "RRS-A-037-PR"
+    assert "ชื่อในแบบ ชิ้นที่ 5 ≠ บังโคลนพื้นเรียบ" in m["RRS-T-037"].note
+    lines = {line.code: line for line in check_requirements(_drawing(("RRS-T-021", "เหล็กฉากฝาข้าง", 2)), _stock())}
+    line = next(x for x in lines.values() if x.code.startswith("RRS-A-021-"))
+    assert line.required == 2 and "ตัวเลือกอื่น: RRS-A-021-" in line.note  # in the check, with the other choice

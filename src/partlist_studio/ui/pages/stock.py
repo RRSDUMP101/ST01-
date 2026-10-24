@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QFileDialog, QHBoxLayout, QHea
 from ...core.company_files import (SHEET_STEEL, export_steel_issue, export_stock_count, read_company_workbook,
                                    sheet_names)
 from ...core.express import read_express_file
-from ...core.part_match import CHECK, M_NONE, M_STOCK_CODE, match_parts
+from ...core.part_match import CLOSE, M_NONE, M_STOCK_CODE, match_parts
 from ...core.stock import (ST_LOW, ST_MISSING, ST_OK, ST_SHORT, StockList, apply_status_to_parts,
                            check_requirements, export_requirements)
 from ..actions import TABLE_FILTER
@@ -135,6 +135,8 @@ class StockPage(QWidget):
                       "รหัสชิ้นส่วนเดียวกัน (RRS-ยี่ห้อ-เลขชิ้นส่วน: T Toyota · I Isuzu · M Mitsubishi · F Ford · "
                       "N Nissan · A = ทุกยี่ห้อ เช่น RRS-T-039 เต้า1 = RRS-A-039-NO1-PR) → "
                       "ชื่อชิ้นส่วน (ชื่อ เลขชิ้นส่วนในรหัส รุ่นรถ ความสูงคอก ความยาวกระบะ ซ้าย/ขวา) → วัสดุ/ความหนา · "
+                      "ผลใกล้เคียง (รหัสเดียวกันแต่ชื่อ/ขนาดต่าง, ชื่อสะกดต่าง) จับคู่ให้เลย "
+                      "ขึ้นก่อนพร้อมตัวเลือกอื่น · "
                       "ยี่ห้อรถเลือกได้ที่หน้าภาพรวม (ไม่เลือก = อ่านจากรหัสในแบบ) · "
                       "ชิ้นในแบบที่ไม่ระบุซ้าย/ขวา แบ่งจำนวนให้รหัสซ้ายและขวาอย่างละครึ่ง")
         hint.setObjectName("Hint")
@@ -146,7 +148,7 @@ class StockPage(QWidget):
         mrow = QHBoxLayout()
         self.confirm_btn = button("ยืนยันรหัสที่เลือก → รหัสสโตร์ใน Part List", "primary",
                                   tooltip="บันทึกรหัสสินค้าที่จับคู่ได้ของแถวที่เลือกเป็นรหัสสโตร์ของชิ้นส่วนใน Part List "
-                                          "ครั้งต่อไปใช้รหัสนี้ทันที (แถวที่ไม่เลือก = ทุกแถวที่ ควรตรวจ)")
+                                          "ครั้งต่อไปใช้รหัสนี้ทันที (แถวที่ไม่เลือก = ทุกแถวที่จับคู่จากผลใกล้เคียง)")
         self.confirm_btn.clicked.connect(self.confirm_matches)
         mrow.addWidget(self.confirm_btn)
         self.clear_btn = button("ล้างรหัสสโตร์ที่เลือก", tooltip="ให้ระบบจับคู่แถวที่เลือกใหม่จากรหัส/ชื่อ")
@@ -322,10 +324,10 @@ class StockPage(QWidget):
         for line in self.state.requirements:
             counts[line.status] = counts.get(line.status, 0) + 1
         named = sum(1 for _p, m in self.state.part_matches if m.method not in (M_NONE,) and m.score < 99)
-        check = sum(1 for _p, m in self.state.part_matches if m.to_check)
+        close = sum(1 for _p, m in self.state.part_matches if m.close)
         self.state.notify("ตรวจวัตถุดิบเทียบสต็อกแล้ว: " + " · ".join(f"{k} {v}" for k, v in counts.items())
-                          + (f" · จับคู่จากชื่อ {named} รายการ" if named else "")
-                          + (f" (ควรตรวจ {check} – แท็บ จับคู่ชิ้นส่วน ↔ สต็อก)" if check else ""))
+                          + (f" · จับคู่รหัสอัตโนมัติ {named} รายการ" if named else "")
+                          + (f" (จากผลใกล้เคียง {close} – ดูได้ที่แท็บ จับคู่ชิ้นส่วน ↔ สต็อก)" if close else ""))
 
     def _show_matches(self) -> None:
         matches = self.state.part_matches
@@ -336,12 +338,12 @@ class StockPage(QWidget):
             on_hand = " / ".join(f"{i.on_hand:g}" for i, _s in m.items)
             rows.append([part.part_no, part.name, codes, names, on_hand, m.method if m.items else M_NONE,
                          "; ".join(([m.note] if m.note else []) + m.alternatives[:3])])
-        idx = sorted(range(len(rows)), key=lambda i: 0 if rows[i][5] in CHECK else 1 if rows[i][5] == M_NONE else 2)
+        idx = sorted(range(len(rows)), key=lambda i: 0 if rows[i][5] in CLOSE else 1 if rows[i][5] == M_NONE else 2)
         fill(self.match_table, [rows[i] for i in idx], status_col=5, data=[i for i in idx])
-        check = sum(1 for r in rows if r[5] in CHECK)
+        close = sum(1 for r in rows if r[5] in CLOSE)
         none = sum(1 for r in rows if r[5] == M_NONE)
         self.check_tabs.setTabText(1, "จับคู่ชิ้นส่วน ↔ สต็อก" + (
-            f" (ควรตรวจ {check} · ไม่พบ {none})" if check or none else ""))
+            f" (ใกล้เคียง {close} · ไม่พบ {none})" if close or none else ""))
         self.confirm_btn.setEnabled(bool(rows))
         self.clear_btn.setEnabled(bool(rows))
 
@@ -349,7 +351,7 @@ class StockPage(QWidget):
         picked = [self.match_table.item(r, 0).data(Qt.UserRole) for r in selected_rows(self.match_table)]
         matches = self.state.part_matches
         if not picked and only_check:
-            picked = [i for i, (_p, m) in enumerate(matches) if m.to_check]
+            picked = [i for i, (_p, m) in enumerate(matches) if m.close]
         return [matches[i] for i in picked if 0 <= i < len(matches)]
 
     def confirm_matches(self) -> None:

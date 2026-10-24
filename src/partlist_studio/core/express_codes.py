@@ -45,7 +45,9 @@ _SYNONYMS = [("ปิดหน้าเฟรมล่าง", "หน้าเ�
              ("หูบน(ตัวล่าง)", "หูบนตัวนอก"), ("หูบน(ตัวใน)", "หูบนตัวใน"), ("เหล็กซองเสา", "ซองเสา"),
              ("ป้ายทะเบียน", "กรอบป้ายทะเบียน"), ("เหล็กรางกลางเบอร์", "เหล็กรางกลางพื้นเรียบเบอร์"),
              ("กระดูกกลางเบอร์", "กระดูกกลางพื้นเรียบเบอร์"),
-             ("กล่องปิดท้าย", "กล่องฝาท้าย")]
+             ("กล่องปิดท้าย", "กล่องฝาท้าย"),
+             # the same word spelt another way in the drawings
+             ("โครน", "โคลน"), ("คัตซี", "คัดซี"), ("ซัพ", "ซับ")]
 _NOISE = re.compile(r"(พื้นเรียบ|ซ้าย|ขวา|ข้างซ้าย|ข้างขวา|ใช้กับทุกรุ่น|ใช้ด้วยกันทุกรุ่น|new|old|เก่า|ใหม่|\d+(?:\.\d+)?|"
                     r"champ|clamp|cramp|revo|mitsu\w*|isuzu|nissan|toyota|t-|i-|m-|n\.v|f\.t|cm|mm|มิล|"
                     r"[a-z]+|[()\[\]\s.,+\-/])", re.IGNORECASE)
@@ -153,7 +155,9 @@ def _numbers(text: str) -> set[str]:
 
 
 def _core(text: str) -> str:
-    t = _ORDINAL.sub("", (text or "").replace("\xa0", " "))
+    t = (text or "").replace("\xa0", " ")
+    t = t.replace("\u0e4d\u0e49\u0e32", "\u0e49\u0e33").replace("\u0e4d\u0e32", "\u0e33")  # นํ้า (ํ + ้ + า) = น้ำ
+    t = _ORDINAL.sub("", t)
     t = _RAILS.sub("", t).replace(" ", "")  # "ซองเสา 2ราว" is the 2-rail ซองเสา, not a ราว
     for a, b in _SYNONYMS:
         t = t.replace(a, b)

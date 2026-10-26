@@ -64,6 +64,8 @@ class Part:
     material_source: str = ""  # where the material came from: 'แบบ (ป้ายที่ชิ้นงาน): “M=Steel”', 'กำหนดเอง'
     bend_lines: list = field(default_factory=list)  # bend lines of the flat pattern [[(x, y), (x, y)], ...] (marks)
     cad_fixes: list = field(default_factory=list)  # what the import repaired in its lines ('ต่อเส้น 2 จุด ...')
+    drawing_box: list = field(default_factory=list)  # where the flat pattern is drawn [x0, y0, x1, y1] mm (sides)
+    side_source: str = ""  # how the drawing told ซ้าย/ขวา: 'แบบ (วางคู่ในแนวนอน): ชิ้นที่วางฝั่งซ้าย = ซ้าย (L)'
 
     def get(self, key: str):
         return getattr(self, key)
@@ -92,6 +94,9 @@ class Part:
         part.material_source = str(data.get("material_source", "") or "")
         part.bend_lines = [[(float(x), float(y)) for x, y in line] for line in data.get("bend_lines") or []]
         part.cad_fixes = [str(t) for t in data.get("cad_fixes") or []]
+        box = data.get("drawing_box") or []
+        part.drawing_box = [float(v) for v in box] if len(box) == 4 else []
+        part.side_source = str(data.get("side_source", "") or "")
         return part
 
 

@@ -9,11 +9,12 @@ from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDialog,
                                QScrollArea, QSpinBox, QSplitter, QTableWidget, QTableWidgetItem, QTabWidget,
                                QVBoxLayout, QWidget)
 
-from ..core.dwg_io import (MAT_AS_DRAWN, MAT_MANUAL, MAT_MISSING, MATERIAL_CHOICES, QTY_DEFAULT, QTY_MANUAL,
-                           THICKNESS_MODES, THK_DEFAULT, THK_FROM_BOM, THK_FROM_PART, THK_MANUAL, THK_MISSING,
-                           CandidatePart, DrawingData, drawing_to_candidates, reset_part_material, resolve_thickness,
+from ..core.dwg_io import (MAT_AS_DRAWN, MAT_MANUAL, MAT_MISSING, MATERIAL_CHOICES, QTY_DEFAULT, QTY_FROM_PAIR,
+                           QTY_MANUAL, SIDE_FROM_LAYOUT, SIDE_FROM_PAIR, SIDE_FROM_TEXT, SIDE_MANUAL, THICKNESS_MODES,
+                           THK_DEFAULT, THK_FROM_BOM, THK_FROM_PART, THK_MANUAL, THK_MISSING, CandidatePart,
+                           DrawingData, drawing_to_candidates, part_side, reset_part_material, resolve_thickness,
                            set_part_material, set_part_thickness)
-from ..core import cad_fix
+from ..core import cad_fix, sides
 from ..core.dwg_io import read_drawing
 from ..core.models import COLUMN_KEYS, COLUMN_LABELS, COMMON_THICKNESS, NUMERIC_COLUMNS, Part, to_number
 from ..core.mapping import auto_map
@@ -126,6 +127,8 @@ SOURCE_LABEL = {"bom": "ตาราง BOM", "profile": "รูปคลี่"
 THK_SOURCE_COL = "_thk_source"
 QTY_SOURCE_COL = "_qty_source"
 MAT_SOURCE_COL = "_mat_source"
+SIDE_COL = "_side"
+SIDE_CHOICES = ["", sides.LABELS[sides.L], sides.LABELS[sides.R]]
 
 
 def material_color(source: str) -> QColor | None:
@@ -133,7 +136,11 @@ def material_color(source: str) -> QColor | None:
 
 
 def qty_color(source: str) -> QColor | None:
-    return theme.WARN_BG if source in (QTY_DEFAULT, QTY_MANUAL) else None
+    return theme.WARN_BG if source in (QTY_DEFAULT, QTY_MANUAL, QTY_FROM_PAIR) else None
+
+
+def side_color(source: str) -> QColor | None:
+    return theme.OK_BG if source in (SIDE_FROM_LAYOUT, SIDE_FROM_PAIR) else None
 
 
 def thickness_color(source: str) -> QColor | None:
@@ -274,8 +281,9 @@ class DrawingImportDialog(QDialog):
         self.columns.insert(self.columns.index("thickness") + 1, THK_SOURCE_COL)
         self.columns.insert(self.columns.index("qty") + 1, QTY_SOURCE_COL)
         self.columns.insert(self.columns.index("material") + 1, MAT_SOURCE_COL)
+        self.columns.insert(self.columns.index("name") + 1, SIDE_COL)
         labels = {"_check": "เพิ่ม", "_source": "ที่มา", THK_SOURCE_COL: "ความหนาจาก", QTY_SOURCE_COL: "จำนวนจาก",
-                  MAT_SOURCE_COL: "วัสดุจาก"}
+                  MAT_SOURCE_COL: "วัสดุจาก", SIDE_COL: "ข้าง"}
         self.table = QTableWidget()
         self.table.setColumnCount(len(self.columns))
         self.table.setHorizontalHeaderLabels([labels.get(k) or COLUMN_LABELS[k] for k in self.columns])
@@ -285,6 +293,8 @@ class DrawingImportDialog(QDialog):
         self.table.itemChanged.connect(self._item_changed)
         self._mat_delegate = ComboDelegate(MATERIAL_CHOICES, self.table)
         self.table.setItemDelegateForColumn(self._col("material"), self._mat_delegate)
+        self._side_delegate = ComboDelegate(SIDE_CHOICES, self.table)
+        self.table.setItemDelegateForColumn(self._col(SIDE_COL), self._side_delegate)
         self.tabs.addTab(self.table, "รายการที่จะเพิ่มเข้า Part List")
         self.attr_table = QTableWidget()
         self.attr_table.setColumnCount(3)
@@ -590,6 +600,16 @@ class DrawingImportDialog(QDialog):
             self.table.item(r, self._col("material")).setBackground(color)
         self.table.setItem(r, self._col(MAT_SOURCE_COL), msrc)
         self.table.item(r, self._col("material")).setToolTip("ดับเบิลคลิกเพื่อเลือกวัสดุ")
+        side = part_side(cand.part)
+        cell = QTableWidgetItem(sides.LABELS.get(side, ""))
+        source = cand.side_source or (SIDE_FROM_TEXT if side else "")
+        cell.setToolTip((cand.part.side_source or source) + ("\n" if source else "")
+                        + "ดับเบิลคลิกเพื่อเลือก ซ้าย (L) / ขวา (R) – ชื่อชิ้นส่วนเปลี่ยนตาม · วางคู่กันในแนวนอน: "
+                          "ชิ้นที่วางฝั่งซ้าย = ซ้าย, ฝั่งขวา = ขวา")
+        color = side_color(cand.side_source)
+        if color is not None:
+            cell.setBackground(color)
+        self.table.setItem(r, self._col(SIDE_COL), cell)
         self._loading = loading
 
     def _store_row(self, r: int, cand: CandidatePart, skip: str = "") -> None:
@@ -632,6 +652,26 @@ class DrawingImportDialog(QDialog):
             self._store_row(r, cand, skip="material")
             self._set_material(cand, item.text())
             self._fill_row(r, cand)
+        elif col == self._col(SIDE_COL):
+            self._store_row(r, cand)
+            text = item.text().upper()
+            side = sides.L if "ซ้าย" in text or text.strip() == "L" or "(L)" in text else (
+                sides.R if "ขวา" in text or text.strip() == "R" or "(R)" in text else "")
+            if side != part_side(cand.part):
+                cand.part.name = sides.with_side(cand.part.name, side)
+                cand.side_source = SIDE_MANUAL if side else ""
+                cand.part.side_source = f"{SIDE_MANUAL}: {sides.LABELS[side]}" if side else ""
+            self._fill_row(r, cand)
+            self._refresh_preview()
+        elif col == self._col("name"):  # a side typed in the name (or taken out) is the side
+            before = part_side(cand.part)
+            self._store_row(r, cand)
+            after = part_side(cand.part)
+            if after != before:
+                cand.side_source = SIDE_MANUAL if after else ""
+                cand.part.side_source = f"{SIDE_MANUAL}: {sides.LABELS[after]}" if after else ""
+            self._fill_row(r, cand)
+            self._refresh_preview()
 
     # ---- thickness ---------------------------------------------------------
     def _plate(self, cand: CandidatePart) -> bool:
@@ -746,7 +786,8 @@ class DrawingImportDialog(QDialog):
         cands = self.candidates[self._current]
         profile_cands = [c for c in cands if c.profile_index is not None]
         selected = {c.profile_index for c in profile_cands if c.selected} if profile_cands else None
-        self.preview.show_drawing(data, selected)
+        placed = {c.profile_index: part_side(c.part) for c in profile_cands if part_side(c.part)}
+        self.preview.show_drawing(data, selected, placed)
         chosen = [c for cs in self.candidates.values() for c in cs if c.selected]
         missing = sum(1 for c in chosen if c.thickness_source == THK_MISSING)
         text = f"เลือกแล้ว {len(chosen)} รายการ จาก {len(self.drawings)} แบบ"

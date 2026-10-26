@@ -794,3 +794,35 @@ def test_laser_sheet_size_choice_and_sizes_added_by_hand(window, app, monkeypatc
     assert all(not g.chosen for g in others)  # only the selected thickness changes
     page._sheet_chosen(0)  # automatic again
     assert not page._group().chosen and group.key not in page.sheet_chosen
+
+
+def test_drawing_dialog_left_and_right(app):
+    """Pieces drawn side by side: ซ้าย / ขวา in the ข้าง column (green = read from the layout), changed by hand."""
+    from partlist_studio.core import dwg_io
+    from partlist_studio.ui import theme
+    from partlist_studio.ui.dialogs import SIDE_COL, DrawingImportDialog
+
+    data = dwg_io.read_drawing(SAMPLES / "RRS-T-LR_left_right_pairs.dxf")
+    dialog = DrawingImportDialog([data], dwg_io.DEFAULT_DENSITIES)
+    cands = dialog.candidates[0]
+    col, name = dialog._col(SIDE_COL), dialog._col("name")
+    rows = {dialog.table.item(r, name).text(): r for r in range(dialog.table.rowCount())}
+    left, right = rows["หูช้าง (ซ้าย)"], rows["หูช้าง (ขวา)"]
+    assert dialog.table.item(left, col).text() == "ซ้าย (L)" and dialog.table.item(right, col).text() == "ขวา (R)"
+    assert dialog.table.item(left, col).background().color() == theme.OK_BG
+    assert "ชิ้นที่วางฝั่งซ้าย" in dialog.table.item(left, col).toolTip()
+    assert dialog.table.item(rows["ข้างเฟรมบน"], col).text() == ""  # one above the other: no side
+    assert dialog.table.itemDelegateForColumn(col) is dialog._side_delegate
+    sides_drawn = [t.text() for t in dialog.preview.scene().items() if hasattr(t, "text") and t.text() in
+                   ("ซ้าย L", "ขวา R")]
+    assert sorted(sides_drawn) == ["ขวา R", "ซ้าย L"]
+    dialog.table.item(right, col).setText("ซ้าย (L)")  # picked by hand: the name follows
+    assert cands[right].part.name == "หูช้าง (ซ้าย)" and cands[right].side_source == dwg_io.SIDE_MANUAL
+    dialog.table.item(right, name).setText("หูช้าง")  # the side taken out of the name
+    assert dialog.table.item(right, col).text() == "" and not cands[right].part.side_source
+    dialog.table.item(right, col).setText("ขวา (R)")
+    dialog.accept()
+    [(_d, parts)] = dialog.selected_parts()
+    ears = [p for p in parts if p.part_no == "RRS-T-027"]
+    assert [(p.name, p.qty, p.thickness) for p in ears] == [("หูช้าง (ซ้าย)", 1, 3), ("หูช้าง (ขวา)", 1, 3)]
+    assert ears[0].drawing_box and ears[0].side_source.startswith(dwg_io.SIDE_FROM_LAYOUT)

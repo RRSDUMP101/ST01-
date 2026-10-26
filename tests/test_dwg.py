@@ -489,3 +489,70 @@ def test_rrs_logo_and_real_holes_are_not_taken_for_letters(tmp_path):
     assert len(part.outline) == 1 + 18 + 2 + 2 + 1 + 2 + 2 + 2  # every hole but the '90' is cut
     assert "คงตัวอักษร/ลวดลายที่ตัดในชิ้นงาน (ตัดตามแบบ) 3 จุด" in part.cad_fixes
     assert cf.FIX_KEPT in cf.INFO
+
+
+def _bracket(msp, x0, y0, w, h, mirror=False, label=""):
+    """An L-shaped plate with two holes (not the same seen from the back): w x h at (x0, y0), or its mirror."""
+    pts = [(0, 0), (w, 0), (w, 0.4 * h), (0.35 * w, 0.4 * h), (0.35 * w, h), (0, h)]
+    holes = [(0.17 * w, 0.75 * h, 5), (0.85 * w, 0.2 * h, 4)]
+
+    def at(x, y):
+        return (x0 + (w - x if mirror else x), y0 + y)
+
+    msp.add_lwpolyline([at(x, y) for x, y in pts], close=True)
+    for x, y, r in holes:
+        msp.add_circle(at(x, y), r)
+    if label:
+        msp.add_text(label, height=4).set_placement((x0 + w / 2 - 30, y0 + 0.2 * h))
+
+
+def test_left_and_right_from_pieces_drawn_side_by_side(tmp_path):
+    import ezdxf
+
+    doc = ezdxf.new()
+    doc.header["$INSUNITS"] = 4
+    msp = doc.modelspace()
+    # one label on the left piece, its mirror image next to it on the right (no label of its own)
+    _bracket(msp, 0, 0, 160, 90, label="RRS-T-027 /หูช้าง / t 3 / 2 ชิ้น/")
+    _bracket(msp, 230, 0, 160, 90, mirror=True)
+    # the same code written on both
+    _bracket(msp, 0, 400, 200, 60, label="RRS-T-030 ฉากราวล่าง 1 ชิ้น")
+    _bracket(msp, 300, 400, 200, 60, mirror=True, label="RRS-T-030 ฉากราวล่าง 1 ชิ้น")
+    # the name says ซ้าย: the piece next to it is ขวา
+    _bracket(msp, 0, 800, 130, 130, label="RRS-T-034 หูล็อคฝาท้าย ซ้าย")
+    _bracket(msp, 180, 800, 130, 130, mirror=True)
+    # one above the other: the drawing does not tell the side
+    _bracket(msp, 0, 1200, 240, 70, label="RRS-T-001 /ข้างเฟรมบน / 2 ชิ้น/")
+    _bracket(msp, 0, 1300, 240, 70)
+    # two plain plates of one size side by side: two parts, no side
+    msp.add_lwpolyline([(0, 1600), (100, 1600), (100, 1650), (0, 1650)], close=True)
+    msp.add_lwpolyline([(150, 1600), (250, 1600), (250, 1650), (150, 1650)], close=True)
+    msp.add_text("RRS-T-020 แผ่นรอง", height=4).set_placement((10, 1620))
+    path = tmp_path / "sides.dxf"
+    doc.saveas(path)
+    data = dwg_io.read_drawing(path)
+    cands = dwg_io.drawing_to_candidates(data)
+    got = [(c.part.part_no, c.part.name, c.part.qty, c.part.thickness, c.side_source) for c in cands]
+    layout, pair = dwg_io.SIDE_FROM_LAYOUT, dwg_io.SIDE_FROM_PAIR
+    assert got[:6] == [
+        ("RRS-T-001", "ข้างเฟรมบน", 2, 0, ""),
+        ("RRS-T-020", "แผ่นรอง", 1, 0, ""),
+        ("RRS-T-027", "หูช้าง (ซ้าย)", 1, 3, layout),  # 2 ชิ้น for the pair: ซ้าย 1 + ขวา 1
+        ("RRS-T-027", "หูช้าง (ขวา)", 1, 3, layout),  # the copy takes the code, name and thickness
+        ("RRS-T-030", "ฉากราวล่าง (ซ้าย)", 1, 0, layout),
+        ("RRS-T-030", "ฉากราวล่าง (ขวา)", 1, 0, layout),
+    ]
+    assert got[6:8] == [("RRS-T-034", "หูล็อคฝาท้าย ซ้าย", 1, 0, ""), ("RRS-T-034", "หูล็อคฝาท้าย (ขวา)", 1, 0, pair)]
+    assert [(g[0], g[4]) for g in got[8:]] == [("", "")] * 2  # the copy under ข้างเฟรมบน, the second plate
+    left, right = cands[2], cands[3]
+    assert left.part.side_source == f"{layout}: ชิ้นที่วางฝั่งซ้าย = ซ้าย (L)"
+    assert right.part.side_source == f"{layout}: ชิ้นที่วางฝั่งขวา = ขวา (R)"
+    assert left.qty_source == dwg_io.QTY_FROM_PAIR
+    assert left.qty_text == "RRS-T-027 /หูช้าง / t 3 / 2 ชิ้น/ = ซ้าย 1 + ขวา 1"
+    assert right.part.weight == left.part.weight > 0 and right.part.drawing_box[0] > left.part.drawing_box[2]
+    assert cands[7].part.side_source.endswith("ชิ้นคู่เป็นข้างซ้าย = ขวา (R)")
+    saved = tmp_path / "sides.rrspl"
+    PartList(parts=[left.part, right.part]).save(saved)
+    back = PartList.load(saved).parts
+    assert [(p.name, p.drawing_box, p.side_source) for p in back] == [
+        (p.name, p.drawing_box, p.side_source) for p in (left.part, right.part)]

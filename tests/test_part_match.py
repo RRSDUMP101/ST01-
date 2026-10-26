@@ -241,3 +241,32 @@ def test_the_program_picks_the_side(monkeypatch):
     one.parts[0].drawing_qty = 1  # the drawing says 1 ชิ้น: one side
     [(_p, ear)] = pm.match_parts(one, _stock())
     assert [i.code for i, _s in ear.items] == ["RRS-A-027-L"] and "แบบระบุ 1 ชิ้น" in ear.note
+
+
+def test_side_from_where_the_pieces_are_drawn(monkeypatch):
+    """Two parts on one left/right pair drawn side by side: the one placed on the left is ซ้าย, whatever their
+    number says; one above the other: by their number. Sides read by the DWG import are in the name."""
+    from partlist_studio.core import stock as stock_mod
+
+    monkeypatch.setattr(stock_mod, "XREF_LOOKUP", None)
+    monkeypatch.setattr(stock_mod, "XREF_ENTRIES", None)
+    pl = _drawing(("RRS-T-046", "กระดูกหมาชิ้นที่2", 1), ("RRS-T-045", "กระดูกหมาชิ้นที่1", 1))
+    pl.parts[0].drawing_box = [0, 0, 130, 40]  # ชิ้นที่2 drawn on the left
+    pl.parts[1].drawing_box = [200, 5, 285, 30]
+    m = {p.part_no: x for p, x in pm.match_parts(pl, _stock(), nearest=True)}
+    assert [i.code for i, _s in m["RRS-T-046"].items] == ["RRS-T-009-L"]
+    assert [i.code for i, _s in m["RRS-T-045"].items] == ["RRS-T-009-R-"]
+    assert m["RRS-T-046"].note.endswith("แบบวาง 2 ชิ้นนี้ในแนวนอน (RRS-T-046 ฝั่งซ้าย / RRS-T-045 ฝั่งขวา): "
+                                        "ชิ้นที่วางฝั่งซ้าย = ข้างซ้าย")
+    pl.parts[1].drawing_box = [0, 200, 85, 225]  # one above the other: ชิ้นที่1 = ซ้าย
+    m = {p.part_no: x for p, x in pm.match_parts(pl, _stock(), nearest=True)}
+    assert [i.code for i, _s in m["RRS-T-045"].items] == ["RRS-T-009-L"] and "ชิ้นแรก = ข้างซ้าย" in m["RRS-T-045"].note
+    # the same part drawn twice side by side: the DWG import named them (ซ้าย) / (ขวา)
+    ears = _drawing(("RRS-T-027", "หูช้าง (ซ้าย)", 1), ("RRS-T-027", "หูช้าง (ขวา)", 1))
+    for p, side in zip(ears.parts, ("ซ้าย", "ขวา")):
+        p.side_source = f"แบบ (วางคู่ในแนวนอน): ชิ้นที่วางฝั่ง{side} = {side}"
+    got = pm.match_parts(ears, _stock())
+    assert [[i.code for i, _s in x.items] for _p, x in got] == [["RRS-A-027-L"], ["RRS-A-027-R"]]
+    assert got[1][1].note.endswith("ข้างจากแบบ (วางคู่ในแนวนอน): ชิ้นที่วางฝั่งขวา = ขวา")
+    lines = {x.code: x for x in check_requirements(ears, _stock(), build_qty=2)}
+    assert (lines["RRS-A-027-L"].required, lines["RRS-A-027-R"].required) == (2, 2)

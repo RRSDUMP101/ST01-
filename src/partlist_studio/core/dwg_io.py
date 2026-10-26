@@ -118,12 +118,18 @@ QTY_FROM_BOM = "แบบ (ตาราง BOM)"
 QTY_FROM_BLOCKS = "แบบ (นับบล็อก)"
 QTY_DEFAULT = "ไม่ระบุในแบบ (ใช้ 1)"
 QTY_MANUAL = "กำหนดเอง"
+QTY_FROM_PAIR = "แบบ (ป้ายของคู่ซ้าย-ขวา)"  # written on one piece of a pair drawn side by side
 MAT_FROM_PART = "แบบ (ป้ายที่ชิ้นงาน)"
 MAT_FROM_NOTE = "แบบ (หมายเหตุในแบบ)"
 MAT_FROM_TITLE = "แบบ (Title Block)"
 MAT_MANUAL = "กำหนดเอง"
 MAT_MISSING = "ไม่พบในแบบ"
 MAT_AS_DRAWN = "ตามแบบ"
+SIDE_FROM_LAYOUT = "แบบ (วางคู่ในแนวนอน)"  # the left piece of the two = ซ้าย, the right one = ขวา
+SIDE_FROM_PAIR = "แบบ (ตรงข้ามกับชิ้นคู่)"  # its twin's name or code says the side
+SIDE_FROM_TEXT = "แบบ (ชื่อ/รหัส)"
+SIDE_MANUAL = "กำหนดเอง"
+_FALLBACK_NAME = re.compile(r"ชิ้นที่ \d+")  # the name given to a flat pattern without one
 # offered in the material pickers (any other text can be typed)
 MATERIAL_CHOICES = ["Steel", "Stainless", "Aluminium", "Galvanized", "SS400", "SPHC", "SUS304", "SUS430", "AL5052"]
 
@@ -1358,6 +1364,7 @@ class CandidatePart:
     qty_source: str = ""  # QTY_FROM_PART, QTY_FROM_NOTE, QTY_FROM_TITLE, QTY_FROM_BOM, QTY_DEFAULT, QTY_MANUAL
     qty_text: str = ""  # the text of the drawing the quantity was read from ('16 ชิ้น')
     material_source: str = ""  # MAT_FROM_PART ('M=Steel'), MAT_FROM_NOTE, MAT_FROM_TITLE, MAT_MANUAL, MAT_MISSING
+    side_source: str = ""  # SIDE_FROM_LAYOUT, SIDE_FROM_PAIR, SIDE_MANUAL ('' = the drawing does not tell)
 
     def set_qty(self, qty: float, source: str, text: str = "") -> None:
         """Quantity read from the drawing; the part keeps it (drawing_qty) and where it came from (qty_source)."""
@@ -1467,6 +1474,7 @@ def drawing_to_candidates(data: DrawingData, densities: dict[str, float] | None 
                 part.weight = plate_weight(prof.net_area, thickness, density_for(mat, densities))
             part.outline = profile_outline(data, prof)
             part.bend_lines = profile_bends(data, prof)
+            part.drawing_box = [round(v, 1) for v in prof.bbox]
             part.cad_fixes = cad_fix.fix_summary(part_fixes(data, i))
             cand = CandidatePart(part, "profile", profile_index=i, thickness_source=source, material_source=mat_source)
             qty, qty_source = resolve_qty(to_number(lab.get("qty", 0)),
@@ -1474,7 +1482,10 @@ def drawing_to_candidates(data: DrawingData, densities: dict[str, float] | None 
                                           title_qty if single else 0)
             cand.set_qty(qty, qty_source, qty_text(qty_source, lab))
             candidates.append(cand)
-        candidates.sort(key=lambda c: (not c.part.part_no, c.part.part_no))  # by code, uncoded parts last
+        read_sides(data, candidates, densities)
+        order = {"L": 0, "R": 1}
+        # by code (the left piece before the right one), uncoded parts last
+        candidates.sort(key=lambda c: (not c.part.part_no, c.part.part_no, order.get(part_side(c.part), 2)))
     elif not data.bom and (tb.get("name") or tb.get("part_no")):
         thickness, source = resolve_thickness(0, data.thickness, default_thickness, thickness_mode)
         part = Part(part_no=tb.get("part_no", ""), drawing_no=drawing_no, name=tb.get("name", ""),
@@ -1492,6 +1503,142 @@ def drawing_to_candidates(data: DrawingData, densities: dict[str, float] | None 
             cand.set_qty(count, QTY_FROM_BLOCKS)
             candidates.append(cand)
     return candidates
+
+
+def part_side(part: Part) -> str:
+    """L / R the part's name or code says ('หูช้าง (ซ้าย)', RRS-A-027-L), '' = none."""
+    from .sides import side_of
+
+    return side_of(part.name, part.part_no)
+
+
+def read_sides(data: DrawingData, candidates: list[CandidatePart], densities: dict[str, float] | None = None) -> None:
+    """ซ้าย / ขวา of a part drawn twice next to each other on one row (laid out horizontally): the piece on the
+    left is ซ้าย (L), the piece on the right is ขวา (R), and the name says it ('หูช้าง (ซ้าย)'). The two pieces
+    are one part when they carry the same code, or when one has no code and is the outline of the other (as
+    drawn or mirrored): it takes the code, name, thickness and material of its twin. A quantity written on one
+    of the two only is for the pair when it is even (2 ชิ้น = ซ้าย 1 + ขวา 1), for each piece when it is odd.
+    A side the name or code already says stays and its twin takes the other. Pieces drawn one above the other,
+    or three in a row, do not tell the side."""
+    from . import sides
+
+    cands = [c for c in candidates if c.source == "profile" and c.profile_index is not None]
+    profs = [data.profiles[c.profile_index] for c in cands]
+    boxes = [p.bbox for p in profs]
+    codes = [re.sub(r"\s+", "", c.part.part_no.upper()) for c in cands]
+
+    def between(i: int, j: int) -> bool:  # another piece on the row between the two
+        lo, hi = sorted((sides.centre(boxes[i])[0], sides.centre(boxes[j])[0]))
+        return any(k not in (i, j) and lo < sides.centre(boxes[k])[0] < hi and sides.side_by_side(boxes[k], boxes[i])
+                   for k in range(len(boxes)))
+
+    near: list[set[int]] = [set() for _ in cands]
+    for i in range(len(cands)):
+        for j in range(i + 1, len(cands)):
+            if not sides.side_by_side(boxes[i], boxes[j]):
+                continue
+            if codes[i] and codes[i] == codes[j]:
+                same = True
+            elif codes[i] and codes[j]:
+                same = False  # two codes: two parts (the code matching may still pair them)
+            else:  # a copy without a code: the outline of the piece next to it, as drawn or mirrored
+                same = (_same_name(cands[i].part.name, cands[j].part.name) and _distinct(profs[i])
+                        and _twin_shape(profs[i], profs[j]) and not between(i, j))
+            if same:
+                near[i].add(j)
+                near[j].add(i)
+    for i, js in enumerate(near):
+        if len(js) != 1:
+            continue
+        j = next(iter(js))
+        if j < i or near[j] != {i}:
+            continue  # each pair once; a piece with two twins next to it (three in a row) tells nothing
+        li, ri = sides.left_right(boxes[i], boxes[j])
+        left, right = (cands[i], cands[j])[li], (cands[i], cands[j])[ri]
+        _pair_up(left, right, densities)
+
+
+def _same_name(a: str, b: str) -> bool:
+    """Names of two pieces that may be one part: the same, or one is only the name given to a nameless one."""
+    from .sides import with_side
+
+    if not a or not b or _FALLBACK_NAME.fullmatch(a) or _FALLBACK_NAME.fullmatch(b):
+        return True
+    return with_side(a, "").replace(" ", "") == with_side(b, "").replace(" ", "")
+
+
+def _distinct(prof: Profile) -> bool:
+    """An outline that is not a plain rectangle: two copies of it are one part, not two plates of one size."""
+    return bool(prof.holes) or len(set(prof.points)) > 4
+
+
+def _twin_shape(a: Profile, b: Profile) -> bool:
+    """b is the outline of a drawn again: as it is, mirrored or turned half a turn."""
+    (wa, ha), (wb, hb) = a.size, b.size
+    tol = max(1.0, 0.005 * max(wa, ha))
+    if abs(wa - wb) > tol or abs(ha - hb) > tol or len(a.holes) != len(b.holes):
+        return False
+    if (abs(a.net_area - b.net_area) > 0.01 * max(a.net_area, 1.0)
+            or abs(a.cut_length - b.cut_length) > 0.01 * max(a.cut_length, 1.0)):
+        return False
+    ax, ay, bx, by = a.bbox[0], a.bbox[1], b.bbox[0], b.bbox[1]
+    loop = [(x - bx, y - by) for x, y in b.points]
+    pts = [(x - ax, y - ay) for x, y in a.points]
+    pts = pts[::max(1, len(pts) // 48)]
+    for fx, fy in ((False, False), (True, False), (False, True), (True, True)):
+        if all(cad_fix.dist_to_loop((wa - x if fx else x, ha - y if fy else y), loop) <= tol for x, y in pts):
+            return True
+    return False
+
+
+def _pair_up(left: CandidatePart, right: CandidatePart, densities: dict[str, float] | None) -> None:
+    """The left and the right piece of one part: what one of them lacks comes from the other, then the sides."""
+    from . import sides
+
+    told = [part_side(left.part), part_side(right.part)]  # what the names / codes say before they are filled
+    for a, b in ((left, right), (right, left)):
+        if not a.part.part_no and b.part.part_no and not sides.side_of("", b.part.part_no):
+            a.part.part_no = b.part.part_no  # not a code of one side (…-L): the other side has another code
+        if b.part.name and not _FALLBACK_NAME.fullmatch(b.part.name) and (
+                not a.part.name or _FALLBACK_NAME.fullmatch(a.part.name)):
+            a.part.name = sides.with_side(b.part.name, "")
+        if a.thickness_source != THK_FROM_PART and b.thickness_source == THK_FROM_PART:
+            set_part_thickness(a.part, b.part.thickness, densities)
+            a.part.drawing_thickness = b.part.drawing_thickness
+            a.thickness_source = THK_FROM_PART
+        if a.material_source != MAT_FROM_PART and b.material_source == MAT_FROM_PART:
+            set_part_material(a.part, b.part.material, densities)
+            a.part.drawing_material, a.part.material_source = b.part.drawing_material, b.part.material_source
+            a.material_source = MAT_FROM_PART
+    for a, b in ((left, right), (right, left)):
+        if a.qty_source == QTY_FROM_PART and b.qty_source == QTY_DEFAULT:
+            total = a.part.qty
+            each = total / 2 if total % 2 == 0 else total
+            text = (f"{a.qty_text} = ซ้าย {each:g} + ขวา {each:g}" if each != total
+                    else f"{a.qty_text} = ข้างละ {each:g}")
+            for c in (a, b):
+                c.set_qty(each, QTY_FROM_PAIR, text)
+            break
+    if all(told):
+        return  # both say their side
+    known = next((k for k in (0, 1) if told[k]), None)
+    if known is None:
+        wanted = [sides.L, sides.R]
+    else:
+        wanted = [told[known]] * 2
+        wanted[1 - known] = sides.opposite(told[known])
+    for k, c in enumerate((left, right)):
+        if told[k]:
+            continue
+        side = wanted[k]
+        c.part.name = sides.with_side(c.part.name, side)
+        if known is None:
+            c.side_source = SIDE_FROM_LAYOUT
+            c.part.side_source = f"{SIDE_FROM_LAYOUT}: ชิ้นที่วางฝั่ง{('ซ้าย', 'ขวา')[k]} = {sides.LABELS[side]}"
+        else:
+            c.side_source = SIDE_FROM_PAIR
+            c.part.side_source = (f"{SIDE_FROM_PAIR}: ชิ้นคู่เป็นข้าง{sides.WORDS[told[known]]} "
+                                  f"= {sides.LABELS[side]}")
 
 
 def plate_spec(thickness: float, w: float, h: float) -> str:

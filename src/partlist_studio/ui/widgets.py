@@ -319,7 +319,9 @@ class DrawingPreview(QGraphicsView):
         self._focus_item = None
         self._mark_size = 5.0
 
-    def show_drawing(self, data, selected_profiles: set[int] | None = None) -> None:
+    def show_drawing(self, data, selected_profiles: set[int] | None = None,
+                     sides: dict[int, str] | None = None) -> None:
+        """sides: profile index -> L / R, written over the piece (ซ้าย L / ขวา R)."""
         scene = self.scene()
         scene.clear()
         self._focus_item = None
@@ -386,6 +388,18 @@ class DrawingPreview(QGraphicsView):
         for f in getattr(data, "fixes", None) or []:
             if f.kind in ("gap", "overshoot", "duplicate", "dup_loop"):
                 scene.addEllipse(f.x - size, -f.y - size, 2 * size, 2 * size, fixed_pen)
+        side_color = QColor("#FFD54F")
+        for i, side in (sides or {}).items():
+            if i >= len(data.profiles) or side not in ("L", "R"):
+                continue
+            x0, y0, x1, y1 = data.profiles[i].bbox
+            t = scene.addSimpleText(("ซ้าย L", "ขวา R")[side == "R"])
+            t.setBrush(side_color)
+            br = t.boundingRect()
+            if br.height() > 0:
+                s = max(min(y1 - y0, x1 - x0) * 0.3, size * 2.5) / br.height()
+                t.setScale(s)
+                t.setPos((x0 + x1) / 2 - br.width() * s / 2, -y1 - br.height() * s * 1.1)
         text_color = QColor("#E6EDF6")
         for item in data.texts[:600]:
             t = scene.addSimpleText(item.text)

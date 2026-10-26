@@ -19,9 +19,11 @@ usually the same, the rest is told by the name. So a part is looked up, first ma
    stall height, body length, left/right and model; the part number in its code weighs strongly.
    The model, stall height and body length come from the whole drawing (TOYOTA, เสา80, พื้น250).
    Express keeps the left and the right part apart: a flat pattern without a side is split between both -
-   unless the drawing tells the side: two parts of one drawing matched to the same left/right pair are its
-   left and its right piece (กระดูกหมาชิ้นที่1 = ซ้าย, ชิ้นที่2 = ขวา), and a part the drawing gives as 1 ชิ้น is
-   one side (sides_of_pairs).
+   unless the drawing tells the side: the name says it (the DWG import names the pieces of a part drawn
+   side by side หูช้าง (ซ้าย) / (ขวา) - the piece on the left is the left one), two parts of one drawing matched
+   to the same left/right pair are its left and its right piece: drawn side by side (laid out horizontally)
+   the one on the left is ซ้าย and the one on the right is ขวา, otherwise by their number (กระดูกหมาชิ้นที่1 =
+   ซ้าย, ชิ้นที่2 = ขวา), and a part the drawing gives as 1 ชิ้น is one side (sides_of_pairs).
 5. the item of the same part number whose name or size differs (ชิ้นที่ 5 = RRS-A-037-PR บังโคลนพื้นเรียบ)
 6. a name match that is not clear, then a name that is the same once the spelling is made the same
    (บังโครน = บังโคลน) - not another number of a numbered part (เต้า4 is not เต้าเบอร์ 1)
@@ -219,7 +221,18 @@ def match_parts(partlist: PartList, stock: StockList, nearest: bool = False) -> 
     aliases = xref_aliases(stock)
     matched = [(p, match_part(p, stock, contexts.get(p.drawing_no), nearest, aliases)) for p in partlist.parts]
     sides_of_pairs(matched)
+    _side_notes(matched)
     return matched
+
+
+def _side_notes(matched: list[tuple[Part, PartMatch]]) -> None:
+    """A part whose side the DWG import read from where it is drawn says so in its match."""
+    from .express_codes import _item_side
+
+    for part, match in matched:
+        if part.side_source and any(_item_side(i) for i, _s in match.items) and part.side_source not in match.note:
+            told = ("ข้างจาก" if part.side_source.startswith("แบบ") else "ข้าง") + part.side_source
+            match.note = " · ".join(x for x in (match.note, told) if x)
 
 
 _PIECE_NO = re.compile(r"(?:ชิ้นที่|ตัวที่|อันที่|เบอร์|ที่)\s*(\d+)|(\d+)\s*$")
@@ -247,10 +260,12 @@ def _one_side(match: PartMatch, side: str, why: str) -> None:
 
 def sides_of_pairs(matched: list[tuple[Part, PartMatch]]) -> None:
     """A drawing part without a side matched to a left and a right item (half each): the program picks the side
-    when the drawing tells it - two different parts of one drawing on the same pair are its left and its right
-    piece (RRS-T-045 กระดูกหมาชิ้นที่1 -> RRS-T-009-L, RRS-T-046 ชิ้นที่2 -> RRS-T-009-R-), and a part the drawing
-    gives as 1 ชิ้น is one side (the left). Otherwise it stays on both sides, half each (หูช้าง)."""
+    when the drawing tells it - two parts of one drawing on the same pair are its left and its right piece:
+    drawn side by side (laid out horizontally) the one placed on the left is ซ้าย and the one on the right is ขวา,
+    else by their number (RRS-T-045 กระดูกหมาชิ้นที่1 -> RRS-T-009-L, RRS-T-046 ชิ้นที่2 -> RRS-T-009-R-) - and a
+    part the drawing gives as 1 ชิ้น is one side (the left). Otherwise it stays on both sides, half each (หูช้าง)."""
     from .express_codes import _item_side
+    from .sides import left_right
 
     groups: dict[tuple, list[tuple[Part, PartMatch]]] = {}
     for part, match in matched:
@@ -261,7 +276,14 @@ def sides_of_pairs(matched: list[tuple[Part, PartMatch]]) -> None:
             groups.setdefault(key, []).append((part, match))
     for rows in groups.values():
         names = {(_key(p.part_no), _key(p.name)) for p, _m in rows}
-        if len(rows) == 2 and len(names) == 2:  # two parts, not the same part listed twice
+        placed = left_right(rows[0][0].drawing_box, rows[1][0].drawing_box) if len(rows) == 2 else None
+        if placed:  # drawn side by side: the piece placed on the left is the left one
+            (left, ml), (right, mr) = rows[placed[0]], rows[placed[1]]
+            why = (f"แบบวาง 2 ชิ้นนี้ในแนวนอน ({left.part_no or left.name} ฝั่งซ้าย / "
+                   f"{right.part_no or right.name} ฝั่งขวา)")
+            _one_side(ml, "L", f"{why}: ชิ้นที่วางฝั่งซ้าย = ข้างซ้าย")
+            _one_side(mr, "R", f"{why}: ชิ้นที่วางฝั่งขวา = ข้างขวา")
+        elif len(rows) == 2 and len(names) == 2:  # two parts, not the same part listed twice
             rows.sort(key=lambda t: _piece_order(t[0]))
             (first, m1), (second, m2) = rows
             _one_side(m1, "L", f"แบบมี 2 ชิ้นที่ตรงกับคู่ซ้าย/ขวานี้ ({first.part_no or first.name} / "

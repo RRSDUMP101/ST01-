@@ -127,6 +127,12 @@ def main() -> int:
     dialog.check_table.selectRow(0)  # the corner that does not meet, zoomed
     shot(dialog, "7e_dwg_precut_zoom.png")
     dialog.close()
+    pairs = dwg_io.read_drawing(samples / "RRS-T-LR_left_right_pairs.dxf")
+    dialog = DrawingImportDialog([pairs], dwg_io.DEFAULT_DENSITIES, w)
+    dialog.show()
+    dialog.table.selectRow(1)  # หูช้าง (ซ้าย): the left piece of the pair drawn side by side
+    shot(dialog, "7f_dwg_left_right.png")
+    dialog.close()
 
     mapping = ColumnMappingDialog(prepare_import(samples / "zwcad_tableexport_bom.csv"), "zwcad_tableexport_bom.csv", w)
     mapping.show()

@@ -107,6 +107,46 @@ def frame_set():
     doc.saveas(OUT / "RRS-T-SET_frame_parts.dxf")
 
 
+def left_right_pairs():
+    """Left and right parts: หูช้าง drawn as a pair side by side (the label on the left piece, its mirror image on
+    the right), two different pieces next to each other (กระดูกหมา ชิ้นที่1 / ชิ้นที่2) and ข้างเฟรมบน drawn as a
+    pair one above the other (the drawing does not tell the side)."""
+    doc = ezdxf.new("R2010")
+    doc.header["$INSUNITS"] = 4
+    for name in ("CUT", "TITLE", "FRAME", "TEXT"):
+        doc.layers.add(name)
+    msp = doc.modelspace()
+    _frame(msp)
+    _title_block(doc, msp, values={"DWG_NO": "RRS-T-LR", "TITLE": "ชิ้นส่วนซ้าย-ขวา", "MATERIAL": "SS400",
+                                   "THK": "3", "QTY": "1", "REV": "A"})
+
+    def bracket(x0, y0, w, h, flip_x=False, flip_y=False):
+        pts = [(0, 0), (w, 0), (w, 0.4 * h), (0.35 * w, 0.4 * h), (0.35 * w, h), (0, h)]
+        holes = [(0.17 * w, 0.72 * h, min(w, h) * 0.08), (0.82 * w, 0.2 * h, min(w, h) * 0.07)]
+
+        def at(x, y):
+            return x0 + (w - x if flip_x else x), y0 + (h - y if flip_y else y)
+
+        msp.add_lwpolyline([at(x, y) for x, y in pts], close=True, dxfattribs={"layer": "CUT"})
+        for x, y, r in holes:
+            msp.add_circle(at(x, y), r, dxfattribs={"layer": "CUT"})
+
+    def text(value, x, y, height=4):
+        msp.add_text(value, height=height, dxfattribs={"layer": "TEXT"}).set_placement((x, y))
+
+    bracket(20, 200, 100, 60)  # หูช้าง: the left piece with the label, the right one its mirror image
+    text("RRS-T-027 /หูช้าง / t 3 / 2 ชิ้น/", 22, 206, 3)
+    bracket(140, 200, 100, 60, flip_x=True)
+    bracket(265, 220, 50, 30)  # two pieces of one left/right pair, side by side
+    text("RRS-T-045 กระดูกหมาชิ้นที่1", 262, 211, 3)
+    bracket(345, 215, 60, 36, flip_x=True)
+    text("RRS-T-046 กระดูกหมาชิ้นที่2", 345, 206, 3)
+    bracket(20, 120, 200, 40)  # ข้างเฟรมบน: one above the other
+    text("RRS-T-001 /ข้างเฟรมบน / t 4 / 2 ชิ้น/", 24, 124, 3)
+    bracket(20, 60, 200, 40, flip_y=True)
+    doc.saveas(OUT / "RRS-T-LR_left_right_pairs.dxf")
+
+
 def broken_lines():
     """A drawing sent before it was checked: corners that do not meet, a line past the corner, a line drawn twice,
     bend lines on the cut layer, the bend angle '90' left as text and as exploded lines, a centre mark on the
@@ -340,6 +380,7 @@ def main() -> int:
     OUT.mkdir(exist_ok=True)
     side_panel()
     frame_set()
+    left_right_pairs()
     broken_lines()
     assembly()
     zwcad_tableexport_csv()

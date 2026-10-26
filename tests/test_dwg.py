@@ -438,3 +438,54 @@ def test_repair_lines_cases():
     lines[0], lines[3] = [(-1, 0), (100, 0)], [(0, 50), (0, -1)]  # both lines run on past the corner they cross at
     r = run(lines)
     assert len(r.loops) == 1 and [(p.spur, round(p.length)) for p in r.pieces] == [(True, 1), (True, 1)]
+
+
+def test_rrs_logo_and_real_holes_are_not_taken_for_letters(tmp_path):
+    """Before cutting, letters left in a part are taken out ('90'), but the RRS logo (a honeycomb cut with the
+    letters), the stencil lettering of the part (RUNGRUENG), oblong slots and a dimensioned cut-out are cut."""
+    import ezdxf
+
+    from partlist_studio.core import cad_fix as cf
+
+    def c_shape(x, y, w, h, t=3):  # a letter-like (concave) closed outline
+        return [(x, y), (x + w, y), (x + w, y + t), (x + t, y + t), (x + t, y + h - t), (x + w, y + h - t),
+                (x + w, y + h), (x, y + h)]
+
+    doc = ezdxf.new()
+    doc.header["$INSUNITS"] = 4  # mm
+    msp = doc.modelspace()
+    msp.add_lwpolyline([(0, 0), (600, 0), (600, 300), (0, 300)], close=True)
+    msp.add_text("RRS-T-201", dxfattribs={"height": 8, "insert": (20, 270)})
+    for row in range(3):  # the RRS logo: 18 small hexagons packed together, and two pieces of the S among them
+        for col in range(6):
+            cx, cy = 60 + col * 13 + (6.5 if row % 2 else 0), 150 + row * 11
+            msp.add_lwpolyline([(cx + 6 * math.cos(math.radians(a)), cy + 6 * math.sin(math.radians(a)))
+                                for a in range(30, 390, 60)], close=True)
+    for y in (151, 162):
+        msp.add_lwpolyline(c_shape(140, y, 9, 9, 2), close=True)
+    for cx in (300, 340):  # two oblong slots 14 x 26 and the bracket cut between them (the เต้า pieces)
+        msp.add_lwpolyline([(cx + 7, 140, 0), (cx + 7, 152, 1), (cx - 7, 152, 0), (cx - 7, 140, 1)],
+                           format="xyb", close=True)
+    msp.add_lwpolyline([(310, 135), (330, 135), (330, 157), (310, 157), (310, 155), (328, 155), (328, 137),
+                        (310, 137)], close=True)
+    for x in (450, 465):  # two small L-shaped cut-outs: letter-like, but dimensioned
+        msp.add_lwpolyline([(x, 140), (x + 10, 140), (x + 10, 143), (x + 3, 143), (x + 3, 155), (x, 155)], close=True)
+    msp.add_linear_dim(base=(450, 120), p1=(450, 140), p2=(460, 140)).render()
+    for x in (380, 405):  # stencil lettering: big letters, and a G cut in two smaller pieces next to them
+        msp.add_lwpolyline(c_shape(x, 210, 20, 32, 4), close=True)
+    for y in (210, 227):
+        msp.add_lwpolyline(c_shape(430, y, 18, 15, 3), close=True)
+    for x in (250, 263):  # '90' left in the part: taken out
+        msp.add_lwpolyline(c_shape(x, 50, 10, 15, 2), close=True)
+    path = tmp_path / "logo.dxf"
+    doc.saveas(path)
+    data = dwg_io.read_drawing(path)
+    kept = sorted(f.text.split(" – ", 1)[1] for f in data.fixes if f.kind == cf.FIX_KEPT)
+    assert kept == ["ตัวอักษรที่ตัดในชิ้นงาน (เช่น RUNGRUENG) – ไม่ลบ", "มีบอกขนาดในแบบ เป็นรูตัดจริง",
+                    "โลโก้ RRS (ลวดลายที่ตัดในชิ้นงาน) – ไม่ลบ"]
+    [glyph] = [f for f in data.fixes if f.kind == cf.FIX_GLYPH]
+    assert glyph.text.startswith("2 ส่วน ขนาด 23x15")  # the '90'
+    [part] = [c.part for c in dwg_io.drawing_to_candidates(data) if c.part.part_no == "RRS-T-201"]
+    assert len(part.outline) == 1 + 18 + 2 + 2 + 1 + 2 + 2 + 2  # every hole but the '90' is cut
+    assert "คงตัวอักษร/ลวดลายที่ตัดในชิ้นงาน (ตัดตามแบบ) 3 จุด" in part.cad_fixes
+    assert cf.FIX_KEPT in cf.INFO

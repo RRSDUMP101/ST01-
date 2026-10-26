@@ -339,6 +339,7 @@ class DrawingData:
     gap_tol: float = 0.0  # mm the repair joined ends within (0 = lines read as drawn, not repaired)
     repair_note: str = ""  # why the lines were not checked
     bend_raw: list = field(default_factory=list)  # straight lines on bend / centre layers (maybe bend lines)
+    dim_points: list = field(default_factory=list)  # where dimensions touch the drawing (mm): dimensioned = real
 
     @property
     def file_name(self) -> str:
@@ -517,6 +518,10 @@ def _collect(entity, data: DrawingData, texts, tables, edge_entities, closed_pat
             except Exception:  # noqa: BLE001 - non-uniform scaling etc.
                 pass
         return
+    if kind == "DIMENSION":
+        if depth == 0:
+            data.dim_points += _dim_points(entity, data.units_to_mm)
+        return
     if kind not in ("LINE", "ARC", "CIRCLE", "LWPOLYLINE", "POLYLINE", "SPLINE", "ELLIPSE"):
         return
     try:
@@ -540,6 +545,16 @@ def _collect(entity, data: DrawingData, texts, tables, edge_entities, closed_pat
         closed_paths.append((p, layer))
     elif kind in ("LINE", "ARC", "LWPOLYLINE", "POLYLINE", "SPLINE", "ELLIPSE"):
         edge_entities.append(entity)
+
+
+def _dim_points(entity, k: float) -> list[tuple[float, float]]:
+    """Where a dimension touches the drawing: the ends of its extension lines, the point on an arc."""
+    out = []
+    for name in ("defpoint2", "defpoint3", "defpoint4", "defpoint5"):
+        if entity.dxf.hasattr(name):
+            v = entity.dxf.get(name)
+            out.append((v.x * k, v.y * k))
+    return out
 
 
 def _is_cut_entity(entity, layer: str, cut_layer: str) -> bool:
@@ -888,7 +903,8 @@ def _find_glyphs(data: DrawingData, active: list[int], pieces: list[Piece]) -> b
     by_host: dict[int, list[GlyphItem]] = {}
     for i in active:
         prof = profiles[i]
-        if prof.parent is None or not small_in(max(prof.size), prof.parent) or cad_fix.is_circle(prof.points):
+        if (prof.parent is None or not small_in(max(prof.size), prof.parent) or cad_fix.is_circle(prof.points)
+                or cad_fix.is_slot(prof.points)):  # round and oblong holes are cut, never letters
             continue
         counter = bool(kids.get(i))
         concave = prof.area < 0.88 * cad_fix.hull_area(prof.points)
@@ -907,6 +923,15 @@ def _find_glyphs(data: DrawingData, active: list[int], pieces: list[Piece]) -> b
     found = False
     for host, items in by_host.items():
         for group in cad_fix.text_clusters(items):
+            x0 = min(it.bbox[0] for it in group)
+            y0 = min(it.bbox[1] for it in group)
+            x1 = max(it.bbox[2] for it in group)
+            y1 = max(it.bbox[3] for it in group)
+            why = _cut_on_purpose(group, host, profiles, kids, pieces, data.dim_points)
+            if why:  # lettering / a pattern of the part itself: cut as drawn
+                data.fixes.append(Fix(cad_fix.FIX_KEPT, (x0 + x1) / 2, (y0 + y1) / 2, max(x1 - x0, y1 - y0),
+                                      f"{len(group)} ส่วน ขนาด {x1 - x0:.0f}x{y1 - y0:.0f} มม. – {why}", part=host))
+                continue
             found = True
             for item in group:
                 kind, k = item.ref
@@ -918,16 +943,52 @@ def _find_glyphs(data: DrawingData, active: list[int], pieces: list[Piece]) -> b
                     g = stack.pop()
                     profiles[g].is_glyph = True
                     stack += kids.get(g, [])
-            x0 = min(it.bbox[0] for it in group)
-            y0 = min(it.bbox[1] for it in group)
-            x1 = max(it.bbox[2] for it in group)
-            y1 = max(it.bbox[3] for it in group)
             data.fixes.append(Fix(FIX_GLYPH, (x0 + x1) / 2, (y0 + y1) / 2, max(x1 - x0, y1 - y0),
                                   f"{len(group)} ส่วน ขนาด {x1 - x0:.0f}x{y1 - y0:.0f} มม. – ไม่ตัด", part=host))
     for prof in profiles:
         if prof.is_glyph:
             data.removed.append((FIX_GLYPH, prof.points + prof.points[:1]))
     return found
+
+
+def _cut_on_purpose(group: list, host: int, profiles: list, kids: dict, pieces: list, dims: list) -> str:
+    """Why a group that looks like letters is cut as drawn ('' = text left on the drawing, taken out):
+    a dimension on it (a real hole, not text), the RRS logo - a pattern of many plain shapes packed together (its
+    honeycomb) - or pieces of lettering whose other letters are cut holes of the same part (the G of the RUNGRUENG
+    stencil). A number or word alone in a part ('90') is taken out as before."""
+    x0, y0 = min(it.bbox[0] for it in group), min(it.bbox[1] for it in group)
+    x1, y1 = max(it.bbox[2] for it in group), max(it.bbox[3] for it in group)
+    h = y1 - y0
+
+    def points(item) -> list:
+        kind, k = item.ref
+        return profiles[k].points if kind == "loop" else pieces[k].points
+
+    for item in group:
+        bx0, by0, bx1, by1 = item.bbox
+        for dx, dy in dims:
+            if (bx0 - 1 <= dx <= bx1 + 1 and by0 - 1 <= dy <= by1 + 1
+                    and cad_fix.dist_to_loop((dx, dy), points(item)) <= 1.0):
+                return "มีบอกขนาดในแบบ เป็นรูตัดจริง"
+    loops = [it for it in group if it.ref[0] == "loop"]
+    if len(loops) >= 12 and len(loops) >= 0.8 * len(group) and not any(it.counter for it in loops):
+        plain = sum(1 for it in loops
+                    if profiles[it.ref[1]].area >= 0.88 * cad_fix.hull_area(profiles[it.ref[1]].points))
+        if plain >= 0.7 * len(loops):
+            return "โลโก้ RRS (ลวดลายที่ตัดในชิ้นงาน) – ไม่ลบ"
+    members = {it.ref[1] for it in loops}
+    for k in kids.get(host, []):
+        letter = profiles[k]
+        if k in members or letter.is_glyph or cad_fix.is_circle(letter.points) or cad_fix.is_slot(letter.points):
+            continue
+        if not (kids.get(k) or letter.area < 0.88 * cad_fix.hull_area(letter.points)):
+            continue  # a plain hole, not a letter
+        _lx0, ly0, _lx1, ly1 = letter.bbox
+        lh = ly1 - ly0
+        if (0.5 * h <= lh <= 2.5 * h and min(y1, ly1) - max(y0, ly0) >= 0.5 * min(h, lh)
+                and cad_fix._bbox_gap((x0, y0, x1, y1), letter.bbox) <= max(h, lh)):
+            return "ตัวอักษรที่ตัดในชิ้นงาน (เช่น RUNGRUENG) – ไม่ลบ"
+    return ""
 
 
 def _settle_fixes(data: DrawingData, fixed: cad_fix.Repair) -> None:

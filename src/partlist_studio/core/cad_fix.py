@@ -39,6 +39,7 @@ FIX_BEND = "bend"
 FIX_STRAY = "stray"
 FIX_GLYPH = "glyph"
 FIX_TEXT = "text"
+FIX_KEPT = "kept"  # lettering / a pattern cut in the part on purpose (a logo): cut as drawn
 FIX_OPEN = "open"  # could not be repaired: the drawing must be corrected
 FIX_OPEN_IN_PART = "open_in_part"
 
@@ -51,11 +52,12 @@ FIX_LABELS = {
     FIX_STRAY: "ลบเส้นเกินในชิ้นงาน",
     FIX_GLYPH: "ลบตัวอักษร/ตัวเลขที่เป็นเส้น",
     FIX_TEXT: "ข้อความในชิ้นงาน (ไม่ส่งไปตัด)",
+    FIX_KEPT: "คงตัวอักษร/ลวดลายที่ตัดในชิ้นงาน (ตัดตามแบบ)",
     FIX_OPEN: "เส้นไม่ปิดเป็นวง – แก้อัตโนมัติไม่ได้",
     FIX_OPEN_IN_PART: "เส้นในชิ้นงานไม่ปิด – ไม่ตัด ตรวจแบบ",
 }
 UNFIXED = {FIX_OPEN, FIX_OPEN_IN_PART}
-INFO = {FIX_BEND, FIX_TEXT}  # nothing was wrong with the lines: only said so the user knows
+INFO = {FIX_BEND, FIX_TEXT, FIX_KEPT}  # nothing was wrong with the lines: only said so the user knows
 
 
 @dataclass
@@ -160,6 +162,27 @@ def is_circle(points: list[Point], tol: float = 0.02) -> bool:
     radii = [math.hypot(x - cx, y - cy) for x, y in points]
     r = sum(radii) / len(radii)
     return r > 0 and max(abs(q - r) for q in radii) <= tol * r
+
+
+def is_slot(points: list[Point], tol: float = 0.04) -> bool:
+    """An oblong hole (two half circles and two straight sides, at any angle) - a real cut, never a letter."""
+    if len(points) < 8:
+        return False
+    n = len(points)
+    mx, my = sum(x for x, _ in points) / n, sum(y for _, y in points) / n
+    sxx = sum((x - mx) ** 2 for x, _ in points)
+    syy = sum((y - my) ** 2 for _, y in points)
+    sxy = sum((x - mx) * (y - my) for x, y in points)
+    angle = 0.5 * math.atan2(2 * sxy, sxx - syy)  # the long axis
+    c, s = math.cos(angle), math.sin(angle)
+    us = [(x - mx) * c + (y - my) * s for x, y in points]
+    vs = [-(x - mx) * s + (y - my) * c for x, y in points]
+    length, width = max(us) - min(us), max(vs) - min(vs)
+    if width <= 0 or length < 1.2 * width:
+        return False
+    area = abs(signed_area(points))
+    stadium = width * (length - width) + math.pi * width * width / 4
+    return area >= 0.97 * hull_area(points) and abs(area - stadium) <= tol * stadium
 
 
 def convex_hull(points: list[Point]) -> list[Point]:

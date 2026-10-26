@@ -751,3 +751,46 @@ def test_tickets_several_per_a4(app, tmp_path):
     assert printing.ticket_cells(4)[0] == pytest.approx(200 / 210)  # 4 per A4: 95 % of A6
     image = printing.tickets_page_image(tickets, 4, 40)
     assert image.width() > image.height()  # A4 landscape
+
+
+def test_laser_sheet_size_choice_and_sizes_added_by_hand(window, app, monkeypatch):
+    from partlist_studio.core import dwg_io, production
+    from partlist_studio.ui.pages import nesting as page_mod
+
+    state = window.state
+    data = dwg_io.read_drawing(SAMPLES / "RRS-T-SET_frame_parts.dxf")
+    parts = [c.part for c in dwg_io.drawing_to_candidates(data)]
+    state.flats.add_parts(parts)
+    state.jobs.append(production.job_from_parts("SO6910-022", parts, 1, None, False))
+    state.save_jobs()
+    page = window.pages["nesting"]
+    page.source.setCurrentIndex(page.source.findData(page_mod.SRC_JOBS))
+    page.run()
+    row = next(r for r, g in enumerate(page._row_group) if g.thickness == 3)
+    page.table.selectRow(row)
+    box = page.sheet_choice
+    assert box.isEnabled() and box.itemData(0) is None and box.count() >= 3  # automatic + 4x8 + 5x10
+
+    def add_sizes(dialog):  # 1500x3000 from the list + one typed by hand
+        dialog.preset.setCurrentIndex(dialog.preset.findText("1500x3000", flags=page_mod.Qt.MatchStartsWith))
+        dialog._preset(dialog.preset.currentIndex())
+        dialog._add(9000, 1500, 0, "ใหญ่เกินโต๊ะ")
+        assert dialog.table.item(1, 0).background().color() == page_mod.theme.ERROR_BG
+        return 1
+
+    monkeypatch.setattr(page_mod.SheetSizesDialog, "exec", add_sizes)
+    page.edit_sheet_sizes()
+    assert state.settings.custom_sheets == [(1500.0, 3000.0, 0.0, "1500x3000"), (9000.0, 1500.0, 0.0, "ใหญ่เกินโต๊ะ")]
+    group = page._group()
+    assert group.thickness == 3 and any(o[:2] == (1500, 3000) for o in group.options)
+    at = next(i for i in range(box.count()) if box.itemData(i) == (1500, 3000))
+    assert "เพิ่มเอง" in box.itemText(at)
+    box.setCurrentIndex(at)
+    page._sheet_chosen(at)
+    group = page._group()
+    assert group.thickness == 3 and group.chosen and {s.size for s in group.sheets} == {"1500x3000"}
+    assert box.currentIndex() == at and page.sheet_chosen[group.key] == (1500, 3000)
+    others = [g for g in page.groups if g.key != group.key]
+    assert all(not g.chosen for g in others)  # only the selected thickness changes
+    page._sheet_chosen(0)  # automatic again
+    assert not page._group().chosen and group.key not in page.sheet_chosen

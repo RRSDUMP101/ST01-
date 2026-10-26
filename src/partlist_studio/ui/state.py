@@ -119,6 +119,19 @@ class Settings:
     def laser(self, p: LaserParams) -> None:
         self.set("laser/params", json.dumps(p.to_dict(), ensure_ascii=False))
 
+    @property
+    def custom_sheets(self) -> list[tuple[float, float, float, str]]:
+        """Sheet sizes added by hand for the cutting plan: (width, length, thickness 0 = every thickness, note)."""
+        try:
+            rows = json.loads(self.get("laser/custom_sheets", "") or "[]")
+            return [(float(w), float(h), float(t), str(n)) for w, h, t, n in rows]
+        except (ValueError, TypeError):
+            return []
+
+    @custom_sheets.setter
+    def custom_sheets(self, rows: list) -> None:
+        self.set("laser/custom_sheets", json.dumps([list(r) for r in rows], ensure_ascii=False))
+
 
 class AppState(QObject):
     partlist_changed = Signal()  # rows or job info changed

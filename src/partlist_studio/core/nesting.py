@@ -3,9 +3,11 @@
 Each part is placed as its bounding rectangle (rotation 90° allowed) with a gap between parts and a margin
 at the sheet edge - the way a shear / laser operator lays out rectangular blanks. It is a safe estimate:
 true-shape nesting can fit odd shapes closer. Parts are grouped by material and thickness; every sheet size
-the store has for that thickness (from the item names, e.g. 4x8ฟุต / 1524x3050) is tried and the size that
-needs the least steel is used. A part drawn at an angle is first turned to its smallest bounding rectangle,
-and thick plates get more room between parts (gap = thickness × gap_per_mm when that is more than the gap).
+the store has for that thickness (from the item names, e.g. 4x8ฟุต / 1524x3050; none in stock: 4x8 and 5x10 ฟุต)
+and every size added by hand (custom sheets, for every thickness or one) is tried and the size that needs the
+least steel is used - or the size the user chose for that material and thickness. A part drawn at an angle is
+first turned to its smallest bounding rectangle, and thick plates get more room between parts
+(gap = thickness × gap_per_mm when that is more than the gap).
     utilization = net area of the parts ÷ area of the sheets used      scrap % = 100 − utilization
 """
 
@@ -22,6 +24,7 @@ from .models import Part, PartList
 from .stock import StockList, material_family, sheet_size_mm
 
 DEFAULT_SHEETS = [(1219.0, 2440.0, "", "4x8 ฟุต"), (1524.0, 3048.0, "", "5x10 ฟุต")]
+CUSTOM = "เพิ่มเอง"  # name of a sheet size added by hand
 
 
 @dataclass
@@ -96,6 +99,12 @@ class NestGroup:
     tried: list[tuple[str, int, float]] = field(default_factory=list)  # (size, sheets, utilization)
     by_weight: float = 0  # sheets by the weight method (part kg ÷ sheet kg)
     gap: float = 0  # mm between parts used for this thickness
+    options: list = field(default_factory=list)  # (width, length, code, name) sizes it could be cut from
+    chosen: bool = False  # the sheet size was chosen by the user (not the one with the least steel)
+
+    @property
+    def key(self) -> tuple[str, float]:
+        return self.family, self.thickness
 
     @property
     def parts_area(self) -> float:
@@ -380,8 +389,38 @@ def sheet_options(stock: StockList, family: str, thickness: float) -> list[tuple
     return list(best.values())
 
 
+def custom_options(custom: list, thickness: float) -> list[tuple[float, float, str, str]]:
+    """Sizes added by hand: custom = [(width, length, thickness or 0 = every thickness, note)]."""
+    out = []
+    for w, h, thk, note in custom or []:
+        if w <= 0 or h <= 0 or (thk and abs(thk - thickness) > 1e-6):
+            continue
+        w, h = sorted((float(w), float(h)))
+        out.append((w, h, "", f"{CUSTOM}: {note}" if note else CUSTOM))
+    return out
+
+
+def group_options(stock: StockList, family: str, thickness: float,
+                  custom: list | None = None) -> list[tuple[float, float, str, str]]:
+    """The sheet sizes a material/thickness can be cut from, smallest first: the plates in stock (none: the
+    standard 4x8 and 5x10 ฟุต) and the sizes added by hand. One size kept per size, the stock item first."""
+    options = (sheet_options(stock, family, thickness) or list(DEFAULT_SHEETS)) + custom_options(custom, thickness)
+    seen: dict[tuple[int, int], tuple[float, float, str, str]] = {}
+    for opt in options:
+        seen.setdefault((round(opt[0] / 10), round(opt[1] / 10)), opt)
+    return sorted(seen.values(), key=lambda o: o[0] * o[1])
+
+
+def same_size(option: tuple, size: tuple[float, float]) -> bool:
+    w, h = sorted(size)
+    return round(option[0] / 10) == round(w / 10) and round(option[1] / 10) == round(h / 10)
+
+
 def plan(parts: list[NestPart], stock: StockList | None = None, params: NestParams | None = None,
-         densities: dict[str, float] | None = None) -> list[NestGroup]:
+         densities: dict[str, float] | None = None, custom: list | None = None,
+         chosen: dict[tuple[str, float], tuple[float, float]] | None = None) -> list[NestGroup]:
+    """custom: sheet sizes added by hand (custom_options) · chosen: (family, thickness) -> (width, length) the user
+    picked for that group, instead of the size with the least steel."""
     params = params or NestParams()
     stock = stock or StockList()
     groups: dict[tuple[str, float], list[NestPart]] = {}
@@ -393,9 +432,19 @@ def plan(parts: list[NestPart], stock: StockList | None = None, params: NestPara
             items = [best_orientation(p) for p in items]
         gp = replace(params, gap=params.gap_for(thk))
         group = NestGroup(material=items[0].material, family=family, thickness=thk, parts=items, gap=gp.gap)
-        options = sorted(sheet_options(stock, family, thk) or list(DEFAULT_SHEETS), key=lambda o: o[0] * o[1])
+        options = group_options(stock, family, thk, custom)
+        primaries = options
+        want = (chosen or {}).get((family, thk))
+        if want:
+            pick = next((o for o in options if same_size(o, want)), None)
+            if pick is None:  # a size typed for this plan
+                w, h = sorted(want)
+                pick = (float(w), float(h), "", f"{CUSTOM} {w:.0f}x{h:.0f}")
+                options = sorted(options + [pick], key=lambda o: o[0] * o[1])
+            primaries, group.chosen = [pick], True
+        group.options = options
         best = None
-        for primary in options:
+        for primary in primaries:
             sheets, left = _pack_on(items, list(range(len(items))), primary, gp)
             # parts too big for this size go on the smallest size they fit
             for bigger in options:

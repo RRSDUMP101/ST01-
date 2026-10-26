@@ -192,6 +192,25 @@ def main() -> int:
     cut_page.run()
     cut_page.table.selectRow(2)
     shot(w, "14b_laser_plan_jobs.png")
+    from partlist_studio.ui.pages.nesting import SheetSizesDialog
+
+    sizes_dialog = SheetSizesDialog([(1500, 3000, 0, "สั่งซื้อได้"), (1524, 6096, 0, "5x20 ฟุต"),
+                                     (1250, 2500, 3, "แผ่นไม่มีรหัส")], (2500, 8000), w)
+    sizes_dialog.show()
+    shot(sizes_dialog, "14h_laser_sheet_sizes.png")
+    state.settings.custom_sheets = sizes_dialog.rows()
+    sizes_dialog.close()
+    cut_page.run()
+    cut_page.table.selectRow(2)
+    box = cut_page.sheet_choice
+    at = next(i for i in range(box.count()) if box.itemData(i) == (1500, 3000))
+    box.setCurrentIndex(at)
+    cut_page._sheet_chosen(at)
+    shot(w, "14i_laser_sheet_choice.png")
+    cut_page.sheet_chosen.clear()  # the other pictures use the plan with the least steel
+    state.settings.custom_sheets = []
+    cut_page.run()
+    cut_page.table.selectRow(2)
     cut_page.tabs.setCurrentIndex(1)
     shot(w, "14c_laser_checks.png")
     cut_page.make_programs()

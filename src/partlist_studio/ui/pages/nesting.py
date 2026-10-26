@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox, 
 from ...core import laser, nesting
 from ...core.nesting import Placement
 from ...core.stock import material_family
+from .. import theme
 from ..state import AppState
 from ..widgets import Card, PageHeader, button, fill, selected_rows, table
 
@@ -413,6 +414,105 @@ class LaserSettingsDialog(QDialog):
         return p
 
 
+class SheetSizesDialog(QDialog):
+    """ขนาดแผ่นเพิ่มเอง: sheet sizes the plan may use besides the plates in stock (sizes the store can buy or has
+    without a code), for every thickness or one thickness."""
+
+    HEADERS = ("กว้าง (มม.)", "ยาว (มม.)", "หนา (มม.) – 0 = ทุกความหนา", "หมายเหตุ")
+    PRESETS = (("4x8 ฟุต", 1219, 2440), ("4x10 ฟุต", 1219, 3048), ("5x10 ฟุต", 1524, 3048), ("5x20 ฟุต", 1524, 6096),
+               ("1500x3000", 1500, 3000), ("1500x6000", 1500, 6000), ("2000x6000", 2000, 6000))
+
+    def __init__(self, rows: list, bed: tuple[float, float], parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("ขนาดแผ่นเหล็กเพิ่มเอง")
+        self.resize(720, 420)
+        self.bed = tuple(sorted(bed))
+        lay = QVBoxLayout(self)
+        hint = QLabel("ขนาดแผ่นที่แผนตัดเลือกใช้ได้ นอกจากแผ่นเหล็กที่มีในสต็อก (เช่น ขนาดที่สั่งซื้อได้ หรือแผ่นที่ยังไม่มีรหัส) "
+                      "· หนา 0 = ใช้กับทุกความหนา · ใหญ่กว่าโต๊ะเครื่อง "
+                      f"{bed[0]:.0f}x{bed[1]:.0f} มม. ขึ้นสีแดง (ตัดไม่ได้)")
+        hint.setObjectName("Hint")
+        hint.setWordWrap(True)
+        lay.addWidget(hint)
+        self.table = QTableWidget(0, len(self.HEADERS))
+        self.table.setHorizontalHeaderLabels(list(self.HEADERS))
+        for i, w in enumerate([110, 110, 190, 220]):
+            self.table.setColumnWidth(i, w)
+        self.table.itemChanged.connect(self._mark)
+        for row in rows:
+            self._add(*row)
+        lay.addWidget(self.table, 1)
+        tools = QHBoxLayout()
+        self.preset = QComboBox()
+        self.preset.addItem("+ เพิ่มขนาด…", None)
+        for name, w, h in self.PRESETS:
+            self.preset.addItem(f"{name} ({w} x {h})", (w, h, name))
+        self.preset.addItem("กำหนดเอง (พิมพ์ในตาราง)", (1219, 2440, ""))
+        self.preset.activated.connect(self._preset)
+        tools.addWidget(self.preset)
+        remove = button("ลบแถวที่เลือก")
+        remove.clicked.connect(self._remove)
+        tools.addWidget(remove)
+        tools.addStretch(1)
+        lay.addLayout(tools)
+        box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        box.button(QDialogButtonBox.Ok).setText("บันทึก")
+        box.button(QDialogButtonBox.Ok).setProperty("kind", "primary")
+        box.button(QDialogButtonBox.Cancel).setText("ยกเลิก")
+        box.accepted.connect(self.accept)
+        box.rejected.connect(self.reject)
+        lay.addWidget(box)
+
+    def _add(self, w: float, h: float, thk: float = 0, note: str = "") -> None:
+        r = self.table.rowCount()
+        self.table.blockSignals(True)
+        self.table.insertRow(r)
+        for c, value in enumerate((f"{w:g}", f"{h:g}", f"{thk:g}", note)):
+            self.table.setItem(r, c, QTableWidgetItem(value))
+        self.table.blockSignals(False)
+        self._mark()
+
+    def _preset(self, index: int) -> None:
+        data = self.preset.itemData(index)
+        self.preset.setCurrentIndex(0)
+        if data:
+            self._add(data[0], data[1], 0, data[2])
+            self.table.setCurrentCell(self.table.rowCount() - 1, 0)
+
+    def _remove(self) -> None:
+        for r in sorted({i.row() for i in self.table.selectedIndexes()}, reverse=True):
+            self.table.removeRow(r)
+
+    def _number(self, r: int, c: int) -> float:
+        item = self.table.item(r, c)
+        try:
+            return float((item.text() if item else "").replace(",", "").strip() or 0)
+        except ValueError:
+            return 0.0
+
+    def _mark(self, *args) -> None:
+        self.table.blockSignals(True)
+        for r in range(self.table.rowCount()):
+            w, h = sorted((self._number(r, 0), self._number(r, 1)))
+            too_big = self.bed[0] and (w > self.bed[0] or h > self.bed[1])
+            bad = w <= 0 or h <= 0
+            for c in range(2):
+                item = self.table.item(r, c)
+                if item:
+                    item.setBackground(theme.ERROR_BG if bad or too_big else QBrush())
+                    item.setToolTip("ใหญ่กว่าโต๊ะเครื่อง – ตัดไม่ได้" if too_big else "")
+        self.table.blockSignals(False)
+
+    def rows(self) -> list[tuple[float, float, float, str]]:
+        out = []
+        for r in range(self.table.rowCount()):
+            w, h, thk = self._number(r, 0), self._number(r, 1), self._number(r, 2)
+            note = self.table.item(r, 3).text().strip() if self.table.item(r, 3) else ""
+            if w > 0 and h > 0:
+                out.append((w, h, max(0.0, thk), note))
+        return out
+
+
 class FillDialog(QDialog):
     """เพิ่มชิ้นลงที่ว่าง: pick a flat pattern of the same material and thickness and nest it by hand in the free
     space of a sheet (as many as asked, or as many as fit). The parts already there do not move."""
@@ -555,6 +655,7 @@ class NestingPage(QWidget):
         self.demand: laser.Demand | None = None
         self.issues: list[laser.Issue] = []
         self._row_group: list[nesting.NestGroup] = []
+        self.sheet_chosen: dict[tuple[str, float], tuple[float, float]] = {}  # (family, thk) -> (w, l) picked by hand
         self._programs: list[laser.CutProgram] = []
         lay = QVBoxLayout(self)
         lay.setContentsMargins(28, 24, 28, 16)
@@ -660,6 +761,18 @@ class NestingPage(QWidget):
         self.fill_plan_btn.clicked.connect(self.fill_plan)
         self.fill_plan_btn.setEnabled(False)
         plan_tools.addWidget(self.fill_plan_btn)
+        plan_tools.addSpacing(16)
+        plan_tools.addWidget(QLabel("ขนาดแผ่นของแถวที่เลือก"))
+        self.sheet_choice = QComboBox()
+        self.sheet_choice.setMinimumWidth(380)
+        self.sheet_choice.setToolTip("เปลี่ยนขนาดแผ่นเหล็กที่ใช้ตัดวัสดุ/ความหนานี้ – อัตโนมัติ = ขนาดที่ใช้เหล็กน้อยที่สุด · "
+                                     "รายการมาจากแผ่นเหล็กในสต็อก และขนาดที่เพิ่มเอง")
+        self.sheet_choice.setEnabled(False)
+        self.sheet_choice.activated.connect(self._sheet_chosen)
+        plan_tools.addWidget(self.sheet_choice)
+        self.sizes_btn = button("ขนาดแผ่นเพิ่มเอง…", tooltip="เพิ่มขนาดแผ่นเหล็กที่ใช้วางแผนได้ นอกจากที่มีในสต็อก")
+        self.sizes_btn.clicked.connect(self.edit_sheet_sizes)
+        plan_tools.addWidget(self.sizes_btn)
         plan_tools.addStretch(1)
         lay.addLayout(plan_tools)
         split = QSplitter(Qt.Vertical)
@@ -834,6 +947,7 @@ class NestingPage(QWidget):
         self.view.show_group(None)
         self.make_btn.setEnabled(False)
         self.fill_plan_btn.setEnabled(False)
+        self._show_sheet_choice(None)
         self.summary.setText(text)
 
     def run(self) -> None:
@@ -866,7 +980,15 @@ class NestingPage(QWidget):
                                "หรือใส่ความหนาเมื่อแบบไม่ระบุ")
             return
         self.demand = demand
-        self.groups = nesting.plan(demand.parts, self.state.stock, params.nest_params(), self.state.settings.densities)
+        self._lay_out(params)
+        self.state.notify(f"แผนตัด {sum(len(g.sheets) for g in self.groups)} แผ่น")
+
+    def _lay_out(self, params: laser.LaserParams, select: tuple[str, float] | None = None) -> None:
+        """Nest the parts of the demand on the sheets (the sizes chosen per material/thickness, or the ones with
+        the least steel) and show the plan."""
+        demand = self.demand
+        self.groups = nesting.plan(demand.parts, self.state.stock, params.nest_params(), self.state.settings.densities,
+                                   self.state.settings.custom_sheets, self.sheet_chosen)
         self.issues = laser.check_parts(demand.parts, params, self.groups)
         rows = nesting.plan_rows(self.groups)
         self._row_group = []
@@ -898,8 +1020,9 @@ class NestingPage(QWidget):
         self._show_checks()
         self.make_btn.setEnabled(bool(self.groups))
         if rows:
-            self.table.selectRow(0)
-        self.state.notify(f"แผนตัด {sheets} แผ่น")
+            at = next((self._row_group.index(g) for g in self.groups if g.key == select), 0) if select else 0
+            self.table.clearSelection()  # the same row again is still a new plan: show it
+            self.table.selectRow(at)
 
     def _show_checks(self) -> None:
         demand = self.demand or laser.Demand()
@@ -913,9 +1036,58 @@ class NestingPage(QWidget):
 
     def _selected(self) -> None:
         rows = selected_rows(self.table)
-        if rows and rows[0] < len(self._row_group):
-            self.view.show_group(self._row_group[rows[0]])
+        group = self._row_group[rows[0]] if rows and rows[0] < len(self._row_group) else None
+        if group is not None:
+            self.view.show_group(group)
         self.fill_plan_btn.setEnabled(bool(rows))
+        self._show_sheet_choice(group)
+
+    def _show_sheet_choice(self, group: nesting.NestGroup | None) -> None:
+        """The sheet sizes the selected material/thickness can be cut from: in stock (with the balance) and added
+        by hand; the one in use is selected."""
+        box = self.sheet_choice
+        box.blockSignals(True)
+        box.clear()
+        if group is not None:
+            box.addItem("อัตโนมัติ – ขนาดที่ใช้เหล็กน้อยที่สุด", None)
+            for w, h, code, name in group.options:
+                item = next((i for i in self.state.stock.items if code and i.code == code), None)
+                where = (f"สต็อก คงเหลือ {item.on_hand:g} {item.unit or 'แผ่น'}" if item is not None
+                         else "เพิ่มเอง" if name.startswith(nesting.CUSTOM) else "ขนาดมาตรฐาน (ไม่มีในสต็อก)")
+                box.addItem(f"{w:.0f} x {h:.0f} มม. · {name.split(': ', 1)[-1]} · {where}", (w, h))
+            if group.chosen:
+                at = next((n for n in range(1, box.count()) if nesting.same_size(
+                    (*box.itemData(n), "", ""), (group.sheet_w, group.sheet_h))), 0)
+                box.setCurrentIndex(at)
+        box.setEnabled(group is not None)
+        box.blockSignals(False)
+
+    def _sheet_chosen(self, index: int) -> None:
+        group = self._group()
+        if group is None or self.demand is None:
+            return
+        size = self.sheet_choice.itemData(index)
+        if size is None:
+            self.sheet_chosen.pop(group.key, None)
+        else:
+            self.sheet_chosen[group.key] = size
+        self._lay_out(self.laser_params(), group.key)
+        new = next((g for g in self.groups if g.key == group.key), None)
+        if new is not None:
+            self.state.notify(f"{new.family} หนา {new.thickness:g} มม.: ใช้แผ่น {new.sheet_w:.0f}x{new.sheet_h:.0f} "
+                              f"{len(new.sheets)} แผ่น · ใช้เนื้อเหล็ก {new.utilization:.0%}"
+                              + (" (เลือกเอง)" if new.chosen else " (อัตโนมัติ)"))
+
+    def edit_sheet_sizes(self) -> None:
+        p = self.laser_params()
+        dialog = SheetSizesDialog(self.state.settings.custom_sheets, (p.bed_w, p.bed_l), self)
+        if dialog.exec():
+            self.state.settings.custom_sheets = dialog.rows()
+            self.state.notify(f"บันทึกขนาดแผ่นเพิ่มเอง {len(dialog.rows())} ขนาด")
+            if self.demand is not None and self.groups:
+                group = self._group()
+                self._lay_out(p, group.key if group else None)
+        dialog.deleteLater()
 
     def _group(self) -> nesting.NestGroup | None:
         rows = selected_rows(self.table)

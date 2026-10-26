@@ -316,3 +316,33 @@ def test_nest_parts_by_hand_in_free_space():
     assert done == 0
     with pytest.raises(ValueError):
         laser.add_to_program(prog, hook, 1, params)  # not waiting any more
+
+
+def test_plan_sheet_size_chosen_or_added_by_hand():
+    from partlist_studio.core.stock import StockItem, StockList
+
+    square = [(0.0, 0.0), (400.0, 0.0), (400.0, 300.0), (0.0, 300.0)]
+    part = nesting.NestPart("j", "RRS-T-019", "ฝาข้าง", "SS400", 3, 400, 300, 30, outline=[square])
+    stock = StockList(items=[StockItem(code="01-B00-0003", name="เหล็กแผ่นดำ 3 มม. 4x8 ฟุต", spec="3 มม.",
+                                       unit="แผ่น", on_hand=7)])
+    custom = [(3000, 1500, 0, "สั่งซื้อ"), (1000, 2000, 6, "เฉพาะ 6 มม.")]
+    [auto] = nesting.plan([part], stock, None, None, custom)
+    # stock plate + size added for every thickness (turned to width x length); the 6 mm size is not offered
+    assert [(w, h, code) for w, h, code, _ in auto.options] == [(1219.2, 2438.4, "01-B00-0003"), (1500, 3000, "")]
+    assert auto.options[1][3] == "เพิ่มเอง: สั่งซื้อ" and not auto.chosen and auto.sheet_code == "01-B00-0003"
+    [picked] = nesting.plan([part], stock, None, None, custom, {auto.key: (3000, 1500)})
+    assert picked.chosen and (picked.sheet_w, picked.sheet_h) == (1500, 3000) and picked.sheet_name.startswith("เพิ่มเอง")
+    assert {s.size for s in picked.sheets} == {"1500x3000"} and len(picked.tried) == 1
+    [typed] = nesting.plan([part], stock, None, None, None, {auto.key: (1250, 2500)})  # a size not in the list
+    assert typed.chosen and (typed.sheet_w, typed.sheet_h) == (1250, 2500)
+    assert any(nesting.same_size(o, (2500, 1250)) for o in typed.options)
+    [back] = nesting.plan([part], stock, None, None, custom, {})  # back to automatic
+    assert not back.chosen and back.sheet_code == "01-B00-0003"
+    params = laser.LaserParams()
+    progs = laser.make_programs([picked], laser.CutQueue(), params)
+    assert {p.sheet_size for p in progs} == {"1500x3000"} and not any(p.sheet_code for p in progs)
+    prog = progs[0]
+    ledger = Ledger()
+    _, doc = laser.apply_cut(prog, 1, [], ledger, "ช่าง")
+    line = doc.lines[0]
+    assert line.name == "แผ่นSS400 3มม. 1500x3000 (เพิ่มเอง: สั่งซื้อ)" and "เลือกรหัสแผ่น" in doc.remark

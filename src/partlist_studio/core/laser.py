@@ -785,7 +785,9 @@ def apply_cut(prog: CutProgram, sheets: int, jobs, ledger: Ledger | None = None,
     prog.remnant = remnant or prog.remnant
     doc = None
     if ledger is not None:
-        name = prog.sheet_name or f"แผ่น{prog.material} {prog.thickness:g}มม. {prog.sheet_size}"
+        name = f"แผ่น{prog.material} {prog.thickness:g}มม. {prog.sheet_size}"
+        if prog.sheet_name:  # a size with no stock code (added by hand / standard) keeps its size in the name
+            name = prog.sheet_name if prog.sheet_code else f"{name} ({prog.sheet_name})"
         doc = ledger.new_doc("PD", [DocLine(prog.sheet_code, name, n, "แผ่น", remark=prog.no)],
                              job=", ".join(prog.jobs), remark=f"ตัดเลเซอร์ {prog.no}"
                              + ("" if prog.sheet_code else " (เลือกรหัสแผ่นก่อนบันทึก)"))

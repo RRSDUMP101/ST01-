@@ -266,6 +266,7 @@ def material_family(text: str) -> str:
 
 # Optional code cross-reference (Express code <-> stock-count code ...), set by the program.
 XREF_LOOKUP = None  # callable(code) -> list[str] of equivalent codes
+XREF_ENTRIES = None  # callable() -> the rows of the table (code_a, code_b, name, method)
 
 
 def find_by_code(code: str, stock: StockList, _follow: bool = True) -> StockItem | None:

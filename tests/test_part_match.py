@@ -179,3 +179,43 @@ def test_close_results_are_matched():
     lines = {line.code: line for line in check_requirements(_drawing(("RRS-T-021", "เหล็กฉากฝาข้าง", 2)), _stock())}
     line = next(x for x in lines.values() if x.code.startswith("RRS-A-021-"))
     assert line.required == 2 and "ตัวเลือกอื่น: RRS-A-021-" in line.note  # in the check, with the other choice
+
+
+def test_not_found_takes_the_nearest_result(monkeypatch):
+    """match_parts(nearest=True), as the material check does: a part not found takes the closest item."""
+    from partlist_studio.core import stock as stock_mod
+
+    monkeypatch.setattr(stock_mod, "XREF_LOOKUP", None)
+    monkeypatch.setattr(stock_mod, "XREF_ENTRIES", None)
+    pl = _drawing(("RRS-T-045", "กระดูกหมาชิ้นที่1", 2), ("RRS-T-042", "เต้า4", 1))
+    assert all(not m.items for _p, m in pm.match_parts(pl, _stock()))  # not by default (job tickets)
+    m = {p.part_no: x for p, x in pm.match_parts(pl, _stock(), nearest=True)}
+    dog = m["RRS-T-045"]
+    assert dog.method == pm.M_NEAREST and dog.sure and dog.close
+    assert [i.code for i, _s in dog.items] == ["RRS-T-009-L", "RRS-T-009-R-"]  # the drawing's brand, both sides
+    assert dog.note.startswith("ไม่พบรหัสตรง – ใช้รายการใกล้เคียงที่สุด: กระดูกข้าง T(ซ้าย) (ชื่อคล้าย")
+    assert not m["RRS-T-042"].items  # only other numbers near it: still not found
+    lines = check_requirements(pl, _stock(), matches=[(p, m[p.part_no]) for p in pl.parts])
+    assert next(x for x in lines if x.code == "RRS-T-009-L").method == pm.M_NEAREST
+
+
+def test_code_cross_reference_table(monkeypatch):
+    """ตารางเทียบรหัส: a stock-count code is read by its Express code, and a close row is used when not found."""
+    from partlist_studio.core import stock as stock_mod
+    from partlist_studio.core.xref import CodeXref, XrefEntry
+
+    xref = CodeXref([XrefEntry("RRS-A-042-NO4-PR", "01-0007-0042", "เต้าพื้นเรียบเบอร์ 4", "ชื่อตรงกัน"),
+                     XrefEntry("RRS-A-201", "01-0009-0001", "ขามอเตอร์", "ชื่อคล้าย 91%")])
+    monkeypatch.setattr(stock_mod, "XREF_LOOKUP", xref.lookup)
+    monkeypatch.setattr(stock_mod, "XREF_ENTRIES", lambda: xref.entries)
+    stock = _stock()
+    stock.items += [StockItem(code="01-0007-0042", name="เต้า เบอร์ 4 (นับ)", on_hand=6),
+                    StockItem(code="01-0009-0001", name="ขาจับมอเตอร์ไฟฟ้า", on_hand=3)]
+    pl = _drawing(("RRS-T-042", "เต้า4", 1), ("RRS-T-053", "ขามอเตอร์1", 1))
+    m = {p.part_no: x for p, x in pm.match_parts(pl, stock, nearest=True)}
+    four = m["RRS-T-042"]  # the count code 01-0007-0042 is RRS-A-042-NO4-PR: same part number 042
+    assert (four.method, four.item.code) == (pm.M_PART_NO, "01-0007-0042")
+    assert four.note.endswith("01-0007-0042 = RRS-A-042-NO4-PR ตามตารางเทียบรหัส")
+    motor = m["RRS-T-053"]  # nothing by code or name in the stock: the close row of the table
+    assert (motor.method, motor.item.code) == (pm.M_XREF_CLOSE, "01-0009-0001")
+    assert motor.note == "ตารางเทียบรหัส: RRS-A-201 ↔ 01-0009-0001 (ชื่อคล้าย 91%)"

@@ -24,7 +24,15 @@ usually the same, the rest is told by the name. So a part is looked up, first ma
    (บังโครน = บังโคลน) - not another number of a numbered part (เต้า4 is not เต้าเบอร์ 1)
 7. nothing found: check_requirements falls back to the raw material (same material and thickness).
 
-Close results (several variants near each other, 5 and 6) are matched all the same - the material check and
+7. still nothing (match_parts(nearest=True), the material check): the code cross-reference table - a row for
+   the same part code (3 places, A = every brand) or a close name whose other code is in the stock - then the
+   nearest item of the name match (the ใกล้เคียง list), of the vehicle's brand or A, not another number of a
+   numbered part.
+
+The code cross-reference table (ตารางเทียบรหัส) also gives a stock-count code (01-0001-0039) its Express code,
+so the item is found by the three places of that code (step 3).
+
+Close results (several variants near each other, 5, 6 and 7) are matched all the same - the material check and
 the Part List use them - and say so (ใกล้เคียง) with the other choices, so a person can change one.
 """
 
@@ -47,11 +55,15 @@ M_NAME = "จับคู่จากชื่อ"
 M_NAME_CLOSE = "ชื่อใกล้เคียง"
 M_MATERIAL = "วัสดุ/ความหนา"
 M_NONE = "ไม่พบ"
-SURE = {M_STOCK_CODE, M_CODE, M_XREF, M_PART_NO, M_PART_CLOSE, M_NAME, M_NAME_CLOSE, M_MATERIAL}
-CLOSE = {M_PART_CLOSE, M_NAME_CLOSE}  # matched from a close result: listed first with the other choices
-METHOD_ORDER = [M_NONE, M_NAME_CLOSE, M_PART_CLOSE, M_MATERIAL, M_NAME, M_PART_NO, M_XREF, M_CODE,
-                M_STOCK_CODE]  # weakest first
+M_XREF_CLOSE = "ตารางเทียบรหัส (ใกล้เคียง)"
+M_NEAREST = "ใกล้เคียงที่สุด"
+SURE = {M_STOCK_CODE, M_CODE, M_XREF, M_PART_NO, M_PART_CLOSE, M_NAME, M_NAME_CLOSE, M_XREF_CLOSE, M_NEAREST,
+        M_MATERIAL}
+CLOSE = {M_PART_CLOSE, M_NAME_CLOSE, M_XREF_CLOSE, M_NEAREST}  # from a close result: listed first, other choices
+METHOD_ORDER = [M_NONE, M_NEAREST, M_XREF_CLOSE, M_NAME_CLOSE, M_PART_CLOSE, M_MATERIAL, M_NAME, M_PART_NO,
+                M_XREF, M_CODE, M_STOCK_CODE]  # weakest first
 NEAR_NAME = 0.9  # names alike once the spelling is the same (บังโครน / บังโคลน)
+NEAR_XREF = 0.8  # a name in the code cross-reference table close to the part's
 
 # The 2nd place of a code (RRS-T-039): the brand of the vehicle. A (ALL) = used with every brand.
 ALL_BRANDS = "A"
@@ -117,14 +129,38 @@ class CodeParts:
     brand: str  # A / T / I / M / F / N / S (A1, M1: the letter)
     number: str  # the part: 039 = เต้าที่ 1, 040 = เต้าที่ 2
     rest: tuple[str, ...] = ()
+    code: str = ""  # the code read
 
 
 def split_code(code: str) -> CodeParts | None:
-    found = _CODE_RE.fullmatch(re.sub(r"\s+", "", (code or "").upper()))
+    text = re.sub(r"\s+", "", (code or "").upper())
+    found = _CODE_RE.fullmatch(text)
     if not found:
         return None
     rest = tuple(x for x in (found.group(4) or "").split("-") if x)
-    return CodeParts(found.group(1), found.group(2), found.group(3), rest)
+    return CodeParts(found.group(1), found.group(2), found.group(3), rest, text)
+
+
+def xref_aliases(stock: StockList) -> dict[int, list[CodeParts]]:
+    """id(item) -> its Express codes from the code cross-reference table, for items whose own code is not read
+    (stock-count codes 01-0001-0039). One pass per check: the table is read once per item, not per part."""
+    from . import stock as stock_mod
+
+    look = stock_mod.XREF_LOOKUP
+    out: dict[int, list[CodeParts]] = {}
+    if look is None:
+        return out
+    for item in stock.items:
+        if item.code and split_code(item.code) is None:
+            codes = [c for c in map(split_code, look(item.code)) if c]
+            if codes:
+                out[id(item)] = codes
+    return out
+
+
+def _codes_of(item: StockItem, aliases: dict[int, list[CodeParts]] | None) -> list[CodeParts]:
+    own = split_code(item.code)
+    return ([own] if own else []) + (aliases or {}).get(id(item), [])
 
 
 def brand_label(letter: str) -> str:
@@ -173,15 +209,19 @@ def _model_words(names: str) -> str:
                     if w in upper)
 
 
-def match_parts(partlist: PartList, stock: StockList) -> list[tuple[Part, PartMatch]]:
-    """Every row of the Part List with its stock item(s)."""
+def match_parts(partlist: PartList, stock: StockList, nearest: bool = False) -> list[tuple[Part, PartMatch]]:
+    """Every row of the Part List with its stock item(s); nearest = a part not found takes the closest result
+    of the code cross-reference table or of its name (step 7)."""
     contexts = drawing_contexts(partlist)
-    return [(p, match_part(p, stock, contexts.get(p.drawing_no))) for p in partlist.parts]
+    aliases = xref_aliases(stock)
+    return [(p, match_part(p, stock, contexts.get(p.drawing_no), nearest, aliases)) for p in partlist.parts]
 
 
-def match_part(part: Part, stock: StockList, context: DrawingContext | None = None) -> PartMatch:
+def match_part(part: Part, stock: StockList, context: DrawingContext | None = None, nearest: bool = False,
+               aliases: dict[int, list[CodeParts]] | None = None) -> PartMatch:
     """The stock item(s) of a Part List row – see the module text for the order."""
     context = context or DrawingContext()
+    aliases = xref_aliases(stock) if aliases is None else aliases
     if part.stock_code:  # 'RRS-A-027-L / RRS-A-027-R': a left and a right item, half each
         codes = [c.strip() for c in re.split(r"\s*/\s*|\s*,\s*", part.stock_code) if c.strip()]
         items = [find_by_code(c, stock) for c in codes]
@@ -195,11 +235,12 @@ def match_part(part: Part, stock: StockList, context: DrawingContext | None = No
         if item is not None:
             return PartMatch([(item, 1.0)], M_XREF, 99)
     pool = StockList(items=[i for i in stock.items if i.code])
-    same, loose = match_by_part_no(part, pool, context)
+    same, loose = match_by_part_no(part, pool, context, aliases)
     if same is not None:
         return same
     named = PartMatch()
-    if part.name and part.process != "ซื้อสำเร็จ":
+    by_name = bool(part.name) and part.process != "ซื้อสำเร็จ"
+    if by_name:
         named = match_by_name(part, pool, context)
     if named.items and named.method == M_NAME:
         return named
@@ -207,9 +248,11 @@ def match_part(part: Part, stock: StockList, context: DrawingContext | None = No
         return _loose_match(part, loose, pool, context)
     if named.items:
         return named
-    if part.name and part.process != "ซื้อสำเร็จ":
-        return match_near_name(part, pool, context) or named
-    return named
+    near = match_near_name(part, pool, context, aliases) if by_name else None
+    if near is not None or not nearest:
+        return near or named
+    return (match_xref_near(part, pool, context)
+            or (match_nearest(part, pool, context, named.alternatives, aliases) if by_name else None) or named)
 
 
 def _part_brand(code: CodeParts, context: DrawingContext) -> str:
@@ -219,13 +262,17 @@ def _part_brand(code: CodeParts, context: DrawingContext) -> str:
     return code.brand
 
 
-def _brand_note(part_code: CodeParts, item: StockItem, letter: str) -> str:
-    """'เลขชิ้นส่วน 039 ตรงกัน · A = ทุกยี่ห้อ ใช้กับ T (Toyota)'."""
-    item_code = split_code(item.code)
+def _brand_note(part_code: CodeParts, item: StockItem, letter: str, item_code: CodeParts | None = None) -> str:
+    """'เลขชิ้นส่วน 039 ตรงกัน · A = ทุกยี่ห้อ ใช้กับ T (Toyota)' (+ the Express code of a stock-count code)."""
+    item_code = item_code or split_code(item.code)
     text = f"เลขชิ้นส่วน {part_code.number} ตรงกัน"
     if item_code and item_code.brand == ALL_BRANDS:
-        return text + " · A = ทุกยี่ห้อ" + (f" ใช้กับ {brand_label(letter)}" if letter else "")
-    return text + (f" · {brand_label(item_code.brand)}" if item_code else "")
+        text += " · A = ทุกยี่ห้อ" + (f" ใช้กับ {brand_label(letter)}" if letter else "")
+    elif item_code:
+        text += f" · {brand_label(item_code.brand)}"
+    if item_code and split_code(item.code) is None:
+        text += f" · {item.code} = {item_code.code} ตามตารางเทียบรหัส"
+    return text
 
 
 def _name_context(part: Part, context: DrawingContext, letter: str = ""):
@@ -246,11 +293,12 @@ def _name_context(part: Part, context: DrawingContext, letter: str = ""):
     return model, ctx, row
 
 
-def match_by_part_no(part: Part, stock: StockList,
-                     context: DrawingContext) -> tuple[PartMatch | None, list[tuple[float, StockItem, str]]]:
+def match_by_part_no(part: Part, stock: StockList, context: DrawingContext,
+                     aliases: dict[int, list[CodeParts]] | None = None
+                     ) -> tuple[PartMatch | None, list[tuple[float, StockItem, str, CodeParts]]]:
     """The item(s) with the same part number for the vehicle's brand or every brand (A):
     RRS-T-039 เต้า1 -> RRS-A-039-NO1-PR เต้าพื้นเรียบเบอร์ 1. Returns (match, loose): loose are items of the
-    same number whose name or size differs: (score, item, why)."""
+    same number whose name or size differs: (score, item, why, code read)."""
     from .express_codes import _code_side, _core, _item_side, _numbers, _score, _side, _tokens, _word_score
 
     own = split_code(part.part_no)
@@ -261,12 +309,15 @@ def match_by_part_no(part: Part, stock: StockList,
     want = _side(part.name) or _code_side(part.part_no)
     pool = []
     for item in stock.items:
-        code = split_code(item.code)
-        if (code and code.prefix == own.prefix and code.number == own.number and code.brand in allowed
-                and (not want or _item_side(item) in (want, ""))):
+        if want and _item_side(item) not in (want, ""):
+            continue
+        code = next((c for c in _codes_of(item, aliases)
+                     if c.prefix == own.prefix and c.number == own.number and c.brand in allowed), None)
+        if code is not None:
             pool.append((item, code))
     if not pool:
         return None, []
+    read = {id(item): code for item, code in pool}
     model, ctx, row = _name_context(part, context, letter)
     row_core = _core(part.name)
     row_words = _tokens(row_core)
@@ -279,7 +330,7 @@ def match_by_part_no(part: Part, stock: StockList,
         score = _score(row, ctx, item, row_core, row_nums, row_words, frozenset()) if part.name else 0
         if score <= 0 or conflict:
             why = conflict or (f"ชื่อในแบบ {part.name} ≠ {item.name}" if part.name else "ไม่มีชื่อในแบบ")
-            loose.append((score + (1.5 if code.brand == letter else 0), item, why))
+            loose.append((score + (1.5 if code.brand == letter else 0), item, why, code))
             continue
         score += 1.5 if code.brand == letter else 0  # the vehicle's own item before the one for every brand
         score += sum(1 for x in own.rest if x in code.rest and x not in ("L", "R"))
@@ -293,7 +344,8 @@ def match_by_part_no(part: Part, stock: StockList,
     lead = best_s - rivals[0][0] if rivals else 99
     alternatives = [f"{i.code} {i.name}" for s, i in rivals[:3] if s >= best_s - 3]
     method = M_PART_NO if lead >= 1.5 else M_PART_CLOSE  # close variants: the best one, the others listed
-    return PartMatch(items, method, round(best_s, 1), alternatives, _brand_note(own, best, letter)), loose
+    note = _brand_note(own, best, letter, read[id(best)])
+    return PartMatch(items, method, round(best_s, 1), alternatives, note), loose
 
 
 def _paired(part: Part, best: StockItem, near: list[StockItem], stock: StockList) -> list[tuple[StockItem, float]]:
@@ -308,21 +360,21 @@ def _paired(part: Part, best: StockItem, near: list[StockItem], stock: StockList
     return [(best, 1.0)]
 
 
-def _loose_match(part: Part, loose: list[tuple[float, StockItem, str]], stock: StockList,
-                 context: DrawingContext) -> PartMatch:
+def _loose_match(part: Part, loose: list, stock: StockList, context: DrawingContext) -> PartMatch:
     """The item of the same part number though its name or size differs (the nearest one when there are
-    several), matched as a close result with why."""
+    several), matched as a close result with why. loose: (score, item, why, code read)."""
     ranked = sorted(loose, key=lambda t: -t[0])
-    score, best, why = ranked[0]
-    items = _paired(part, best, [i for _s, i, _w in ranked], stock)
+    score, best, why, code = ranked[0]
+    items = _paired(part, best, [t[1] for t in ranked], stock)
     taken = {id(i) for i, _s in items}
     own = split_code(part.part_no)  # loose items come from match_by_part_no: the code is read
-    note = _brand_note(own, best, _part_brand(own, context)) + f" · {why}"
-    alternatives = [f"{i.code} {i.name}" for _s, i, _w in ranked if id(i) not in taken][:3]
+    note = _brand_note(own, best, _part_brand(own, context), code) + f" · {why}"
+    alternatives = [f"{t[1].code} {t[1].name}" for t in ranked if id(t[1]) not in taken][:3]
     return PartMatch(items, M_PART_CLOSE, round(max(score, 5.0), 1), alternatives, note)
 
 
-def match_near_name(part: Part, stock: StockList, context: DrawingContext) -> PartMatch | None:
+def match_near_name(part: Part, stock: StockList, context: DrawingContext,
+                    aliases: dict[int, list[CodeParts]] | None = None) -> PartMatch | None:
     """A name that is the same once the spelling is the same (บังโครน -> RRS-A-037-PR บังโคลนพื้นเรียบ), of the
     vehicle's brand or every brand, not another size or number of it (เต้า4 is not เต้าเบอร์ 1)."""
     import difflib
@@ -337,12 +389,12 @@ def match_near_name(part: Part, stock: StockList, context: DrawingContext) -> Pa
     want = _side(part.name) or _code_side(part.part_no)
     near = []
     for item in stock.items:
-        code = split_code(item.code)
-        if code is None or code.brand not in (ALL_BRANDS, letter) or (want and _item_side(item) not in (want, "")):
+        brands = {c.brand for c in _codes_of(item, aliases)}
+        if not brands & {ALL_BRANDS, letter} or (want and _item_side(item) not in (want, "")):
             continue
         ratio = difflib.SequenceMatcher(None, core, _core(item.name)).ratio()
         if ratio >= NEAR_NAME and not variant_conflict(part, item, context):
-            near.append((ratio + (0.05 if code.brand == letter else 0), item))
+            near.append((ratio + (0.05 if letter in brands else 0), item))
     if not near:
         return None
     near.sort(key=lambda t: -t[0])
@@ -352,6 +404,68 @@ def match_near_name(part: Part, stock: StockList, context: DrawingContext) -> Pa
     return PartMatch(items, M_NAME_CLOSE, round(10 * ratio, 1), [f"{i.code} {i.name}" for _r, i in near
                                                                    if id(i) not in taken][:3],
                      f"ชื่อใกล้เคียง: {part.name} ≈ {best.name}")
+
+
+def match_xref_near(part: Part, stock: StockList, context: DrawingContext) -> PartMatch | None:
+    """A row of the code cross-reference table for the same part code (3 places: RRS-T-039 ~ RRS-A-039-…) or
+    a close name, whose other code is in the stock."""
+    import difflib
+
+    from . import stock as stock_mod
+    from .express_codes import _core
+
+    entries = stock_mod.XREF_ENTRIES() if stock_mod.XREF_ENTRIES is not None else []
+    own = split_code(part.part_no)
+    letter = _part_brand(own, context) if own else context.brand
+    core = _core(part.name)
+    best = None
+    for entry in entries:
+        for mine, other in ((entry.code_a, entry.code_b), (entry.code_b, entry.code_a)):
+            item = _find_code(other, stock) if mine and other else None
+            if item is None:
+                continue
+            code = split_code(mine)
+            if own and code and (code.prefix, code.number) == (own.prefix, own.number):
+                score = 2.0 + (0.5 if code.brand == letter else 0) if code.brand in (ALL_BRANDS, letter) else 0
+            elif len(core) >= 3 and entry.name:
+                ratio = difflib.SequenceMatcher(None, core, _core(entry.name)).ratio()
+                score = ratio if ratio >= NEAR_XREF else 0
+            else:
+                score = 0
+            if score and not variant_conflict(part, item, context) and (best is None or score > best[0]):
+                best = (score, item, entry, mine, other)
+    if best is None:
+        return None
+    score, item, entry, mine, other = best
+    items = _paired(part, item, [], stock)
+    return PartMatch(items, M_XREF_CLOSE, round(4 * score, 1),
+                     note=f"ตารางเทียบรหัส: {mine} ↔ {other}" + (f" ({entry.method})" if entry.method else ""))
+
+
+def match_nearest(part: Part, stock: StockList, context: DrawingContext, alternatives: list[str],
+                  aliases: dict[int, list[CodeParts]] | None = None) -> PartMatch | None:
+    """Not found: the nearest item of the name match (its ใกล้เคียง list), of the vehicle's brand or every
+    brand, not another size or number of it (เต้า4 is not เต้าเบอร์ 1)."""
+    import difflib
+
+    from .express_codes import _core
+
+    own = split_code(part.part_no)
+    letter = _part_brand(own, context) if own else context.brand
+    for n, text in enumerate(alternatives):
+        item = _find_code(text.split(" ", 1)[0], stock)
+        if item is None:
+            continue
+        brands = {c.brand for c in _codes_of(item, aliases)}
+        if (brands and not brands & {ALL_BRANDS, letter}) or variant_conflict(part, item, context):
+            continue  # another brand's item, another number of a numbered part
+        ratio = difflib.SequenceMatcher(None, _core(part.name), _core(item.name)).ratio()
+        items = _paired(part, item, [], stock)
+        taken = {i.code for i, _s in items}
+        rest = [a for a in alternatives[n + 1:] if a.split(" ", 1)[0] not in taken]
+        return PartMatch(items, M_NEAREST, round(10 * ratio, 1), rest[:3],
+                         f"ไม่พบรหัสตรง – ใช้รายการใกล้เคียงที่สุด: {item.name} (ชื่อคล้าย {ratio:.0%})")
+    return None
 
 
 def _sizes(text: str) -> set[float]:

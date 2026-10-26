@@ -6,7 +6,8 @@ import json
 from pathlib import Path
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import (QAbstractItemView, QFileDialog, QHBoxLayout, QHeaderView, QLabel, QListWidget,
+from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QFileDialog, QHBoxLayout, QHeaderView, QLabel,
+                               QListWidget,
                                QListWidgetItem, QMenu, QSplitter, QTableView, QTabWidget, QVBoxLayout,
                                QWidget)
 
@@ -155,6 +156,13 @@ class StockPage(QWidget):
         self.clear_btn.clicked.connect(self.clear_matches)
         mrow.addWidget(self.clear_btn)
         mrow.addStretch(1)
+        self.nearest = QCheckBox("ไม่พบรหัสในสต็อก → ใช้ผลใกล้เคียงจากตารางเทียบรหัส / รายการใกล้เคียงที่สุด")
+        self.nearest.setToolTip("ชิ้นที่จับคู่จากรหัสและชื่อแล้วยังไม่พบ: ใช้คู่รหัสในตารางเทียบรหัส (รหัส 3 หลักหน้าเดียวกัน "
+                                "หรือชื่อใกล้เคียง) ถ้าไม่มีใช้รายการแรกในรายการใกล้เคียง – ไม่ใช้ยี่ห้ออื่น และไม่ใช้เบอร์อื่น "
+                                "ของชิ้นที่มีเบอร์ (เต้า4 ≠ เต้าเบอร์ 1) · ผลขึ้นเป็น ใกล้เคียงที่สุด ให้ตรวจ/เปลี่ยนได้")
+        self.nearest.setChecked(self.state.settings.get("match/nearest", "1") == "1")
+        self.nearest.toggled.connect(self._nearest_toggled)
+        mrow.addWidget(self.nearest)
         ml.addLayout(mrow)
         self.check_tabs.addTab(match_page, "จับคู่ชิ้นส่วน ↔ สต็อก")
         cl.addWidget(self.check_tabs, 1)
@@ -307,7 +315,7 @@ class StockPage(QWidget):
         if not self.state.stock.items:
             self.actions.error("ยังไม่มีข้อมูลสต็อก", "นำเข้าไฟล์สต็อกของสโตร์ก่อน (หรือดึงจาก Express / Google Sheet)")
             return False
-        self.state.part_matches = match_parts(self.state.partlist, self.state.stock)
+        self.state.part_matches = match_parts(self.state.partlist, self.state.stock, self.nearest.isChecked())
         self.state.requirements = check_requirements(self.state.partlist, self.state.stock,
                                                      densities=self.state.settings.densities,
                                                      matches=self.state.part_matches)
@@ -315,6 +323,11 @@ class StockPage(QWidget):
         if show:
             self.tabs.setCurrentIndex(1)
         return True
+
+    def _nearest_toggled(self, on: bool) -> None:
+        self.state.settings.set("match/nearest", "1" if on else "0")
+        if self.state.requirements:
+            self.run_check(show=False)
 
     def auto_check(self) -> None:
         """Stock and a Part List are both there: check the material without being asked."""

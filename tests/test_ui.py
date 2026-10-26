@@ -635,6 +635,16 @@ def test_stock_check_matches_drawing_parts_by_name(window, app, tmp_path):
     page.clear_matches()  # matched again from its code and name
     assert state.partlist.parts[3].stock_code == ""
     assert dict((p.part_no, m.method) for p, m in state.part_matches)["RRS-T-037"] == pm.M_PART_CLOSE
+    # not found by code or name: the nearest result, unless switched off on the match tab
+    state.partlist.parts.append(Part(part_no="RRS-T-045", name="กระดูกหมาชิ้นที่1", drawing_no="toyota-4"))
+    page.run_check(show=False)
+    assert page.nearest.isChecked() and dict((p.part_no, m.method) for p, m in state.part_matches)["RRS-T-045"] \
+        == pm.M_NEAREST
+    page.nearest.setChecked(False)
+    assert state.settings.get("match/nearest") == "0"
+    assert dict((p.part_no, m.method) for p, m in state.part_matches)["RRS-T-045"] == pm.M_NONE
+    page.nearest.setChecked(True)
+    state.partlist.parts.pop()
     # the brand chosen on the dashboard (2nd place of the codes): Isuzu items instead of the drawing's T
     dash = window.pages["dashboard"]
     assert dash.brand.itemText(0) == "อัตโนมัติ: T (Toyota)"  # read from the drawing's codes

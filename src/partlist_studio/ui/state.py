@@ -155,6 +155,7 @@ class AppState(QObject):
         self.dirty = False
         self._data_dir = Path(data_dir) if data_dir else None
         stock_mod.XREF_LOOKUP = self.xref_lookup
+        stock_mod.XREF_ENTRIES = lambda: self.xref.entries
         self.load_library()
 
     # ---- company data kept between sessions (stock sources, model BOMs, code table) ------------

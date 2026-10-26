@@ -219,3 +219,25 @@ def test_code_cross_reference_table(monkeypatch):
     motor = m["RRS-T-053"]  # nothing by code or name in the stock: the close row of the table
     assert (motor.method, motor.item.code) == (pm.M_XREF_CLOSE, "01-0009-0001")
     assert motor.note == "ตารางเทียบรหัส: RRS-A-201 ↔ 01-0009-0001 (ชื่อคล้าย 91%)"
+
+
+def test_the_program_picks_the_side(monkeypatch):
+    """Parts without a side on a left/right pair: two parts are the left and the right piece, 1 ชิ้น is one side."""
+    from partlist_studio.core import stock as stock_mod
+
+    monkeypatch.setattr(stock_mod, "XREF_LOOKUP", None)
+    monkeypatch.setattr(stock_mod, "XREF_ENTRIES", None)
+    pl = _drawing(("RRS-T-009", "กระดูกข้างเฟรมบน", 2), ("RRS-T-046", "กระดูกหมาชิ้นที่2", 1),
+                  ("RRS-T-045", "กระดูกหมาชิ้นที่1", 1), ("RRS-T-027", "หูช้าง", 2), ("RRS-T-027", "หูช้าง", 2))
+    m = [(p.part_no, x) for p, x in pm.match_parts(pl, _stock(), nearest=True)]
+    codes = {code: [i.code for i, _s in x.items] for code, x in m}
+    assert codes["RRS-T-045"] == ["RRS-T-009-L"] and codes["RRS-T-046"] == ["RRS-T-009-R-"]  # ชิ้นที่1 / ชิ้นที่2
+    right = dict(m)["RRS-T-046"]
+    assert right.note.endswith("ชิ้นที่สอง = ข้างขวา") and "กระดูกข้าง T(ขวา)" in right.note
+    assert right.alternatives[0] == "RRS-T-009-L กระดูกข้าง T(ซ้าย)"
+    assert codes["RRS-T-009"] == ["RRS-T-009-L", "RRS-T-009-R-"]  # found by its own code: both sides
+    assert [len(x.items) for code, x in m if code == "RRS-T-027"] == [2, 2]  # the same part listed twice
+    one = _drawing(("RRS-T-027", "หูช้าง", 1))
+    one.parts[0].drawing_qty = 1  # the drawing says 1 ชิ้น: one side
+    [(_p, ear)] = pm.match_parts(one, _stock())
+    assert [i.code for i, _s in ear.items] == ["RRS-A-027-L"] and "แบบระบุ 1 ชิ้น" in ear.note

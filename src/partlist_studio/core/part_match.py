@@ -18,7 +18,10 @@ usually the same, the rest is told by the name. So a part is looked up, first ma
 4. its name, with the analysis used for the model BOMs (express_codes): what the part is and where it sits,
    stall height, body length, left/right and model; the part number in its code weighs strongly.
    The model, stall height and body length come from the whole drawing (TOYOTA, เสา80, พื้น250).
-   Express keeps the left and the right part apart: a flat pattern without a side is split between both.
+   Express keeps the left and the right part apart: a flat pattern without a side is split between both -
+   unless the drawing tells the side: two parts of one drawing matched to the same left/right pair are its
+   left and its right piece (กระดูกหมาชิ้นที่1 = ซ้าย, ชิ้นที่2 = ขวา), and a part the drawing gives as 1 ชิ้น is
+   one side (sides_of_pairs).
 5. the item of the same part number whose name or size differs (ชิ้นที่ 5 = RRS-A-037-PR บังโคลนพื้นเรียบ)
 6. a name match that is not clear, then a name that is the same once the spelling is made the same
    (บังโครน = บังโคลน) - not another number of a numbered part (เต้า4 is not เต้าเบอร์ 1)
@@ -214,7 +217,61 @@ def match_parts(partlist: PartList, stock: StockList, nearest: bool = False) -> 
     of the code cross-reference table or of its name (step 7)."""
     contexts = drawing_contexts(partlist)
     aliases = xref_aliases(stock)
-    return [(p, match_part(p, stock, contexts.get(p.drawing_no), nearest, aliases)) for p in partlist.parts]
+    matched = [(p, match_part(p, stock, contexts.get(p.drawing_no), nearest, aliases)) for p in partlist.parts]
+    sides_of_pairs(matched)
+    return matched
+
+
+_PIECE_NO = re.compile(r"(?:ชิ้นที่|ตัวที่|อันที่|เบอร์|ที่)\s*(\d+)|(\d+)\s*$")
+
+
+def _piece_order(part: Part) -> tuple:
+    """ชิ้นที่1 before ชิ้นที่2, then the lower code, then the row."""
+    found = _PIECE_NO.search(part.name or "")
+    code = split_code(part.part_no)
+    return (int(found.group(1) or found.group(2)) if found else 9999, code.number if code else part.part_no,
+            part.item_no)
+
+
+def _one_side(match: PartMatch, side: str, why: str) -> None:
+    """Keep the item of one side of a left/right pair; the other side becomes the first other choice."""
+    from .express_codes import _item_side
+
+    kept = next(i for i, _s in match.items if _item_side(i) == side)
+    dropped = next(i for i, _s in match.items if i is not kept)
+    match.items = [(kept, 1.0)]
+    match.note = " · ".join(x for x in (match.note.replace(dropped.name, kept.name), why) if x)
+    match.alternatives = [f"{dropped.code} {dropped.name}"] + [a for a in match.alternatives
+                                                                 if not a.startswith(dropped.code + " ")]
+
+
+def sides_of_pairs(matched: list[tuple[Part, PartMatch]]) -> None:
+    """A drawing part without a side matched to a left and a right item (half each): the program picks the side
+    when the drawing tells it - two different parts of one drawing on the same pair are its left and its right
+    piece (RRS-T-045 กระดูกหมาชิ้นที่1 -> RRS-T-009-L, RRS-T-046 ชิ้นที่2 -> RRS-T-009-R-), and a part the drawing
+    gives as 1 ชิ้น is one side (the left). Otherwise it stays on both sides, half each (หูช้าง)."""
+    from .express_codes import _item_side
+
+    groups: dict[tuple, list[tuple[Part, PartMatch]]] = {}
+    for part, match in matched:
+        if (match.method != M_STOCK_CODE and len(match.items) == 2
+                and {_item_side(i) for i, _s in match.items} == {"L", "R"}):
+            # a part found by its own code keeps both sides; close results on the pair are grouped apart
+            key = (part.drawing_no, tuple(sorted(_key(i.code) for i, _s in match.items)), match.close)
+            groups.setdefault(key, []).append((part, match))
+    for rows in groups.values():
+        names = {(_key(p.part_no), _key(p.name)) for p, _m in rows}
+        if len(rows) == 2 and len(names) == 2:  # two parts, not the same part listed twice
+            rows.sort(key=lambda t: _piece_order(t[0]))
+            (first, m1), (second, m2) = rows
+            _one_side(m1, "L", f"แบบมี 2 ชิ้นที่ตรงกับคู่ซ้าย/ขวานี้ ({first.part_no or first.name} / "
+                               f"{second.part_no or second.name}): ชิ้นแรก = ข้างซ้าย")
+            _one_side(m2, "R", f"แบบมี 2 ชิ้นที่ตรงกับคู่ซ้าย/ขวานี้ ({first.part_no or first.name} / "
+                               f"{second.part_no or second.name}): ชิ้นที่สอง = ข้างขวา")
+        else:
+            for part, match in rows:
+                if part.drawing_qty == 1:
+                    _one_side(match, "L", "แบบระบุ 1 ชิ้น ไม่ระบุข้าง – ใช้ข้างซ้าย")
 
 
 def match_part(part: Part, stock: StockList, context: DrawingContext | None = None, nearest: bool = False,

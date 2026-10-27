@@ -118,6 +118,14 @@ def main() -> int:
     dialog.table.item(1, dialog._col("thickness")).setText("4.5")  # one row set by hand
     dialog.table.selectRow(1)
     shot(dialog, "7c_dwg_code_name_thickness.png")
+    from PySide6.QtCore import QItemSelectionModel, Qt
+
+    dialog.table.clearSelection()
+    for r in (2, 3):  # two rows selected, one tick taken out: both out (เลือกทั้งหมด shows –)
+        dialog.table.selectionModel().select(dialog.table.model().index(r, 0),
+                                             QItemSelectionModel.Select | QItemSelectionModel.Rows)
+    dialog.table.item(3, 0).setCheckState(Qt.Unchecked)
+    shot(dialog, "7g_dwg_tick_rows.png")
     dialog.close()
     broken = dwg_io.read_drawing(samples / "RRS-T-FIX_broken_lines.dxf")
     dialog = DrawingImportDialog([broken], dwg_io.DEFAULT_DENSITIES, w)
@@ -327,7 +335,23 @@ def main() -> int:
     cut_page.tabs.setCurrentIndex(0)
     row = next((r for r, g in enumerate(cut_page._row_group) if g.thickness == 3), 0)
     cut_page.table.selectRow(row)
+    w.resize(1440, 1160)  # taller: every row of the plan with its drop-down
+    cut_page.table.parentWidget().setSizes([300, 330])
     shot(w, "14j_laser_sheet_dropdown.png")
+    # a part too big for the 4x8 sheet: its own row, with the plates it fits on in the drop-down
+    from partlist_studio.core import nesting as nest_mod
+
+    group = cut_page._row_group[row]
+    floor = [[(0.0, 0.0), (1300.0, 0.0), (1300.0, 2000.0), (0.0, 2000.0)]]
+    cut_page.demand.parts.append(nest_mod.NestPart("big", "RRS-T-020", "พื้นกระบะ", group.material, group.thickness,
+                                                   1300, 2000, 1, outline=floor))
+    four = next(o for o in group.options if o[2] == group.sheet_code)  # the main sheet kept at 4x8
+    cut_page.sheet_chosen[group.key] = (four[0], four[1], four[2])
+    cut_page._lay_out(cut_page.laser_params(), group.key)
+    at = next(r for r, g in enumerate(cut_page._row_group) if g.key == group.key)
+    cut_page.table.selectRow(at + 1)  # the row of the part too big for the main sheet
+    shot(w, "14k_laser_overflow_sheet.png")
+    w.resize(1440, 860)
     state.dirty = False
     w.state.settings.q.clear()
     return 0

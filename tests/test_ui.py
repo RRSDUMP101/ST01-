@@ -885,3 +885,82 @@ def test_steel_stock_tab_and_laser_sheet_dropdown(window, app, monkeypatch):
     assert group.chosen and group.sheet_code == "01-B00 -0105" and page.sheet_chosen[group.key][2] == "01-B00 -0105"
     new_box = page.table.cellWidget(page._row_group.index(group), col)
     assert new_box.itemData(new_box.currentIndex())[2] == "01-B00 -0105"
+
+
+def test_laser_plan_dropdown_on_every_row(window, app):
+    """Every row of the plan has its drop-down: the first one the main sheet, the next ones the sheet of the
+    parts too big for it (only the sizes they fit on)."""
+    from partlist_studio.core import laser, nesting
+    from partlist_studio.core.stock import StockItem, StockList
+    from partlist_studio.ui.pages import nesting as page_mod
+
+    state = window.state
+    state.add_stock_source("Express: plates.csv", StockList(items=[
+        StockItem(code="01-B00-0003", name="เหล็กแผ่นดำ 3 มม. 4x8 ฟุต", spec="3 มม.", unit="แผ่น", on_hand=7),
+        StockItem(code="01-B00-0005", name="เหล็กแผ่นดำ 3 มม. 5x10 ฟุต", spec="3 มม.", unit="แผ่น", on_hand=2),
+        StockItem(code="01-B00-0007", name="เหล็กแผ่นดำ 3 มม. 5x20 ฟุต", spec="3 มม.", unit="แผ่น", on_hand=1)],
+        source="express"))
+
+    def box(w, h):
+        return [[(0.0, 0.0), (w, 0.0), (w, h), (0.0, h)]]
+
+    page = window.pages["nesting"]
+    page.demand = laser.Demand(parts=[
+        nesting.NestPart("s", "RRS-T-019", "ฝาข้าง", "SS400", 3, 400, 300, 12, outline=box(400, 300)),
+        nesting.NestPart("b", "RRS-T-020", "พื้นกระบะ", "SS400", 3, 1300, 2000, 1, outline=box(1300, 2000))])
+    page._lay_out(page.laser_params())
+    col = page_mod.nesting.PLAN_HEADERS.index("แผ่นที่ใช้")
+    assert page.table.rowCount() == 2 and [page.table.item(r, 3).text() for r in (0, 1)] == ["01-B00-0003",
+                                                                                           "01-B00-0005"]
+    main, over = page.table.cellWidget(0, col), page.table.cellWidget(1, col)
+    assert main is not None and over is not None and over is not main
+    assert "(อัตโนมัติ – ชิ้นใหญ่เกินแผ่นหลัก)" in over.currentText()
+    codes = [over.itemData(i)[2] for i in range(1, over.count())]
+    assert codes == ["01-B00-0005", "01-B00-0007"]  # 4x8 is too small for พื้นกระบะ: not offered
+    at = codes.index("01-B00-0007") + 1
+    over.setCurrentIndex(at)
+    over.activated.emit(at)
+    group = page.groups[0]
+    assert [c for _s, c, _n, _k in group.sheet_counts()] == ["01-B00-0003", "01-B00-0007"]
+    assert page.sheet_chosen[group.key] == (1219.2, 2438.4, "01-B00-0003")  # the main sheet stays
+    assert page.table.item(1, 3).text() == "01-B00-0007"
+    new = page.table.cellWidget(1, col)
+    assert new.itemData(new.currentIndex())[2] == "01-B00-0007" and new.itemText(0).startswith("อัตโนมัติ")
+    new.setCurrentIndex(0)
+    new.activated.emit(0)  # automatic again
+    assert group.key not in page.sheet_overflow and page.table.item(1, 3).text() == "01-B00-0005"
+
+
+def test_drawing_dialog_tick_all_and_many_rows(app):
+    """เลือกทั้งหมด ticks / unticks every row of the drawing; ticking one of several selected rows ticks them all."""
+    from PySide6.QtCore import QItemSelectionModel, Qt
+
+    from partlist_studio.core import dwg_io
+    from partlist_studio.ui.dialogs import DrawingImportDialog
+
+    dialog = DrawingImportDialog([dwg_io.read_drawing(SAMPLES / "RRS-T-SET_frame_parts.dxf")],
+                                 dwg_io.DEFAULT_DENSITIES)
+    cands, table = dialog.candidates[0], dialog.table
+    assert dialog.check_all.checkState() == Qt.Checked and dialog.tick_count.text().startswith("ติ๊กเพิ่ม 5 จาก 5")
+    dialog.check_all.click()  # everything out
+    assert not any(c.selected for c in cands) and dialog.check_all.checkState() == Qt.Unchecked
+    for r in (1, 2, 3):
+        table.selectionModel().select(table.model().index(r, 0), QItemSelectionModel.Select | QItemSelectionModel.Rows)
+    table.item(2, 0).setCheckState(Qt.Checked)  # one tick in the selection: all three
+    assert [c.selected for c in cands] == [False, True, True, True, False]
+    assert dialog.check_all.checkState() == Qt.PartiallyChecked and "3 จาก 5" in dialog.tick_count.text()
+    dialog.untick_btn.click()
+    assert not any(c.selected for c in cands)
+    dialog.tick_btn.click()
+    dialog.invert_btn.click()  # the selected rows only
+    assert [c.selected for c in cands] == [False, False, False, False, False]
+    table.clearSelection()
+    dialog.invert_btn.click()  # no selection: the whole drawing
+    assert all(c.selected for c in cands) and dialog.check_all.checkState() == Qt.Checked
+    table.horizontalHeader().sectionClicked.emit(0)  # the header of the เพิ่ม column: all out
+    assert not any(c.selected for c in cands)
+    table.item(4, 0).setCheckState(Qt.Checked)  # a row outside the selection: only that one
+    dialog.accept()
+    [(_d, parts)] = dialog.selected_parts()
+    assert [p.part_no for p in parts] == ["RRS-T-005"]
+    assert "เลือกแล้ว 1 รายการ" in dialog.summary.text()

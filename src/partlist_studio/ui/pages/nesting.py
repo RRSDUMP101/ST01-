@@ -656,6 +656,8 @@ class NestingPage(QWidget):
         self.issues: list[laser.Issue] = []
         self._row_group: list[nesting.NestGroup] = []
         self.sheet_chosen: dict[tuple[str, float], tuple[float, float]] = {}  # (family, thk) -> (w, l) picked by hand
+        self.sheet_overflow: dict[tuple[str, float], list[tuple]] = {}  # sheets picked for the parts too big for it
+        self._nest_params = nesting.NestParams()
         self._programs: list[laser.CutProgram] = []
         lay = QVBoxLayout(self)
         lay.setContentsMargins(28, 24, 28, 16)
@@ -988,8 +990,9 @@ class NestingPage(QWidget):
         """Nest the parts of the demand on the sheets (the sizes chosen per material/thickness, or the ones with
         the least steel) and show the plan."""
         demand = self.demand
-        self.groups = nesting.plan(demand.parts, self.state.stock, params.nest_params(), self.state.settings.densities,
-                                   self.state.settings.custom_sheets, self.sheet_chosen)
+        self._nest_params = params.nest_params()
+        self.groups = nesting.plan(demand.parts, self.state.stock, self._nest_params, self.state.settings.densities,
+                                   self.state.settings.custom_sheets, self.sheet_chosen, self.sheet_overflow)
         self.issues = laser.check_parts(demand.parts, params, self.groups)
         rows = nesting.plan_rows(self.groups)
         self._row_group = []
@@ -1076,17 +1079,48 @@ class NestingPage(QWidget):
         box.setEnabled(group is not None)
         box.blockSignals(False)
 
+    @staticmethod
+    def _row_option(group: nesting.NestGroup, size: str, code: str) -> tuple | None:
+        """The option of the group a row of the plan is cut from (its stock code, else its size)."""
+        w, h = (float(v) for v in size.split("x"))
+        return next((o for o in group.options if code and o[2] == code), None) or next(
+            (o for o in group.options if nesting.same_size(o, (w, h))), None)
+
+    def _fill_overflow_box(self, box: QComboBox, group: nesting.NestGroup, k: int) -> None:
+        """Row k (> 0) of a material/thickness: the sheets the parts too big for the main sheet are cut from -
+        only the sizes all of them fit on."""
+        size, code, name, _n = group.sheet_counts()[k]
+        used = self._row_option(group, size, code)
+        picked = used is not None and any(o[2] == used[2] and nesting.same_size(o, used) for o in group.overflow)
+        box.blockSignals(True)
+        box.clear()
+        box.addItem("อัตโนมัติ – แผ่นเล็กสุดที่ชิ้นใหญ่วางได้" if picked else
+                    f"{name.split(': ', 1)[-1]} (อัตโนมัติ – ชิ้นใหญ่เกินแผ่นหลัก)", None)
+        for option in nesting.overflow_options(group, size, self._nest_params):
+            box.addItem(self._sheet_label(option), (option[0], option[1], option[2]))
+            if picked and option[2] == used[2] and nesting.same_size(option, used):
+                box.setCurrentIndex(box.count() - 1)
+        box.setToolTip("ชิ้นงานที่ใหญ่เกินแผ่นหลักของความหนานี้ ตัดจากแผ่นนี้ – เลือกแผ่นอื่นที่ชิ้นเหล่านี้วางได้ "
+                       "(รหัส · ขนาด · คงเหลือจากสต็อกเหล็ก) · อัตโนมัติ = แผ่นเล็กสุดที่วางได้")
+        box.blockSignals(False)
+
     def _sheet_boxes(self) -> None:
-        """A drop-down in the แผ่นที่ใช้ column of the first row of every material/thickness."""
+        """A drop-down in the แผ่นที่ใช้ column of every row: the first row of a material/thickness picks its
+        main sheet, the next rows the sheets of the parts too big for it."""
         col = self._drop_sheet_boxes()
         row = 0
         for group in self.groups:
-            box = QComboBox()
-            box.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
-            box.view().setMinimumWidth(560)
-            self._fill_sheet_box(box, group, in_table=True)
-            box.activated.connect(lambda i, b=box, key=group.key: self._sheet_picked(key, b.itemData(i)))
-            self.table.setCellWidget(row, col, box)
+            for k in range(max(1, len(group.sheet_counts()))):
+                box = QComboBox()
+                box.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+                box.view().setMinimumWidth(560)
+                if k == 0:
+                    self._fill_sheet_box(box, group, in_table=True)
+                    box.activated.connect(lambda i, b=box, key=group.key: self._sheet_picked(key, b.itemData(i)))
+                else:
+                    self._fill_overflow_box(box, group, k)
+                    box.activated.connect(lambda i, b=box, g=group, k=k: self._overflow_picked(g, k, b.itemData(i)))
+                self.table.setCellWidget(row + k, col, box)
             row += max(1, len(group.sheet_counts()))
 
     def _drop_sheet_boxes(self) -> int:
@@ -1122,6 +1156,34 @@ class NestingPage(QWidget):
             self.state.notify(f"{new.family} หนา {new.thickness:g} มม.: ใช้ {name} ({new.sheet_w:.0f}x{new.sheet_h:.0f}) "
                               f"{len(new.sheets)} แผ่น · ใช้เนื้อเหล็ก {new.utilization:.0%}"
                               + (" (เลือกเอง)" if new.chosen else " (อัตโนมัติ)"))
+
+    def _overflow_picked(self, group: nesting.NestGroup, k: int, sheet: tuple | None) -> None:
+        """A sheet picked on row k of a material/thickness for the parts too big for its main sheet (None =
+        automatic): the picks of the other rows stay."""
+        if self.demand is None:
+            return
+        picks = []
+        for j, (size, code, _name, _n) in enumerate(group.sheet_counts()[1:], start=1):
+            if j == k:
+                if sheet is not None:
+                    picks.append(tuple(sheet))
+                continue
+            used = self._row_option(group, size, code)
+            if used is not None and any(o[2] == used[2] and nesting.same_size(o, used) for o in group.overflow):
+                picks.append((used[0], used[1], used[2]))
+        if picks:
+            self.sheet_overflow[group.key] = picks
+            # for the parts too big for this main sheet: it stays, the plan does not move to another size
+            self.sheet_chosen.setdefault(group.key, (group.sheet_w, group.sheet_h, group.sheet_code))
+        else:
+            self.sheet_overflow.pop(group.key, None)
+        self._lay_out(self.laser_params(), group.key)
+        new = next((g for g in self.groups if g.key == group.key), None)
+        if new is not None:
+            counts = new.sheet_counts()[1:]
+            used = ", ".join(f"{(c + ' ') if c else ''}{s} {n} แผ่น" for s, c, _name, n in counts)
+            self.state.notify(f"{new.family} หนา {new.thickness:g} มม.: ชิ้นใหญ่เกินแผ่นหลัก ตัดจาก {used or '-'}"
+                              + (" (เลือกเอง)" if new.overflow else " (อัตโนมัติ)"))
 
     def edit_sheet_sizes(self) -> None:
         p = self.laser_params()

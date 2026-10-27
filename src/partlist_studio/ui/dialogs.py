@@ -295,7 +295,9 @@ class DrawingImportDialog(QDialog):
         self.table.setItemDelegateForColumn(self._col("material"), self._mat_delegate)
         self._side_delegate = ComboDelegate(SIDE_CHOICES, self.table)
         self.table.setItemDelegateForColumn(self._col(SIDE_COL), self._side_delegate)
-        self.tabs.addTab(self.table, "รายการที่จะเพิ่มเข้า Part List")
+        self.table.horizontalHeaderItem(0).setToolTip("คลิกหัวคอลัมน์นี้ = ติ๊ก / เอาออกทุกแถวของแบบนี้")
+        self.table.horizontalHeader().sectionClicked.connect(self._header_clicked)
+        self.tabs.addTab(self._build_rows_tab(), "รายการที่จะเพิ่มเข้า Part List")
         self.attr_table = QTableWidget()
         self.attr_table.setColumnCount(3)
         self.attr_table.setHorizontalHeaderLabels(["บล็อก", "Tag", "ค่า"])
@@ -396,6 +398,77 @@ class DrawingImportDialog(QDialog):
         self.table.setColumnWidth(self._col("name"), max(self.table.columnWidth(self._col("name")), 160))
         self._loading = False
         self._refresh_preview()
+
+    # ---- ticking the rows to add ---------------------------------------------
+    def _build_rows_tab(self) -> QWidget:
+        page = QWidget()
+        lay = QVBoxLayout(page)
+        lay.setContentsMargins(4, 6, 4, 4)
+        bar = QHBoxLayout()
+        self.check_all = QCheckBox("เลือกทั้งหมด")
+        self.check_all.setToolTip("ติ๊ก = เพิ่มทุกแถวของแบบนี้ · เอาติ๊กออก = ไม่เพิ่มทุกแถว (แล้วติ๊กเฉพาะแถวที่ต้องการ)")
+        self.check_all.clicked.connect(self._check_all_clicked)
+        bar.addWidget(self.check_all)
+        self.tick_btn = button("ติ๊กแถวที่เลือก", tooltip="ติ๊กเพิ่มทุกแถวที่เลือกไว้ (คลิก/Shift/Ctrl เลือกหลายแถว)")
+        self.tick_btn.clicked.connect(lambda: self._tick_rows(self._rows(all_if_none=False), True))
+        bar.addWidget(self.tick_btn)
+        self.untick_btn = button("เอาออกแถวที่เลือก", tooltip="เอาติ๊กออกจากทุกแถวที่เลือกไว้ – แถวนั้นจะไม่ถูกเพิ่ม")
+        self.untick_btn.clicked.connect(lambda: self._tick_rows(self._rows(all_if_none=False), False))
+        bar.addWidget(self.untick_btn)
+        self.invert_btn = button("สลับติ๊ก", tooltip="แถวที่ติ๊กอยู่เอาออก แถวที่ไม่ได้ติ๊กติ๊กเพิ่ม (แถวที่เลือก หรือทั้งแบบถ้าไม่ได้เลือก)")
+        self.invert_btn.clicked.connect(self._invert_ticks)
+        bar.addWidget(self.invert_btn)
+        hint = QLabel("เลือกหลายแถวด้วย Shift / Ctrl แล้วติ๊กช่อง เพิ่ม ของแถวใดแถวหนึ่ง = ติ๊กทุกแถวที่เลือก")
+        hint.setObjectName("Hint")
+        bar.addWidget(hint)
+        bar.addStretch(1)
+        self.tick_count = QLabel()
+        bar.addWidget(self.tick_count)
+        lay.addLayout(bar)
+        lay.addWidget(self.table, 1)
+        return page
+
+    def _tick_rows(self, rows: list[int], on: bool) -> None:
+        if self._current < 0 or not rows:
+            return
+        self._loading = True
+        for r in rows:
+            item = self.table.item(r, 0)
+            if item is not None:
+                item.setCheckState(Qt.Checked if on else Qt.Unchecked)
+        self._loading = False
+        self._store_table()
+        self._refresh_preview()
+
+    def _all_ticked(self) -> bool:
+        rows = self.table.rowCount()
+        return bool(rows) and all(self.table.item(r, 0).checkState() == Qt.Checked for r in range(rows))
+
+    def _check_all_clicked(self, *_args) -> None:
+        self._tick_rows(list(range(self.table.rowCount())), not self._all_ticked())
+
+    def _header_clicked(self, section: int) -> None:
+        if section == 0:
+            self._check_all_clicked()
+
+    def _invert_ticks(self) -> None:
+        if self._current < 0:
+            return
+        self._loading = True
+        for r in self._rows(all_if_none=True):
+            item = self.table.item(r, 0)
+            item.setCheckState(Qt.Unchecked if item.checkState() == Qt.Checked else Qt.Checked)
+        self._loading = False
+        self._store_table()
+        self._refresh_preview()
+
+    def _update_check_all(self) -> None:
+        rows = self.table.rowCount()
+        ticked = sum(1 for r in range(rows) if self.table.item(r, 0).checkState() == Qt.Checked)
+        self.check_all.setCheckState(Qt.Checked if rows and ticked == rows else (
+            Qt.PartiallyChecked if ticked else Qt.Unchecked))
+        self.check_all.setEnabled(bool(rows))
+        self.tick_count.setText(f"ติ๊กเพิ่ม {ticked} จาก {rows} แถว (แบบนี้)")
 
     # ---- the check before cutting ----------------------------------------
     def _build_check_tab(self) -> QWidget:
@@ -632,6 +705,10 @@ class DrawingImportDialog(QDialog):
             return
         col, r = item.column(), item.row()
         if col == 0:
+            rows = self._rows(all_if_none=False)
+            if r in rows and len(rows) > 1:  # ticked in a selection of rows: the same for every selected row
+                self._tick_rows(rows, item.checkState() == Qt.Checked)
+                return
             self._store_table()
             self._refresh_preview()
             return
@@ -788,6 +865,7 @@ class DrawingImportDialog(QDialog):
         selected = {c.profile_index for c in profile_cands if c.selected} if profile_cands else None
         placed = {c.profile_index: part_side(c.part) for c in profile_cands if part_side(c.part)}
         self.preview.show_drawing(data, selected, placed)
+        self._update_check_all()
         chosen = [c for cs in self.candidates.values() for c in cs if c.selected]
         missing = sum(1 for c in chosen if c.thickness_source == THK_MISSING)
         text = f"เลือกแล้ว {len(chosen)} รายการ จาก {len(self.drawings)} แบบ"

@@ -103,6 +103,7 @@ class NestGroup:
     gap: float = 0  # mm between parts used for this thickness
     options: list = field(default_factory=list)  # (width, length, code, name) sizes it could be cut from
     chosen: bool = False  # the sheet size was chosen by the user (not the one with the least steel)
+    overflow: list = field(default_factory=list)  # sheets picked by hand for the parts too big for the main sheet
 
     @property
     def key(self) -> tuple[str, float]:
@@ -450,11 +451,36 @@ def chosen_option(options: list[tuple], want: tuple) -> tuple | None:
     return next((o for o in options if same_size(o, want)), None)
 
 
+def _typed(options: list[tuple], want: tuple) -> tuple:
+    """The option picked by hand, or a size typed for this plan."""
+    pick = chosen_option(options, want)
+    if pick is None:
+        w, h = sorted(want[:2])
+        pick = (float(w), float(h), "", f"{CUSTOM} {w:.0f}x{h:.0f}")
+    return pick
+
+
+def overflow_options(group: NestGroup, size: str, params: NestParams | None = None) -> list[tuple]:
+    """The sheets of the group's list every part on its `size` sheets ('1524x3048') fits on - the ones that can
+    be picked instead for the parts too big for the main sheet."""
+    gp = replace(params or NestParams(), gap=group.gap or (params or NestParams()).gap)
+    on = {pl.part for s in group.sheets if s.size == size for pl in s.placements}
+    out = []
+    for option in group.options:
+        uw, uh = option[0] - 2 * gp.margin + gp.gap, option[1] - 2 * gp.margin + gp.gap
+        if all(_fits(group.parts[i].width + gp.gap, group.parts[i].height + gp.gap, uw, uh, gp.rotate) for i in on):
+            out.append(option)
+    return out
+
+
 def plan(parts: list[NestPart], stock: StockList | None = None, params: NestParams | None = None,
          densities: dict[str, float] | None = None, custom: list | None = None,
-         chosen: dict[tuple[str, float], tuple] | None = None) -> list[NestGroup]:
+         chosen: dict[tuple[str, float], tuple] | None = None,
+         overflow: dict[tuple[str, float], list[tuple]] | None = None) -> list[NestGroup]:
     """custom: sheet sizes added by hand (custom_options) · chosen: (family, thickness) -> (width, length) or
-    (width, length, stock code) the user picked for that group, instead of the sheet with the least steel."""
+    (width, length, stock code) the user picked for that group, instead of the sheet with the least steel ·
+    overflow: (family, thickness) -> the sheets picked for the parts too big for the main sheet, tried in that
+    order before the smallest size they fit."""
     params = params or NestParams()
     stock = stock or StockList()
     groups: dict[tuple[str, float], list[NestPart]] = {}
@@ -471,13 +497,12 @@ def plan(parts: list[NestPart], stock: StockList | None = None, params: NestPara
         primaries = plain
         want = (chosen or {}).get((family, thk))
         if want:
-            pick = chosen_option(options, want)
-            if pick is None:  # a size typed for this plan
-                w, h = sorted(want[:2])
-                pick = (float(w), float(h), "", f"{CUSTOM} {w:.0f}x{h:.0f}")
+            pick = _typed(options, want)
+            if pick not in options:  # a size typed for this plan
                 options = sorted(options + [pick], key=lambda o: (is_special(o), o[0] * o[1]))
             primaries, group.chosen = [pick], True
         group.options = options
+        group.overflow = [_typed(options, w) for w in (overflow or {}).get((family, thk), [])]
         best = None
         tried: set = set()
         for primary in primaries:
@@ -486,6 +511,10 @@ def plan(parts: list[NestPart], stock: StockList | None = None, params: NestPara
                 continue  # another item of a size already tried (the one with more on hand came first)
             tried.add(size_key)
             sheets, left = _pack_on(items, list(range(len(items))), primary, gp)
+            for pick in group.overflow:  # the sheets picked for them first
+                if left:
+                    more, left = _pack_on(items, left, pick, gp)
+                    sheets += more
             # parts too big for this size go on the smallest size they fit
             for bigger in sorted(plain, key=lambda o: o[0] * o[1]):
                 if not left or bigger[0] * bigger[1] <= primary[0] * primary[1]:

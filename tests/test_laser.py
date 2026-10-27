@@ -348,6 +348,39 @@ def test_plan_sheet_size_chosen_or_added_by_hand():
     assert line.name == "แผ่นSS400 3มม. 1500x3000 (เพิ่มเอง: สั่งซื้อ)" and "เลือกรหัสแผ่น" in doc.remark
 
 
+def test_plan_sheet_picked_for_parts_too_big_for_the_main_sheet():
+    """The parts too big for the main sheet go on the smallest size they fit - or on the sheet picked for them,
+    out of the sizes they fit on."""
+    from partlist_studio.core.stock import StockItem, StockList
+
+    def plate(w, h, n):
+        return [[(0.0, 0.0), (w, 0.0), (w, h), (0.0, h)]], w, h, n
+
+    small_outline, *_ = plate(400, 300, 0)
+    big_outline, *_ = plate(1300, 2000, 0)
+    small = nesting.NestPart("s", "RRS-T-019", "ฝาข้าง", "SS400", 3, 400, 300, 12, outline=small_outline)
+    big = nesting.NestPart("b", "RRS-T-020", "พื้นกระบะ", "SS400", 3, 1300, 2000, 1, outline=big_outline)
+    stock = StockList(items=[
+        StockItem(code="01-B00-0003", name="เหล็กแผ่นดำ 3 มม. 4x8 ฟุต", spec="3 มม.", unit="แผ่น", on_hand=7),
+        StockItem(code="01-B00-0005", name="เหล็กแผ่นดำ 3 มม. 5x10 ฟุต", spec="3 มม.", unit="แผ่น", on_hand=2),
+        StockItem(code="01-B00-0007", name="เหล็กแผ่นดำ 3 มม. 5x20 ฟุต", spec="3 มม.", unit="แผ่น", on_hand=1)])
+    [auto] = nesting.plan([small, big], stock)
+    assert auto.sheet_code == "01-B00-0003" and not auto.overflow
+    assert [(c, n) for _s, c, _name, n in auto.sheet_counts()] == [("01-B00-0003", 1), ("01-B00-0005", 1)]
+    fits = nesting.overflow_options(auto, auto.sheet_counts()[1][0])
+    assert [o[2] for o in fits] == ["01-B00-0005", "01-B00-0007"]  # 4x8 is too small for พื้นกระบะ
+    main = {auto.key: (auto.sheet_w, auto.sheet_h, auto.sheet_code)}  # the main sheet stays (pinned by the page)
+    [picked] = nesting.plan([small, big], stock, None, None, None, main, {auto.key: [(1524, 6096, "01-B00-0007")]})
+    assert picked.sheet_code == "01-B00-0003" and [o[2] for o in picked.overflow] == ["01-B00-0007"]
+    assert [(c, n) for _s, c, _name, n in picked.sheet_counts()] == [("01-B00-0003", 1), ("01-B00-0007", 1)]
+    assert not picked.too_big
+    rows = nesting.plan_rows([picked])
+    assert [r[3] for r in rows] == ["01-B00-0003", "01-B00-0007"]
+    # a picked size the part does not fit on: the smallest size it fits is used after it
+    [small_pick] = nesting.plan([small, big], stock, None, None, None, main, {auto.key: [(1219.2, 2438.4)]})
+    assert [c for _s, c, _name, _n in small_pick.sheet_counts()] == ["01-B00-0003", "01-B00-0005"]
+
+
 def test_demand_finds_the_flat_of_a_part_tied_to_a_stock_code(set_parts):
     """After the stock check a Part List row carries its stock code (RRS-A-001-250): the job made from it still
     cuts the flat pattern of its drawing code."""

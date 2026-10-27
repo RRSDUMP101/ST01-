@@ -1254,7 +1254,16 @@ class NestingPage(QWidget):
         self.state.notify(f"บันทึก {Path(path).name} แล้ว")
 
     def start_cut(self) -> None:
-        for prog in self._selected_programs():
+        from ...core.sale_bridge import job_work_blockers
+
+        selected = self._selected_programs()
+        job_numbers = {number for prog in selected for number in prog.jobs}
+        blockers = [reason for job in self.state.jobs if job.job_no in job_numbers
+                    for reason in job_work_blockers(job)]
+        if blockers:
+            self.actions.error("ยังเริ่มตัดไม่ได้", " · ".join(dict.fromkeys(blockers)))
+            return
+        for prog in selected:
             if prog.status == laser.ST_WAIT:
                 prog.status = laser.ST_CUTTING
         self.state.save_laser()
@@ -1271,8 +1280,13 @@ class NestingPage(QWidget):
         if not ok:
             return
         self.state.settings.set("laser/operator", operator)
-        n, doc = laser.apply_cut(prog, sheets, self.state.jobs, self.state.ledger, operator, remnant)
-        self.state.save_jobs()
+        try:
+            n, doc = laser.apply_cut(prog, sheets, self.state.jobs, self.state.ledger, operator, remnant)
+        except ValueError as exc:
+            self.actions.error("ยังบันทึกตัดไม่ได้", str(exc))
+            return
+        if not self.state.save_jobs():
+            return
         self.state.ledger_changed.emit()
         self.state.save_laser()
         self.state.notify(f"{prog.no} ตัดแล้ว {prog.cut_sheets}/{prog.repeat} แผ่น"

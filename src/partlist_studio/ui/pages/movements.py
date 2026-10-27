@@ -288,11 +288,16 @@ class MovementsPage(QWidget):
                                 f"บันทึก {doc.doc_no} {doc.type_name} {len(doc.lines)} บรรทัด?\n"
                                 "ยอดคงเหลือในโปรแกรมจะเปลี่ยนทันที") != QMessageBox.Yes:
             return
-        warnings = self.state.post_doc(doc)
+        try:
+            warnings = self.state.post_doc(doc)
+        except ValueError as exc:
+            self.actions.error("ยังบันทึกเอกสารไม่ได้", str(exc))
+            return
         job = next((j for j in self.state.jobs if j.job_no == doc.job), None)
         if job is not None:
             mark_document(job, doc)
-            self.state.save_jobs()
+            if not self.state.save_jobs():
+                return
         else:
             self.state.save_library()
         self.refresh()

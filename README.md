@@ -166,3 +166,7 @@ pip install -r requirements-dev.txt
 QT_QPA_PLATFORM=offscreen python -m pytest      # Linux/CI ไม่มีจอ
 python tools/screenshots.py                      # อัปเดตภาพหน้าจอใน docs/
 ```
+
+## Sale Office workflow bridge
+
+The additive SO ↔ native production connector, office service setup, review/release gates, offline queue and phase-2 limits are documented in [docs/SALE_OFFICE_BRIDGE.md](docs/SALE_OFFICE_BRIDGE.md). Production activation requires the staging acceptance checks there; this connector does not enable customer messaging.

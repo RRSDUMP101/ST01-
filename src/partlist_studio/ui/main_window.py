@@ -6,7 +6,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QSize, Qt, QTimer
 from PySide6.QtGui import QAction, QColor, QKeySequence
-from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QMainWindow,
+from PySide6.QtWidgets import (QApplication, QFrame, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QMainWindow,
                                QMessageBox, QStackedWidget, QVBoxLayout, QWidget)
 
 from .. import APP_NAME, __version__
@@ -21,6 +21,7 @@ from .pages.movements import MovementsPage
 from .pages.nesting import NestingPage
 from .pages.partlist import PartListPage
 from .pages.production import ProductionPage
+from .pages.sale_bridge import SaleBridgePage
 from .pages.settings import SettingsPage
 from .pages.stock import StockPage
 from .state import AppState
@@ -40,6 +41,7 @@ NAV_GROUPS = [
         ("movements", "⑥   เบิก / รับ สต็อก"),
     ]),
     ("ข้อมูลหลัก & เชื่อมต่อ", [
+        ("sale_bridge", "⇄   Sale Office → งานผลิต"),
         ("models", "▣   แบบกระบะมาตรฐาน"),
         ("express", "₿   Express"),
         ("sheets", "⇅   Google Sheets"),
@@ -119,6 +121,7 @@ class MainWindow(QMainWindow):
         self.pages["parts"] = PartListPage(self.state, self.actions)
         self.pages["models"] = ModelsPage(self.state, self.actions)
         self.pages["production"] = ProductionPage(self.state, self.actions)
+        self.pages["sale_bridge"] = SaleBridgePage(self.state, self.actions)
         self.pages["nesting"] = NestingPage(self.state, self.actions)
         self.pages["stock"] = StockPage(self.state, self.actions)
         self.pages["movements"] = MovementsPage(self.state, self.actions, self.pages["stock"])
@@ -133,6 +136,11 @@ class MainWindow(QMainWindow):
         self._build_menu()
         self.statusBar().showMessage("พร้อมใช้งาน")
         self.state.message.connect(lambda m: self.statusBar().showMessage(m, 8000))
+        self.state.persistence_error.connect(lambda m: self.actions.error("ข้อมูลยังไม่บันทึก", m))
+        self.bridge_timer = QTimer(self)
+        self.bridge_timer.setInterval(5000)
+        self.bridge_timer.timeout.connect(self._poll_bridge)
+        self.bridge_timer.start()
         self.state.partlist_changed.connect(self._update_title)
         self._update_title()
         self._steps_due = False
@@ -140,6 +148,12 @@ class MainWindow(QMainWindow):
                        self.state.ledger_changed, self.state.stock_changed):
             signal.connect(self._steps_changed)
         self.refresh_steps()
+
+    def _poll_bridge(self):
+        # A quantity/cutting dialog holds a Job reference until it closes. Keep it
+        # stable; the store's compare-and-swap will reject a concurrent cloud edit.
+        if QApplication.activeModalWidget() is None:
+            self.state.refresh_bridge_jobs()
 
     def _build_menu(self) -> None:
         a = self.actions

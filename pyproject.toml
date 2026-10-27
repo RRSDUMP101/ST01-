@@ -23,6 +23,9 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest>=8", "pyinstaller>=6.6"]
 
+[project.scripts]
+partlist-sync = "partlist_studio.sync_worker:main"
+
 [project.gui-scripts]
 partlist-studio = "partlist_studio.app:main"
 

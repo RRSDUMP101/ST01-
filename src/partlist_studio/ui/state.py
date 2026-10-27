@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QSettings, QStandardPaths, Signal
@@ -17,6 +18,7 @@ from ..core.models import PartList
 from ..core.movements import Ledger, StockDoc
 from ..core.production import Job, RawUse
 from ..core.replenish import ReplenishParams
+from ..core.sale_bridge import BridgeStore
 from ..core.stock import RequirementLine, StockItem, StockList, _key
 from ..core.xref import CodeXref
 
@@ -145,6 +147,8 @@ class AppState(QObject):
     laser_changed = Signal()  # flat pattern library or cut programs changed
     catalog_changed = Signal()  # assembly groups / shelf locations set by hand
     message = Signal(str)
+    bridge_changed = Signal()
+    persistence_error = Signal(str)
 
     def __init__(self, data_dir: str | Path | None = None):
         super().__init__()
@@ -167,9 +171,36 @@ class AppState(QObject):
         self.path: str = ""
         self.dirty = False
         self._data_dir = Path(data_dir) if data_dir else None
+        self._bridge_store = None
+        self._bridge_saved: dict[str, str] = {}
+        self._bridge_read_failed = False
         stock_mod.XREF_LOOKUP = self.xref_lookup
         stock_mod.XREF_ENTRIES = lambda: self.xref.entries
         self.load_library()
+        self.refresh_bridge_jobs()
+
+    @property
+    def bridge_store(self) -> BridgeStore:
+        if self._bridge_store is None:
+            self._bridge_store = BridgeStore(self.data_dir() / "sale_bridge.sqlite3")
+        return self._bridge_store
+
+    def refresh_bridge_jobs(self) -> None:
+        """Read only the durable local bridge. Network I/O belongs to the worker."""
+        try:
+            linked = self.bridge_store.jobs()
+        except Exception:
+            if not self._bridge_read_failed:
+                self.persistence_error.emit("อ่านคิว Sale Office ไม่สำเร็จ กรุณาตรวจสิทธิ์ไฟล์และเปิดโปรแกรมใหม่")
+            self._bridge_read_failed = True
+            return
+        self._bridge_read_failed = False
+        snapshot = {j.bridge["key"]: json.dumps(j.to_dict(), sort_keys=True, ensure_ascii=False) for j in linked}
+        if snapshot != self._bridge_saved:
+            self.jobs = [j for j in self.jobs if not j.bridge] + linked
+            self._bridge_saved = snapshot
+            self.jobs_changed.emit()
+        self.bridge_changed.emit()
 
     # ---- company data kept between sessions (stock sources, model BOMs, code table) ------------
     def data_dir(self) -> Path:
@@ -208,19 +239,34 @@ class AppState(QObject):
         self._merge_stock()
 
     def save_library(self) -> None:
+        # Linked jobs have a separate transactional owner. Never serialize them into
+        # the legacy file or overwrite a newer worker version with a stale UI copy.
+        for job in self.jobs:
+            if job.bridge:
+                key = job.bridge["key"]
+                snapshot = json.dumps(job.to_dict(), sort_keys=True, ensure_ascii=False)
+                if snapshot != self._bridge_saved.get(key):
+                    self.bridge_store.save_job(job)
+                    self._bridge_saved[key] = json.dumps(job.to_dict(), sort_keys=True, ensure_ascii=False)
         data = {
             "stock_sources": {k: v.to_dict() for k, v in self.stock_sources.items()},
             "active_sources": self.active_sources,
             "models": [m.to_dict() for m in self.models],
             "xref": self.xref.to_dict(),
             "ledger": self.ledger.to_dict(),
-            "jobs": [j.to_dict() for j in self.jobs],
+            "jobs": [j.to_dict() for j in self.jobs if not j.bridge],
             "raw_uses": [r.__dict__ for r in self.raw_uses],
             "flats": self.flats.to_dict(),
             "cut_queue": self.cut_queue.to_dict(),
             "catalog": self.catalog.to_dict(),
         }
-        (self.data_dir() / "library.json").write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        target = self.data_dir() / "library.json"
+        temporary = self.data_dir() / "library.json.tmp"
+        with temporary.open("w", encoding="utf-8") as handle:
+            handle.write(json.dumps(data, ensure_ascii=False))
+            handle.flush()
+            os.fsync(handle.fileno())
+        temporary.replace(target)
 
     def _merge_stock(self) -> None:
         items: list[StockItem] = []
@@ -295,6 +341,10 @@ class AppState(QObject):
 
     def post_doc(self, doc: StockDoc) -> list[str]:
         """Save a stock document: balances change and the movements are recorded."""
+        job_numbers = set(doc.job.split(", ")) | {doc.job}
+        if any(j.bridge and j.job_no in job_numbers for j in self.jobs):
+            raise ValueError("งานจาก Sale Office ยังไม่รองรับการลงบัญชีสต็อกข้ามระบบในช่วง 2 "
+                             "— เก็บเป็นร่างและให้สโตร์ตรวจ")
         new_items = self.stock_sources.setdefault(MOVED_SOURCE, StockList(source=MOVED_SOURCE))
         if doc not in self.ledger.docs:
             if not doc.doc_no:
@@ -314,9 +364,18 @@ class AppState(QObject):
         self.rebuild_stock()
         self.ledger_changed.emit()
 
-    def save_jobs(self) -> None:
-        self.save_library()
+    def save_jobs(self) -> bool:
+        try:
+            self.save_library()
+        except Exception:
+            self._bridge_saved = {}
+            self.refresh_bridge_jobs()
+            self.persistence_error.emit("บันทึกงานไม่สำเร็จ ข้อมูลอาจเปลี่ยนจาก Sale Office แล้ว "
+                                        "กรุณาตรวจข้อมูลล่าสุดและทำรายการอีกครั้ง")
+            return False
         self.jobs_changed.emit()
+        self.bridge_changed.emit()
+        return True
 
     def save_laser(self) -> None:
         self.save_library()

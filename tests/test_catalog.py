@@ -142,7 +142,7 @@ def test_tickets_labels_and_qr():
     tickets = catalog.job_tickets(job, None, cat, None, lib, queue.programs)
     assert [t.code for t in tickets] == ["RRS-T-001", "RRS-T-003", "RRS-T-004", "RRS-T-005"]
     t = tickets[0]
-    assert t.no == "SO6910-015/01" and t.qty == 48 and t.due == "30/10/2569" and t.material == "Steel t3"
+    assert t.no == "SO6910-015/01" and t.qty == 48 and t.due == "30/10/2569" and (t.material, t.thickness) == ("Steel", 3)
     assert t.to == "เก็บที่ P-FU-01 · กลุ่มเฟรมบน" and t.outline and t.program.startswith("LC")
     assert t.route == [("ตัด", 0, 48), ("พับ", 0, 48)] and "พื้นที่สุทธิ" not in t.remark
     scan = qr.parse_payload(t.payload)
@@ -150,7 +150,7 @@ def test_tickets_labels_and_qr():
     # the form: DWG code, Express code, 2D of the drawing with its size, vehicle, body model; the Part List
     # details (material, size) in the QR after the six fields the program reads
     assert (t.drawing_code, t.express_code, t.express_note) == ("RRS-T-001", "", "")  # no stock file given
-    assert t.size == "150 × 60 มม. · หนา 3 มม." and t.vehicle == "Toyota" and t.body == "คอกสูง 3 ราว"
+    assert t.size == "150 × 60 มม." and t.vehicle == "Toyota" and t.body == "คอกสูง 3 ราว"
     assert scan.details == ["RRS-T-001", "", "Steel t3", "150x60", "เฟรมบน"]
     stock = StockList(items=[StockItem(code="RRS-A-001-250", name="เฟรมบน 250", on_hand=1)])
     job.brand, job.vehicle = "T", "REVO"
@@ -162,8 +162,12 @@ def test_tickets_labels_and_qr():
     from partlist_studio.ui.printing import TICKET_ROWS, ticket_rows
 
     rows = ticket_rows(t3)
-    assert [label for label, _v in rows][:6] == TICKET_ROWS and rows[1][1] == "ยังไม่มีในสต็อก"
-    assert dict(rows)["ขนาด"] == "100 × 80 มม. · หนา 4 มม." and dict(rows)["วัสดุ"].startswith("SS400 t4")
+    assert [label for label, _v in rows][:7] == TICKET_ROWS and rows[1][1] == "ยังไม่มีในสต็อก"
+    # M = วัสดุ, then t = ความหนาเหล็ก (มม.) on the next line; the size line has no thickness
+    labels = [label for label, _v in rows]
+    assert labels.index("t = ความหนาเหล็ก") == labels.index("M = วัสดุ") + 1
+    assert dict(rows)["ขนาด"] == "100 × 80 มม." and dict(rows)["M = วัสดุ"].startswith("SS400")
+    assert "t4" not in dict(rows)["M = วัสดุ"] and dict(rows)["t = ความหนาเหล็ก"] == "4 มม."
     matrix = qr.qr_matrix(t.payload)
     assert len(matrix) >= 21 and all(len(row) == len(matrix) for row in matrix)
 
@@ -187,6 +191,7 @@ def test_job_keeps_the_dwg_code_next_to_the_stock_code():
     again = production.Job.from_dict(job.to_dict())
     assert again.body == "กระบะดั้มพ์คอกสูง 3 ราว" and again.parts[0].drawing_code == "RRS-T-039"
     t, t2 = catalog.job_tickets(again)
-    assert (t.drawing_code, t.express_code, t.material, t.size) == ("RRS-T-039", "RRS-A-039-NO1-PR", "SS400 t5", "t5")
+    assert (t.drawing_code, t.express_code, t.material, t.thickness, t.size) == ("RRS-T-039", "RRS-A-039-NO1-PR",
+                                                                       "SS400", 5, "t5")
     assert (t.vehicle, t.body) == ("Toyota", "กระบะดั้มพ์คอกสูง 3 ราว")
     assert (t2.drawing_code, t2.express_code) == ("RRS-T-024", "RRS-T-024-L-84")

@@ -194,14 +194,17 @@ def _checkbox(p: QPainter, rect: QRectF, done: bool, pen_w: float) -> None:
     p.restore()
 
 
-TICKET_ROWS = ["รหัสตามแบบ DWG", "รหัส Express", "ยี่ห้อ / รุ่นรถ", "รุ่นกระบะ", "ขนาด", "วัสดุ"]
+TICKET_ROWS = ["รหัสตามแบบ DWG", "รหัส Express", "ยี่ห้อ / รุ่นรถ", "รุ่นกระบะ", "ขนาด", "M = วัสดุ",
+               "t = ความหนาเหล็ก"]
 
 
 def ticket_rows(t: Ticket) -> list[tuple[str, str]]:
-    """The labelled lines of a ticket (the remark only when there is one)."""
+    """The labelled lines of a ticket (the remark only when there is one): M = วัสดุ, then t = ความหนา (มม.)."""
     express = t.express_code + (f" ({t.express_note})" if t.express_code and t.express_note else "")
     material = " · ".join(x for x in (t.material, t.program) if x)
-    rows = list(zip(TICKET_ROWS, [t.drawing_code, express or t.express_note, t.vehicle, t.body, t.size, material]))
+    thickness = f"{t.thickness:g} มม." if t.thickness else ""
+    rows = list(zip(TICKET_ROWS, [t.drawing_code, express or t.express_note, t.vehicle, t.body, t.size, material,
+                                  thickness]))
     rows = [(label, value or "–") for label, value in rows]
     if t.remark:
         rows.append(("หมายเหตุ", t.remark))
@@ -239,13 +242,13 @@ def _paint_ticket(p: QPainter, mm: _Mm, t: Ticket, printed: str) -> None:
     if t.to:
         _text(p, mm(59, 34.3, 49, 6), "→ " + t.to, 9, True, color=QColor(theme.NAVY), fit=True)
     rows = ticket_rows(t)
-    step = 36.0 / max(6, len(rows))
+    step = 36.0 / max(7, len(rows))
     for n, (label, value) in enumerate(rows):
         y = 41.5 + n * step
         if n:
             p.setPen(QPen(LINE, mm.v(0.15)))
             p.drawLine(QPointF(mm.v(59), mm.v(y)), QPointF(mm.v(144), mm.v(y)))
-        _text(p, mm(59, y, 23, step), label, 6.5, color=MUTED)
+        _text(p, mm(59, y, 23, step), label, 6.5, color=MUTED, fit=True, min_pt=5)
         _text(p, mm(82, y, 62, step), value, 9 if n < 2 else 8.5, n < 2, fit=True, min_pt=5.5)
 
     steps = t.route or [("เสร็จ", 0, t.qty)]

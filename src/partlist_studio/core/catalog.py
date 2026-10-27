@@ -414,7 +414,8 @@ class Ticket:
     name: str
     qty: float
     unit: str = "ชิ้น"
-    material: str = ""  # 'SS400 t3'
+    material: str = ""  # M = วัสดุ: 'SS400'
+    thickness: float = 0  # t = ความหนาเหล็ก (มม.)
     program: str = ""  # laser programs with this part: 'LC6910-0003 ตัดแล้ว'
     route: list = field(default_factory=list)  # [(step, done, need)]
     to: str = ""  # where it goes when finished
@@ -427,7 +428,7 @@ class Ticket:
     express_note: str = ""  # 'ยังไม่มีในสต็อก'
     vehicle: str = ""  # ยี่ห้อ / รุ่นรถ: 'Toyota · REVO'
     body: str = ""  # รุ่นกระบะที่ผลิต: 'กระบะดั้มพ์คอกสูง 3 ราว'
-    size: str = ""  # '150 × 60 มม. · หนา 3 มม.'
+    size: str = ""  # '150 × 60 มม.'
     drawing: str = ""  # where the 2D comes from: 'RRS-T-SET Rev.B'
     bends: list = field(default_factory=list)  # bend lines of the 2D
 
@@ -468,8 +469,8 @@ def job_tickets(job, indexes: list[int] | None = None, catalog: Catalog | None =
         drawing_code = p.drawing_code or (flat.code if flat else "") or ("" if item else p.code)
         express, note = _express_code(p, item, matches.get(i), stock)
         thickness = (flat.thickness if flat else 0) or p.thickness
-        material = " ".join(x for x in ((flat.material if flat else "") or p.material,
-                                        f"t{thickness:g}" if thickness else "") if x)
+        material = (flat.material if flat else "") or p.material
+        material_qr = " ".join(x for x in (material, f"t{thickness:g}" if thickness else "") if x)  # 'SS400 t3'
         size, size_qr = _part_size(flat, p.spec)
         key = job_key(job.job_no, i)
         progs = [f"{prog.no} {prog.status}" for prog in (programs or []) if key in prog.items]
@@ -483,10 +484,10 @@ def job_tickets(job, indexes: list[int] | None = None, catalog: Catalog | None =
                                            f"Rev.{flat.revision}" if flat.revision else "") if x)
         out.append(Ticket(
             no=f"{job.job_no}/{i + 1:02d}",
-            payload=ticket_payload(job.job_no, i + 1, p.code, p.to_make, drawing_code, express, material, size_qr,
-                                   p.name),
+            payload=ticket_payload(job.job_no, i + 1, p.code, p.to_make, drawing_code, express, material_qr,
+                                   size_qr, p.name),
             job_no=job.job_no, job_text=job_text, code=p.code, name=p.name, qty=p.to_make, unit=p.unit or "ชิ้น",
-            material=material, program=", ".join(progs),
+            material=material, thickness=thickness, program=", ".join(progs),
             route=[(s, min(p.done_at(s), p.to_make), p.to_make) for s in p.route], to=to,
             due=_thai_date(job.due) if job.due else "", image=image,
             outline=flat.outline if flat else [], remark=_ticket_remark(p.remark),
@@ -533,11 +534,11 @@ def _mm(v: float) -> str:
 
 
 def _part_size(flat, spec: str) -> tuple[str, str]:
-    """('150 × 60 มม. · หนา 3 มม.', '150x60') from the 2D of the drawing, else the spec of the Part List."""
+    """('150 × 60 มม.', '150x60') from the 2D of the drawing, else the spec of the Part List (the thickness has a
+    line of its own on the ticket)."""
     if flat is not None and flat.outline:
         w, h = flat.size
-        text = f"{_mm(w)} × {_mm(h)} มม." + (f" · หนา {flat.thickness:g} มม." if flat.thickness else "")
-        return text, f"{_mm(w)}x{_mm(h)}"
+        return f"{_mm(w)} × {_mm(h)} มม.", f"{_mm(w)}x{_mm(h)}"
     return spec, spec
 
 

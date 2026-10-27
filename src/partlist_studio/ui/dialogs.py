@@ -410,10 +410,10 @@ class DrawingImportDialog(QDialog):
         self.check_all.clicked.connect(self._check_all_clicked)
         bar.addWidget(self.check_all)
         self.tick_btn = button("ติ๊กแถวที่เลือก", tooltip="ติ๊กเพิ่มทุกแถวที่เลือกไว้ (คลิก/Shift/Ctrl เลือกหลายแถว)")
-        self.tick_btn.clicked.connect(lambda: self._tick_rows(self._rows(all_if_none=False), True))
+        self.tick_btn.clicked.connect(self._tick_selected)
         bar.addWidget(self.tick_btn)
         self.untick_btn = button("เอาออกแถวที่เลือก", tooltip="เอาติ๊กออกจากทุกแถวที่เลือกไว้ – แถวนั้นจะไม่ถูกเพิ่ม")
-        self.untick_btn.clicked.connect(lambda: self._tick_rows(self._rows(all_if_none=False), False))
+        self.untick_btn.clicked.connect(self._untick_selected)
         bar.addWidget(self.untick_btn)
         self.invert_btn = button("สลับติ๊ก", tooltip="แถวที่ติ๊กอยู่เอาออก แถวที่ไม่ได้ติ๊กติ๊กเพิ่ม (แถวที่เลือก หรือทั้งแบบถ้าไม่ได้เลือก)")
         self.invert_btn.clicked.connect(self._invert_ticks)
@@ -440,6 +440,12 @@ class DrawingImportDialog(QDialog):
         self._store_table()
         self._refresh_preview()
 
+    def _tick_selected(self, *_args) -> None:
+        self._tick_rows(self._rows(all_if_none=False), True)
+
+    def _untick_selected(self, *_args) -> None:
+        self._tick_rows(self._rows(all_if_none=False), False)
+
     def _all_ticked(self) -> bool:
         rows = self.table.rowCount()
         return bool(rows) and all(self.table.item(r, 0).checkState() == Qt.Checked for r in range(rows))
@@ -451,7 +457,7 @@ class DrawingImportDialog(QDialog):
         if section == 0:
             self._check_all_clicked()
 
-    def _invert_ticks(self) -> None:
+    def _invert_ticks(self, *_args) -> None:
         if self._current < 0:
             return
         self._loading = True

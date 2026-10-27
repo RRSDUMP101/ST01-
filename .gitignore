@@ -11,3 +11,9 @@ dist/
 google_token.json
 *credentials*.json
 packaging/third_party/
+
+# Private office bridge queues and service credentials
+sale_bridge.sqlite3*
+.env
+.env.*
+!.env.example

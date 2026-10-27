@@ -424,6 +424,10 @@ def demand_from_jobs(jobs, library: FlatLibrary, programs: list[CutProgram] | No
     planned = planned_pieces(programs or [])
     out = Demand(source="งาน " + ", ".join(job_nos) if job_nos else "งานผลิตที่ยังตัดไม่ครบ")
     for job in jobs:
+        if job.bridge:
+            from .sale_bridge import job_work_blockers
+            if job_work_blockers(job):
+                continue
         if job.status in CLOSED or (job_nos and job.job_no not in job_nos):
             continue
         for i, p in enumerate(job.parts):
@@ -764,8 +768,17 @@ def apply_cut(prog: CutProgram, sheets: int, jobs, ledger: Ledger | None = None,
     n = max(0, min(int(sheets), prog.repeat - prog.cut_sheets))
     if n <= 0:
         return 0, None
-    recorded = 0.0
     by_no = {j.job_no: j for j in jobs}
+    # Preflight every linked job before changing any part or the cut program.
+    from .sale_bridge import job_work_blockers
+    for key in prog.counts():
+        ref = parse_job_key(key)
+        job = by_no.get(ref[0]) if ref else None
+        if job and job.bridge:
+            blockers = job_work_blockers(job)
+            raise ValueError(" · ".join(blockers) if blockers else
+                             "งานจาก Sale Office ยังไม่รองรับลงผลตัดเลเซอร์ข้ามระบบ — รอตัวเชื่อมบัญชีผลิตแบบ transaction")
+    recorded = 0.0
     for key, count in prog.counts().items():
         ref = parse_job_key(key)
         if ref is None:

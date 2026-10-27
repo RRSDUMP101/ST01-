@@ -175,6 +175,7 @@ class Job:
     log: list[LogEntry] = field(default_factory=list)
     docs: list[str] = field(default_factory=list)  # document numbers made for the job
     remark: str = ""
+    bridge: dict = field(default_factory=dict)  # isolated Sale Office identity/gate; empty for legacy jobs
 
     @property
     def progress(self) -> float:
@@ -196,6 +197,11 @@ class Job:
         return bool(self.due) and self.status not in CLOSED | {JOB_DONE} and self.due < date.today().isoformat()
 
     def record(self, part: JobPart, step: str, qty: float, note: str = "") -> float:
+        if self.bridge:
+            from .sale_bridge import job_work_blockers
+            blockers = job_work_blockers(self)
+            if blockers:
+                raise ValueError(" · ".join(blockers))
         taken = part.record(step, qty)
         if taken:
             self.log.append(LogEntry(datetime.now().isoformat(timespec="minutes"), part.code, part.name, step,
@@ -322,6 +328,11 @@ def job_documents(job: Job, stock: StockList, ledger: Ledger, raw_uses: list[Raw
     """Draft documents for a job (not saved yet):
     PD วัตถุดิบ for the parts to make (from raw_uses with a quantity),
     PD ชิ้นส่วน: all parts of the beds to assembly, FR: finished pieces not yet received."""
+    if job.bridge:
+        from .sale_bridge import job_work_blockers
+        blockers = job_work_blockers(job)
+        if blockers:
+            raise ValueError(" · ".join(blockers))
     docs = []
     remark = " ".join(x for x in (job.model, job.variant, f"{job.sets:g} คัน") if x)
     uses = {}
@@ -355,6 +366,11 @@ def job_documents(job: Job, stock: StockList, ledger: Ledger, raw_uses: list[Raw
 
 def mark_document(job: Job, doc: StockDoc) -> None:
     """After a job document is saved: remember what was issued / received."""
+    if job.bridge:
+        from .sale_bridge import job_work_blockers
+        blockers = job_work_blockers(job)
+        if blockers:
+            raise ValueError(" · ".join(blockers))
     qty = {}
     for line in doc.lines:
         qty[_key(line.code) or "#" + line.name] = qty.get(_key(line.code) or "#" + line.name, 0) + line.qty

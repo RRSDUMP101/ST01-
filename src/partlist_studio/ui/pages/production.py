@@ -16,6 +16,7 @@ from ...core.catalog import (KIT_HEADERS, READINESS_HEADERS, export_kitting, job
 from ...core.production import (DONE, FROM_STOCK, JOB_CANCELLED, JOB_STATUSES, STEPS, LogEntry, export_status,
                                 job_documents, job_from_parts, wip_from_stock)
 from ...core.qr import parse_payload
+from ...core.sale_bridge import job_work_blockers
 from ..state import AppState
 from ..widgets import BarDelegate, PageHeader, StatusChipRow, button, fill, selected_rows, table
 
@@ -77,6 +78,10 @@ class ProductionPage(QWidget):
         self.caption.setObjectName("CardTitle")
         self.caption.setWordWrap(True)
         rl.addWidget(self.caption)
+        self.bridge_gate = QLabel()
+        self.bridge_gate.setWordWrap(True)
+        self.bridge_gate.setObjectName("Hint")
+        rl.addWidget(self.bridge_gate)
         grid = QGridLayout()
         self.customer = QLineEdit()
         self.customer.editingFinished.connect(self._info_edited)
@@ -90,7 +95,8 @@ class ProductionPage(QWidget):
         self.progress = QProgressBar()
         self.progress.setFormat("%p% เสร็จ")
         self.sets = QDoubleSpinBox()
-        self.sets.setRange(1, 9999)
+        self.sets.setRange(0, 9999)
+        self.sets.setSpecialValueText("รอยืนยันจำนวน")
         self.sets.setDecimals(0)
         self.sets.setSuffix(" คัน")
         self.sets.setKeyboardTracking(False)
@@ -107,6 +113,7 @@ class ProductionPage(QWidget):
         rl.addLayout(self.chips)
 
         tools = QHBoxLayout()
+        self.work_buttons = []
         for text, slot, tip, kind in (
                 ("ผ่านขั้นถัดไป ▶", self.advance, "แถวที่เลือก: ชิ้นที่รออยู่ขั้นแรกผ่านขั้นนั้นทั้งหมด", ""),
                 ("เสร็จทั้งหมด ✓", self.finish, "แถวที่เลือก: ผ่านทุกขั้น", ""),
@@ -120,6 +127,8 @@ class ProductionPage(QWidget):
                  "accent")):
             b = button(text, kind, tip) if kind else button(text, tooltip=tip)
             b.clicked.connect(slot)
+            if slot != self.print_tickets:
+                self.work_buttons.append(b)
             tools.addWidget(b)
             if slot == self.print_tickets:
                 tools.addWidget(self._ticket_layout_box())
@@ -182,7 +191,16 @@ class ProductionPage(QWidget):
             self.parts.setRowCount(0)
             self.log.setRowCount(0)
             self._show_readiness()
+            self.bridge_gate.clear()
             return
+        linked = bool(job.bridge)
+        blockers = job_work_blockers(job) if linked else []
+        self.bridge_gate.setText(("เชื่อม Sale Office · " + ("รอ: " + " · ".join(blockers) if blockers
+                                  else "ผ่านเงื่อนไขเริ่มผลิตตามข้อมูลล่าสุด")) if linked else "")
+        for widget in (self.customer, self.due, self.status, self.sets):
+            widget.setEnabled(not linked)
+        for widget in self.work_buttons:
+            widget.setEnabled(not blockers)
         self.caption.setText(f"{job.job_no} · {job.title or job.model}" + (f" · {job.variant}" if job.variant else "")
                              + f" · {job.sets:g} คัน" + (f" · เอกสาร {', '.join(job.docs)}" if job.docs else ""))
         for w, v in ((self.customer, job.customer),):
@@ -215,7 +233,7 @@ class ProductionPage(QWidget):
             for c in range(self.parts.columnCount()):
                 item = self.parts.item(r, c)
                 step = STEPS[c - STEP_COL0] if STEP_COL0 <= c < STEP_COL0 + len(STEPS) else ""
-                editable = bool(step) and step in p.route and p.to_make > 0
+                editable = bool(step) and step in p.route and p.to_make > 0 and not blockers
                 item.setFlags(item.flags() | Qt.ItemIsEditable if editable else item.flags() & ~Qt.ItemIsEditable)
                 if editable:
                     item.setBackground(QBrush(QColor("#FFF8E1")))
@@ -280,7 +298,7 @@ class ProductionPage(QWidget):
     # ---------------------------------------------------------------------
     def _info_edited(self) -> None:
         job = self._job()
-        if job is None:
+        if job is None or job.bridge:
             return
         job.customer = self.customer.text().strip()
         job.due = self.due.date().toString("yyyy-MM-dd")
@@ -289,10 +307,14 @@ class ProductionPage(QWidget):
 
     def _sets_edited(self, value: float) -> None:
         job = self._job()
-        if job is None or value == job.sets:
+        if job is None or job.bridge or value == job.sets:
+            return
+        if value < 1:
+            self._show()
             return
         old = job.set_sets(value)
-        self.state.save_jobs()
+        if not self.state.save_jobs():
+            return
         self.state.notify(f"{job.job_no}: จำนวนคัน {old:g} → {job.sets:g} · ทุกชิ้นคิดจำนวนใหม่แล้ว "
                           "(ชิ้นที่ทำไปแล้วยังนับอยู่)")
 
@@ -300,6 +322,9 @@ class ProductionPage(QWidget):
         job = self._job()
         c = item.column()
         if job is None or not STEP_COL0 <= c < STEP_COL0 + len(STEPS):
+            return
+        if not self._work_allowed(job):
+            self._show()
             return
         part, step = job.parts[item.row()], STEPS[c - STEP_COL0]
         try:
@@ -320,10 +345,18 @@ class ProductionPage(QWidget):
 
     def _selected_parts(self):
         job = self._job()
-        if job is None:
+        if job is None or not self._work_allowed(job):
             return None, []
         rows = selected_rows(self.parts)
         return job, [job.parts[r] for r in rows]
+
+    def _work_allowed(self, job) -> bool:
+        blockers = job_work_blockers(job) if job.bridge else []
+        if blockers:
+            self.actions.error("ยังเริ่มงานไม่ได้", " · ".join(blockers)
+                               + "\nตรวจสถานะในหน้า Sale Office → งานผลิต")
+            return False
+        return True
 
     def advance(self) -> None:
         job, parts = self._selected_parts()
@@ -335,7 +368,8 @@ class ProductionPage(QWidget):
             if waiting:
                 step, qty = next(iter(waiting.items()))
                 n += bool(job.record(p, step, qty))
-        self.state.save_jobs()
+        if not self.state.save_jobs():
+            return
         self.state.notify(f"ผ่านขั้นถัดไป {n} รายการ")
 
     def finish(self) -> None:
@@ -344,7 +378,8 @@ class ProductionPage(QWidget):
             return
         for p in parts:
             job.record(p, DONE, 0, "เสร็จทั้งหมด")
-        self.state.save_jobs()
+        if not self.state.save_jobs():
+            return
         unreceived = job.unreceived()
         self.state.notify(f"เสร็จ {len(parts)} รายการ" + (f" · รอรับเข้าสต็อก {len(unreceived)} รายการ (สร้างใบ FR)"
                                                           if unreceived else ""))
@@ -373,12 +408,16 @@ class ProductionPage(QWidget):
         if not dialog.exec():
             return
         taken = sum(job.record(p, step.currentText(), qty.value(), note.text()) for p in parts if step.currentText() in p.route)
-        self.state.save_jobs()
+        if not self.state.save_jobs():
+            return
         self.state.notify(f"บันทึก {step.currentText()} {taken:g} ชิ้น")
 
     def edit_route(self) -> None:
         job, parts = self._selected_parts()
         if not parts:
+            return
+        if job.bridge:
+            self.actions.error("แบบที่เชื่อมกับ SO", "เปลี่ยนขั้นตอนผ่าน Part List และส่งตรวจ Revision ใหม่ในหน้าเชื่อม Sale Office")
             return
         current = " → ".join(parts[0].route)
         text, ok = QInputDialog.getText(self, "ขั้นตอนการผลิต",
@@ -393,7 +432,7 @@ class ProductionPage(QWidget):
 
     def make_documents(self) -> None:
         job = self._job()
-        if job is None:
+        if job is None or not self._work_allowed(job):
             return
         docs = job_documents(job, self.state.stock, self.state.ledger, self.state.raw_uses)
         if not docs:
@@ -403,7 +442,8 @@ class ProductionPage(QWidget):
             doc.doc_no = self.state.ledger.next_no(doc.doc_type, doc.date)
             self.state.ledger.docs.append(doc)
             job.docs.append(doc.doc_no)
-        self.state.save_jobs()
+        if not self.state.save_jobs():
+            return
         self.state.ledger_changed.emit()
         raw = any(d.remark.startswith("วัตถุดิบ") for d in docs)
         self.state.notify(f"ร่างเอกสาร {', '.join(d.doc_no for d in docs)} – ตรวจแล้วกด บันทึก ในหน้า เบิก/รับ สต็อก"
@@ -436,6 +476,9 @@ class ProductionPage(QWidget):
 
     def remove_job(self) -> None:
         job = self._job()
+        if job and job.bridge:
+            self.actions.error("เก็บประวัติ SO", "งานที่เชื่อม Sale Office ลบจากหน้านี้ไม่ได้ กรุณายกเลิกจาก SO ต้นทาง")
+            return
         if job and QMessageBox.question(self, "ลบงาน", f"ลบงาน {job.job_no}? (เอกสารที่บันทึกแล้วยังอยู่)") == QMessageBox.Yes:
             self.state.jobs.remove(job)
             self.state.save_jobs()

@@ -21,7 +21,7 @@ from ..core.mapping import auto_map
 from ..core.partlist_io import TableImport
 from . import theme
 from .table_models import ComboDelegate
-from .widgets import DrawingPreview, button
+from .widgets import DrawingPreview, button, fit_to_screen
 
 NOT_USED = "— ไม่ใช้ —"
 
@@ -33,7 +33,7 @@ class ColumnMappingDialog(QDialog):
         super().__init__(parent)
         self.table = table
         self.setWindowTitle(f"จับคู่คอลัมน์ – {source_name}")
-        self.resize(1000, 560)
+        fit_to_screen(self, 1000, 560)
         lay = QVBoxLayout(self)
         hint = QLabel("ตรวจสอบว่าแต่ละคอลัมน์ในไฟล์ตรงกับช่องใดใน Part List "
                       "(ระบบจับคู่ให้อัตโนมัติจากชื่อหัวตาราง ZWCAD / Excel / Google Sheet)")
@@ -168,7 +168,7 @@ class DrawingImportDialog(QDialog):
                                      thickness_mode=thickness_mode) for i, d in enumerate(drawings)}
         self._manual: set[int] = set()  # id() of candidates whose thickness was set row by row
         self.setWindowTitle("นำเข้าแบบ 2D จาก ZWCAD (DWG/DXF)")
-        self.resize(1320, 800)
+        fit_to_screen(self, 1320, 800)
 
         lay = QVBoxLayout(self)
         split = QSplitter(Qt.Horizontal)
@@ -215,7 +215,14 @@ class DrawingImportDialog(QDialog):
         info_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         top.addWidget(info_scroll)
         top.setSizes([700, 340])
-        rlay.addWidget(top, 3)
+        # the drawing and the rows to add share the height: drag the line between them (small screens: more rows)
+        vsplit = QSplitter(Qt.Vertical)
+        vsplit.setChildrenCollapsible(False)
+        vsplit.addWidget(top)
+        lower = QWidget()
+        rlay_top = rlay
+        rlay = QVBoxLayout(lower)
+        rlay.setContentsMargins(0, 4, 0, 0)
 
         # ---- thickness: as drawn, a default for parts without one, or one value for every part
         thk = QHBoxLayout()
@@ -305,7 +312,12 @@ class DrawingImportDialog(QDialog):
         self.attr_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.tabs.addTab(self.attr_table, "Attribute ใน Title Block")
         self.tabs.addTab(self._build_check_tab(), "ตรวจแบบก่อนตัด")
-        rlay.addWidget(self.tabs, 2)
+        rlay.addWidget(self.tabs, 1)
+        vsplit.addWidget(lower)
+        vsplit.setStretchFactor(0, 2)
+        vsplit.setStretchFactor(1, 3)
+        rlay = rlay_top
+        rlay.addWidget(vsplit, 1)
 
         opts = QHBoxLayout()
         self.update_info = QCheckBox("ใช้ข้อมูล Title Block เติมข้อมูลงาน (เลขที่แบบ, Rev., ลูกค้า, รุ่นรถ) ถ้ายังว่าง")

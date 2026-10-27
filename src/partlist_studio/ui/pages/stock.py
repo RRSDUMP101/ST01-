@@ -5,9 +5,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QSortFilterProxyModel, Qt
 from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QFileDialog, QHBoxLayout, QHeaderView, QLabel,
-                               QListWidget,
+                               QLineEdit, QListWidget,
                                QListWidgetItem, QMenu, QSplitter, QTableView, QTabWidget, QVBoxLayout,
                                QWidget)
 
@@ -20,7 +20,7 @@ from ...core.stock import (ST_LOW, ST_MISSING, ST_OK, ST_SHORT, StockList, apply
 from ..actions import TABLE_FILTER
 from ..state import AppState
 from ..table_models import RequirementModel, StockTableModel
-from ..widgets import PageHeader, StatusChipRow, button, fill, selected_rows, table
+from ..widgets import PageHeader, StatusChipRow, button, empty_hint, fill, selected_rows, table
 from .parts_ready import PartsReadyTab
 from .replenish import ReplenishTab
 from .steel import SteelTab
@@ -53,7 +53,7 @@ class StockPage(QWidget):
         b = header.add_action(button("นำเข้าไฟล์สต็อก", "primary",
                                      "Express (Excel/CSV/รายงาน .txt), ไฟล์นับสต๊อค .xls, แท็บสต๊อกเหล็ก/อะไหล่กระบะ"))
         b.clicked.connect(self.import_stock)
-        exp = header.add_action(button("ส่งออก ▾"))
+        exp = header.add_action(button("ส่งออก ▾", tooltip="ส่งสต็อกออกเป็น Excel/CSV (หัวตารางแบบ Express หรือไฟล์นับสต๊อค)"))
         menu = QMenu(exp)
         menu.addAction("สต็อก (Excel/CSV หัวตารางเดียวกับ Express)…", self._export_stock)
         menu.addAction("สต็อกรูปแบบไฟล์นับสต๊อค (STBALLL + Format Stock R1)…", self._export_count_format)
@@ -78,7 +78,7 @@ class StockPage(QWidget):
         self.sources.setObjectName("Plain")
         self.sources.itemChanged.connect(self._source_toggled)
         src_lay.addWidget(self.sources, 1)
-        rm = button("ลบแหล่งที่เลือก")
+        rm = button("ลบแหล่งที่เลือก", tooltip="เอาแหล่งข้อมูลที่เลือกออก (ไฟล์ต้นฉบับไม่ถูกลบ) – นำเข้าใหม่ได้ทุกเมื่อ")
         rm.clicked.connect(self._remove_source)
         src_lay.addWidget(rm)
         split.addWidget(src_box)
@@ -86,18 +86,36 @@ class StockPage(QWidget):
         tl = QVBoxLayout(table_box)
         tl.setContentsMargins(0, 0, 0, 0)
         row = QHBoxLayout()
-        self.source_label = QLabel()
-        self.source_label.setObjectName("Hint")
-        self.source_label.setWordWrap(True)
-        row.addWidget(self.source_label, 1)
-        for text, slot in (("+ เพิ่มรายการ", self._add_item), ("ลบที่เลือก", self._remove_items)):
-            b = button(text)
+        self.stock_search = QLineEdit()
+        self.stock_search.setPlaceholderText("ค้นหา รหัส / ชื่อสินค้า / วัสดุ / ขนาด …")
+        self.stock_search.setClearButtonEnabled(True)
+        self.stock_search.setToolTip("พิมพ์บางส่วนของรหัสหรือชื่อ เช่น 01-B00, 3 มม., หูช้าง (Ctrl+F)")
+        self.stock_search.textChanged.connect(self._filter_stock)
+        row.addWidget(self.stock_search, 2)
+        for text, slot, tip in (("+ เพิ่มรายการ", self._add_item, "เพิ่มรายการสต็อกเอง (แหล่ง: เพิ่มเอง) แล้วพิมพ์ในตาราง"),
+                                ("ลบที่เลือก", self._remove_items, "ลบรายการที่เลือกออกจากสต็อกในโปรแกรม")):
+            b = button(text, tooltip=tip)
             b.clicked.connect(slot)
             row.addWidget(b)
         tl.addLayout(row)
+        self.source_label = QLabel()
+        self.source_label.setObjectName("Hint")
+        self.source_label.setWordWrap(True)
+        tl.addWidget(self.source_label)
         self.stock_model = StockTableModel(state.stock, self)
         self.stock_model.dataChanged.connect(self._stock_edited)
-        self.stock_view = _table(self.stock_model)
+        # search and sort (click a column head) without changing the order of the stock itself
+        self.stock_proxy = QSortFilterProxyModel(self)
+        self.stock_proxy.setSourceModel(self.stock_model)
+        self.stock_proxy.setFilterKeyColumn(-1)
+        self.stock_proxy.setFilterCaseSensitivity(Qt.CaseInsensitive)
+        self.stock_proxy.setSortRole(Qt.EditRole)  # numbers sort as numbers
+        self.stock_view = _table(self.stock_proxy)
+        self.stock_view.horizontalHeader().setSortIndicator(-1, Qt.AscendingOrder)  # the order of the files …
+        self.stock_view.setSortingEnabled(True)  # … until a column head is clicked
+        self.stock_view.horizontalHeader().setSortIndicatorClearable(True)
+        empty_hint(self.stock_view, lambda: "ไม่พบรายการที่ตรงกับการค้นหา / ตัวกรอง – ล้างช่องค้นหาเพื่อดูทั้งหมด" if self.state.stock.items else
+                   "ยังไม่มีสต็อก – กด นำเข้าไฟล์สต็อก (Express Excel/CSV/รายงาน, ไฟล์นับสต๊อค, สต็อกเหล็ก)")
         for i, w in enumerate([130, 230, 50, 70, 90, 80, 50, 80, 90, 50, 50, 50, 60]):
             self.stock_view.setColumnWidth(i, w)
         tl.addWidget(self.stock_view, 1)
@@ -117,7 +135,7 @@ class StockPage(QWidget):
         edit_build = button("แก้ที่หน้าภาพรวม ›", tooltip="จำนวนคันของ Part List แก้ได้ที่หน้าภาพรวมที่เดียว · งานที่เปิดแล้วแก้ที่หน้างานผลิต")
         edit_build.clicked.connect(lambda: self.actions.go("dashboard"))
         row.addWidget(edit_build)
-        run = button("ตรวจวัตถุดิบเทียบสต็อก", "accent")
+        run = button("ตรวจวัตถุดิบเทียบสต็อก", "accent", "เทียบสิ่งที่ Part List × จำนวนคันต้องใช้ กับยอดคงเหลือในสต็อก")
         run.clicked.connect(self.run_check)
         row.addWidget(run)
         self.chips = StatusChipRow([ST_SHORT, ST_MISSING, ST_LOW, ST_OK], hide_zero=True)
@@ -126,6 +144,7 @@ class StockPage(QWidget):
         cl.addLayout(row)
         self.req_model = RequirementModel(self)
         self.req_view = _table(self.req_model)
+        empty_hint(self.req_view, "กด ตรวจวัตถุดิบเทียบสต็อก – เทียบสิ่งที่ Part List × จำนวนคันต้องใช้กับยอดคงเหลือ")
         for i, w in enumerate([140, 210, 55, 80, 80, 110, 60, 60, 100, 100, 75, 200, 160, 120]):
             self.req_view.setColumnWidth(i, w)
         self.check_tabs = QTabWidget()
@@ -170,21 +189,22 @@ class StockPage(QWidget):
         row = QHBoxLayout()
         hint = QLabel("น้ำหนักชิ้นงาน × จำนวน × คัน ใช้กับรายการสต็อกที่นับเป็น กก. · รายการอื่นนับจำนวนชิ้น")
         hint.setObjectName("Hint")
+        hint.setWordWrap(True)
         row.addWidget(hint, 1)
-        self.apply_btn = button("อัปเดตสถานะใน Part List")
+        self.apply_btn = button("อัปเดตสถานะใน Part List", tooltip="ใส่สถานะ พร้อม / ขาด / รอสั่งซื้อ ให้แต่ละแถวของ Part List")
         self.apply_btn.clicked.connect(self.apply_status)
-        self.export_btn = button("ส่งออกผลตรวจ (Excel)")
+        self.export_btn = button("ส่งออกผลตรวจ (Excel)", tooltip="ตารางผลตรวจวัตถุดิบเป็น Excel")
         self.export_btn.clicked.connect(lambda: self._export_req(False))
-        self.po_btn = button("ส่งออกใบขอซื้อ (ร่าง)", "primary")
+        self.po_btn = button("ส่งออกใบขอซื้อ (ร่าง)", "primary", "รายการที่ขาด/ต่ำกว่า Min พร้อมจำนวนแนะนำสั่งซื้อ")
         self.po_btn.clicked.connect(lambda: self._export_req(True))
-        self.steel_btn = button("ใบจ่ายเหล็ก (ลงแท็บสต๊อกเหล็ก)")
+        self.steel_btn = button("ใบจ่ายเหล็ก (ลงแท็บสต๊อกเหล็ก)", tooltip="เหล็กที่ต้องใช้ในรูปแบบแท็บสต๊อกเหล็กของไฟล์นับสต๊อค")
         self.steel_btn.clicked.connect(self._export_steel_issue)
         for b in (self.apply_btn, self.export_btn, self.steel_btn, self.po_btn):
             row.addWidget(b)
         cl.addLayout(row)
         self.tabs.addTab(check_tab, "ตรวจวัตถุดิบ / Parts")
         self.replenish = ReplenishTab(state, actions)
-        self.tabs.addTab(self.replenish, "Min / Max & เตือนสั่งซื้อ")
+        self.tabs.addTab(self.replenish, "Min / Max && เตือนสั่งซื้อ")  # && = one & (a single & underlines)
         self.ready = PartsReadyTab(state, actions)
         self.tabs.addTab(self.ready, "ชิ้นส่วนพร้อมประกอบ (แยกกลุ่ม)")
         self.steel = SteelTab(state, actions)
@@ -268,9 +288,7 @@ class StockPage(QWidget):
             item.setCheckState(Qt.Checked if name in self.state.active_sources else Qt.Unchecked)
             self.sources.addItem(item)
         self.sources.blockSignals(False)
-        self.source_label.setText(
-            f"{len(self.state.stock.items)} รายการจาก {len(self.state.active_sources)} แหล่ง "
-            "(รหัสซ้ำกันใช้แหล่งที่อยู่บนก่อน · ตัวเลขคงเหลือมาจากไฟล์ของสโตร์ ตรวจว่าเป็นรายงานล่าสุดก่อนใช้)")
+        self._count_stock()
 
     def _source_toggled(self, item: QListWidgetItem) -> None:
         self.state.set_source_active(item.data(Qt.UserRole), item.checkState() == Qt.Checked)
@@ -287,8 +305,19 @@ class StockPage(QWidget):
         self.state.add_manual_item()
 
     def _remove_items(self) -> None:
-        rows = {i.row() for i in self.stock_view.selectionModel().selectedRows()}
-        self.state.remove_items([self.state.stock.items[r] for r in rows])
+        rows = {self.stock_proxy.mapToSource(i).row() for i in self.stock_view.selectionModel().selectedRows()}
+        self.state.remove_items([self.state.stock.items[r] for r in sorted(rows) if r < len(self.state.stock.items)])
+
+    def _filter_stock(self, text: str = "") -> None:
+        self.stock_proxy.setFilterFixedString(self.stock_search.text().strip())
+        self._count_stock()
+
+    def _count_stock(self) -> None:
+        total, shown = len(self.state.stock.items), self.stock_proxy.rowCount()
+        found = f"พบ {shown} จาก {total} รายการ · " if self.stock_search.text().strip() else f"{total} รายการ · "
+        self.source_label.setText(
+            f"{found}จาก {len(self.state.active_sources)} แหล่ง (รหัสซ้ำกันใช้แหล่งที่อยู่บนก่อน · ตัวเลขคงเหลือมาจาก"
+            "ไฟล์ของสโตร์ ตรวจว่าเป็นรายงานล่าสุดก่อนใช้ · คลิกหัวคอลัมน์เพื่อเรียง · ดับเบิลคลิกเพื่อแก้)")
 
     def _export_stock(self) -> None:
         path = self.actions.save_path("ส่งออกสต็อก", "Stock.xlsx", "Excel (*.xlsx);;CSV (*.csv)")

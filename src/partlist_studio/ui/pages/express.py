@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import (QAbstractItemView, QFileDialog, QGridLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
                                QMessageBox, QScrollArea, QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout,
                                QWidget)
@@ -20,7 +21,7 @@ from ...core.tabular import read_table, write_table
 from ...core.xref import XREF_HEADERS, CodeXref, XrefEntry, suggest_links
 from .. import theme
 from ..state import AppState
-from ..widgets import Card, PageHeader, button, run_async
+from ..widgets import Card, PageHeader, button, empty_hint, run_async
 from ..work_dialogs import NewCodeDialog
 
 _COUNT_CODE = re.compile(r"^\d{2}-\d{4}-\d{4}$")
@@ -57,6 +58,7 @@ class ExpressPage(QWidget):
         body.setObjectName("Content")
         scroll.setWidget(body)
         outer.addWidget(scroll)
+        self.scroll = scroll
         lay = QVBoxLayout(body)
         lay.setContentsMargins(28, 24, 28, 16)
         lay.setSpacing(14)
@@ -135,10 +137,14 @@ class ExpressPage(QWidget):
 
         check = Card("4. ตรวจให้ข้อมูลตรงกัน")
         row = QHBoxLayout()
-        for text, slot in (("ตรวจรหัส Part List ↔ Express", self.check_codes),
-                           ("เทียบสต็อก Express ↔ Google Sheet", self.compare_with_sheet),
-                           ("ส่งสต็อก Express ขึ้น Google Sheet", self.push_to_sheet)):
-            b = button(text)
+        for text, slot, tip in (
+                ("ตรวจรหัส Part List ↔ Express", self.check_codes,
+                 "ทุกรหัสใน Part List มีใน Express หรือไม่ ชื่อตรงกันไหม – ผลแสดงในตารางด้านล่าง"),
+                ("เทียบสต็อก Express ↔ Google Sheet", self.compare_with_sheet,
+                 "ยอดคงเหลือใน Express กับแท็บสต็อกใน Google Sheet ตรงกันหรือไม่"),
+                ("ส่งสต็อก Express ขึ้น Google Sheet", self.push_to_sheet,
+                 "เขียนสต็อก Express ทับแท็บสต็อกใน Google Sheet")):
+            b = button(text, tooltip=tip)
             b.clicked.connect(slot)
             row.addWidget(b)
         row.addStretch(1)
@@ -148,7 +154,7 @@ class ExpressPage(QWidget):
                 ("ตรวจรูปแบบรหัส Express", self.audit_codes,
                  "รหัสซ้ำ, ตัวพิมพ์เล็ก, RRA, ข้าง/ขนาดในชื่อไม่ตรงรหัส, เลขชิ้นส่วนใช้กับคนละชิ้น, คู่ซ้าย/ขวาเขียนต่างกัน"),
                 ("ตั้งรหัสใหม่…", self.new_code, "สร้างรหัสตามกฎเดียวกับ Express และตรวจว่าไม่ซ้ำ"),
-                ("ส่งออกรายงานรหัส…", self.export_audit, "")):
+                ("ส่งออกรายงานรหัส…", self.export_audit, "ผลตรวจรูปแบบรหัสเป็น Excel")):
             b = button(text, tooltip=tip)
             b.clicked.connect(slot)
             row.addWidget(b)
@@ -156,6 +162,7 @@ class ExpressPage(QWidget):
         check.body.addLayout(row)
         self.tabs = QTabWidget()
         self.result = _table(["รหัส", "ชื่อ", "สถานะ", "รายละเอียด"])
+        empty_hint(self.result, "กดปุ่มตรวจด้านบน (ตรวจรหัส / เทียบสต็อก / ตรวจรูปแบบรหัส) – ผลจะแสดงที่นี่")
         for i, w in enumerate([160, 260, 150]):
             self.result.setColumnWidth(i, w)
         self.tabs.addTab(self.result, "ผลตรวจ")
@@ -168,9 +175,13 @@ class ExpressPage(QWidget):
         hint.setObjectName("Hint")
         hint.setWordWrap(True)
         row.addWidget(hint, 1)
-        for text, slot in (("สร้างจากชื่อสินค้า", self.suggest_xref), ("+ เพิ่ม", self.add_xref),
-                           ("ลบ", self.remove_xref), ("นำเข้า…", self.import_xref), ("ส่งออก…", self.export_xref)):
-            b = button(text)
+        for text, slot, tip in (
+                ("สร้างจากชื่อสินค้า", self.suggest_xref, "จับคู่รหัส Express กับรหัสในไฟล์อื่นจากชื่อสินค้าที่ตรงกัน"),
+                ("+ เพิ่ม", self.add_xref, "เพิ่มคู่รหัสเอง แล้วพิมพ์ในตาราง"),
+                ("ลบ", self.remove_xref, "ลบคู่รหัสที่เลือก"),
+                ("นำเข้า…", self.import_xref, "อ่านตารางเทียบรหัสจาก Excel/CSV (รวมกับที่มี)"),
+                ("ส่งออก…", self.export_xref, "ตารางเทียบรหัสเป็น Excel")):
+            b = button(text, tooltip=tip)
             b.clicked.connect(slot)
             row.addWidget(b)
         xl.addLayout(row)
@@ -397,6 +408,11 @@ class ExpressPage(QWidget):
                     item.setForeground(theme.status_color("พร้อม" if ok else "ขาด" if "ไม่" in text else "รอสั่งซื้อ"))
                 self.result.setItem(r, c, item)
         self.tabs.setCurrentIndex(tab)
+        self._reveal()
+
+    def _reveal(self) -> None:
+        """The results are below the buttons: scroll down to them (on a small screen they are off the page)."""
+        QTimer.singleShot(0, lambda: self.scroll.ensureWidgetVisible(self.tabs, 0, 0))
 
     def check_codes(self) -> None:
         checks = check_part_codes(self.state.partlist, self._express_stock())
@@ -433,6 +449,7 @@ class ExpressPage(QWidget):
         added = self.state.xref.merge(self._suggestions())
         self.state.set_xref(self.state.xref)
         self.tabs.setCurrentIndex(1)
+        self._reveal()
         self.state.notify(f"เพิ่มคู่รหัสจากชื่อสินค้า {added} รายการ (ตรวจแล้วติ๊ก ยืนยันแล้ว = Y)")
 
     def _show_xref(self) -> None:

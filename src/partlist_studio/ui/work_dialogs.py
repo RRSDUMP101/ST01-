@@ -20,7 +20,7 @@ from ..core.models import COMMON_THICKNESS, Part, PartList
 from ..core.stock import find_by_code
 from . import theme
 from .state import AppState
-from .widgets import button, fill, table
+from .widgets import button, fill, fit_to_screen, table
 
 AS_SHEET = "ตามแบบ"
 ST_MANUAL = "เลือกเอง"
@@ -50,7 +50,7 @@ class VariantDialog(QDialog):
         self.rows: list[Resolved] = []
         self.add_to_current = False
         self.setWindowTitle(f"เลือกรุ่นย่อย – {model.name}")
-        self.resize(1180, 680)
+        fit_to_screen(self, 1180, 680)
         lay = QVBoxLayout(self)
         cap = QLabel(model.title or model.name)
         cap.setObjectName("CardTitle")
@@ -183,7 +183,7 @@ class NewCodeDialog(QDialog):
         self.state = state
         self.stock = state.express_stock() or state.stock
         self.setWindowTitle("ตั้งรหัสสินค้าใหม่ (ตามกฎรหัส Express)")
-        self.resize(720, 460)
+        fit_to_screen(self, 720, 460)
         lay = QVBoxLayout(self)
         hint = QLabel("รูปแบบ: <b>RRS-&lt;รุ่น&gt;-&lt;เลขชิ้นส่วน 3 หลัก&gt;-&lt;ข้าง&gt;-&lt;ขนาด&gt;-&lt;รุ่นย่อย&gt;</b> "
                       "เช่น RRS-T-024-L-84-CHAMP · เลขชิ้นส่วนเดียวกันทุกรุ่นรถ (024 = บังอาย) · ไม่เกิน 20 ตัว "
@@ -268,7 +268,7 @@ class CompareDialog(QDialog):
         super().__init__(parent)
         self.state, self.actions = state, actions
         self.setWindowTitle("เทียบ Rev. แบบ / Part List")
-        self.resize(1100, 640)
+        fit_to_screen(self, 1100, 640)
         lay = QVBoxLayout(self)
         grid = QGridLayout()
         self.sources = []

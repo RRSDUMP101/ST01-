@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import traceback
 
-from PySide6.QtCore import QObject, QPointF, QRectF, QRunnable, Qt, QThreadPool, Signal
-from PySide6.QtGui import QBrush, QColor, QIntValidator, QPainter, QPainterPath, QPen, QPolygonF
+from PySide6.QtCore import QEvent, QObject, QPoint, QPointF, QRect, QRectF, QRunnable, QSize, Qt, QThreadPool, Signal
+from PySide6.QtGui import QBrush, QColor, QGuiApplication, QIntValidator, QPainter, QPainterPath, QPen, QPolygonF
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QFrame, QGraphicsScene, QGraphicsView, QHBoxLayout,
-                               QHeaderView, QLabel, QLineEdit, QPushButton, QStyle, QStyledItemDelegate, QTableWidget,
-                               QTableWidgetItem, QVBoxLayout, QWidget)
+                               QHeaderView, QLabel, QLayout, QLineEdit, QPushButton, QScrollArea, QStyle,
+                               QStyledItemDelegate, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
 from . import theme
 
@@ -21,6 +21,179 @@ def button(text: str, kind: str = "", tooltip: str = "") -> QPushButton:
         btn.setToolTip(tooltip)
     btn.setCursor(Qt.PointingHandCursor)
     return btn
+
+
+def fit_to_screen(widget: QWidget, width: int, height: int) -> None:
+    """Resize a window to width x height, smaller when the screen is (a 1366 x 768 laptop leaves ~728 px under the
+    taskbar): the buttons at the bottom of a dialog stay on the screen."""
+    screen = None
+    parent = widget.parentWidget()
+    if parent is not None and parent.window() is not None:
+        screen = parent.window().screen()
+    screen = screen or QGuiApplication.primaryScreen()
+    if screen is not None and QGuiApplication.platformName() not in ("offscreen", "minimal"):
+        avail = screen.availableGeometry()
+        width = min(width, int(avail.width() * 0.96))
+        height = min(height, int(avail.height() * 0.94))
+    widget.resize(width, height)
+
+
+def scroll_body(page: QWidget) -> QVBoxLayout:
+    """Put the page in a scroll area (cards taller than a small screen scroll instead of being squeezed) and return
+    the layout of its body."""
+    outer = QVBoxLayout(page)
+    outer.setContentsMargins(0, 0, 0, 0)
+    scroll = QScrollArea()
+    scroll.setWidgetResizable(True)
+    scroll.setFrameShape(QScrollArea.NoFrame)
+    body = QWidget()
+    body.setObjectName("Content")
+    scroll.setWidget(body)
+    outer.addWidget(scroll)
+    page.scroll_area = scroll
+    lay = QVBoxLayout(body)
+    lay.setContentsMargins(28, 24, 28, 16)
+    return lay
+
+
+class FlowLayout(QLayout):
+    """Widgets in a row that wraps onto the next line when the window is narrow (one line on a wide screen,
+    two on a 1366 px laptop) - nothing is cut off or squeezed."""
+
+    def __init__(self, parent=None, h_spacing: int = 14, v_spacing: int = 6):
+        super().__init__(parent)
+        self._items = []
+        self._h, self._v = h_spacing, v_spacing
+        self.setContentsMargins(0, 0, 0, 0)
+
+    def addItem(self, item):  # noqa: N802 - Qt API
+        self._items.append(item)
+
+    def count(self):
+        return len(self._items)
+
+    def itemAt(self, index):  # noqa: N802
+        return self._items[index] if 0 <= index < len(self._items) else None
+
+    def takeAt(self, index):  # noqa: N802
+        return self._items.pop(index) if 0 <= index < len(self._items) else None
+
+    def expandingDirections(self):  # noqa: N802
+        return Qt.Orientation(0)
+
+    def hasHeightForWidth(self):  # noqa: N802
+        return True
+
+    def heightForWidth(self, width):  # noqa: N802
+        return self._place(QRect(0, 0, width, 0), apply=False)
+
+    def setGeometry(self, rect):  # noqa: N802
+        super().setGeometry(rect)
+        self._place(rect, apply=True)
+
+    def sizeHint(self):  # noqa: N802
+        return self.minimumSize()
+
+    def minimumSize(self):  # noqa: N802
+        size = QSize()
+        for item in self._items:
+            if not item.isEmpty():
+                size = size.expandedTo(item.minimumSize())
+        m = self.contentsMargins()
+        return size + QSize(m.left() + m.right(), m.top() + m.bottom())
+
+    def _place(self, rect: QRect, apply: bool) -> int:
+        m = self.contentsMargins()
+        area = rect.adjusted(m.left(), m.top(), -m.right(), -m.bottom())
+        lines: list[list] = [[]]
+        x = area.x()
+        for item in self._items:
+            if item.isEmpty():  # a hidden widget
+                continue
+            w = item.sizeHint().width()
+            if lines[-1] and x + w > area.right() + 1:
+                lines.append([])
+                x = area.x()
+            lines[-1].append(item)
+            x += w + self._h
+        y = area.y()
+        for line in lines:
+            if not line:
+                continue
+            height = max(it.sizeHint().height() for it in line)
+            if apply:
+                x = area.x()
+                for it in line:
+                    hint = it.sizeHint()
+                    it.setGeometry(QRect(QPoint(x, y + (height - hint.height()) // 2), hint))
+                    x += hint.width() + self._h
+            y += height + self._v
+        return max(0, y - self._v - rect.y() + m.bottom())
+
+
+class EmptyHint(QObject):
+    """What to do first, written in an empty table or list ("ยังไม่มี… – กด …") instead of a blank box.
+    text: the words, or a function giving them (e.g. "ไม่พบ …" while a search hides every row)."""
+
+    def __init__(self, view: QAbstractItemView, text):
+        super().__init__(view)
+        self.view = view
+        self.text = text
+        self.label = QLabel("", view.viewport())
+        self.label.setObjectName("EmptyHint")
+        self.label.setAlignment(Qt.AlignCenter)
+        self.label.setWordWrap(True)
+        self.label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        self.label.setStyleSheet("background: transparent;")
+        view.viewport().installEventFilter(self)
+        model = view.model()
+        for signal in (model.rowsInserted, model.rowsRemoved, model.modelReset, model.layoutChanged):
+            signal.connect(self.update)
+        self.update()
+
+    def set_text(self, text) -> None:
+        self.text = text
+        self.update()
+
+    def update(self, *_args) -> None:
+        try:
+            model = self.view.model()
+        except RuntimeError:  # the table is being deleted (its model goes after it)
+            return
+        empty = model is not None and model.rowCount() == 0
+        if empty:
+            self.label.setText(self.text() if callable(self.text) else self.text)
+        self.label.setVisible(empty and bool(self.label.text()))
+        self._place()
+
+    def _place(self) -> None:
+        rect = self.view.viewport().rect().adjusted(24, 8, -24, -8)
+        self.label.setGeometry(rect)
+
+    def eventFilter(self, obj, event):  # noqa: N802 - Qt API
+        if event.type() == QEvent.Resize:
+            self._place()
+        return False
+
+
+def empty_hint(view: QAbstractItemView, text) -> EmptyHint:
+    view._empty_hint = EmptyHint(view, text)
+    return view._empty_hint
+
+
+def labeled(text: str, widget: QWidget, tooltip: str = "") -> QWidget:
+    """A label and its field kept together (they wrap as one in a FlowLayout)."""
+    box = QWidget()
+    lay = QHBoxLayout(box)
+    lay.setContentsMargins(0, 0, 0, 0)
+    lay.setSpacing(6)
+    if text:
+        label = QLabel(text)
+        if tooltip:
+            label.setToolTip(tooltip)
+        lay.addWidget(label)
+    lay.addWidget(widget)
+    return box
 
 
 def table(headers: list[str], widths: list[int] | None = None, editable: bool = False) -> QTableWidget:
@@ -311,7 +484,7 @@ class DrawingPreview(QGraphicsView):
         self.setDragMode(QGraphicsView.ScrollHandDrag)
         self.setTransformationAnchor(QGraphicsView.AnchorUnderMouse)
         self.setBackgroundBrush(QColor("#0F1B2B"))
-        self.setMinimumHeight(260)
+        self.setMinimumHeight(180)  # the import dialog and the drawing page fit a 768 px screen
         self.setStyleSheet("border-radius: 8px; border: 1px solid #22344C;")
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)

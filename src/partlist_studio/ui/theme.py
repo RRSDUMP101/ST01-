@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import platform
+from pathlib import Path
 
 from PySide6.QtGui import QColor, QFont, QFontDatabase
 
@@ -104,18 +105,28 @@ def app_font() -> QFont:
     return font
 
 
+# the arrows of the spin boxes (a styled QSpinBox draws none of its own): images of the bundled resources
+_RES = (Path(__file__).resolve().parents[1] / "resources").as_posix()
+
 STYLE_SHEET = f"""
 QWidget {{ color: {TEXT}; }}
 QMainWindow, QDialog, #Content {{ background: {BG}; }}
 
 #Sidebar {{ background: {NAVY_DEEP}; }}
-#Brand {{ color: white; font-size: 17px; font-weight: 700; padding: 18px 16px 2px 18px; }}
-#BrandSub {{ color: #8FA7C4; font-size: 11px; padding: 0 16px 14px 18px; }}
+#Brand {{ color: white; font-size: 17px; font-weight: 700; padding: 14px 16px 2px 18px; }}
+#BrandSub {{ color: #8FA7C4; font-size: 11px; padding: 0 16px 10px 18px; }}
 #NavList {{ background: transparent; border: none; outline: none; color: #C9D6E6; }}
-#NavList::item {{ padding: 11px 14px; margin: 2px 10px; border-radius: 8px; }}
+#NavList::item {{ padding: 7px 12px; margin: 1px 10px; border-radius: 8px; }}
+#NavList QScrollBar:vertical {{ background: transparent; width: 6px; margin: 2px; }}
+#NavList QScrollBar::handle:vertical {{ background: #2A4566; border-radius: 3px; min-height: 30px; }}
+#NavList QScrollBar::add-line, #NavList QScrollBar::sub-line {{ height: 0; }}
+#NavList QScrollBar::add-page, #NavList QScrollBar::sub-page {{ background: transparent; }}
 #NavList::item:hover {{ background: {NAVY_DARK}; color: white; }}
 #NavList::item:selected {{ background: {NAVY}; color: white; font-weight: 600; }}
 #SidebarFoot {{ color: #6F87A5; font-size: 11px; padding: 12px 18px; }}
+QPushButton#PaletteButton {{ background: {NAVY_DARK}; color: #9FB3CC; border: 1px solid #22344C; border-radius: 8px;
+    padding: 6px 12px; margin: 0 10px 8px 10px; text-align: left; font-size: 12px; }}
+QPushButton#PaletteButton:hover {{ color: white; border-color: #3A5A80; }}
 #StepBar {{ background: white; border-bottom: 1px solid #DDE3EC; }}
 QPushButton#Step {{ background: transparent; border: 1px solid transparent; border-radius: 8px; padding: 4px 12px;
     color: {MUTED}; text-align: left; font-size: 12px; }}
@@ -150,7 +161,17 @@ QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox, QPlainTextEdit {{
     background: white; border: 1px solid {BORDER}; border-radius: 6px; padding: 5px 8px;
 }}
 QComboBox::drop-down {{ border: none; width: 22px; }}
-QAbstractSpinBox {{ padding-right: 8px; }}
+QAbstractSpinBox {{ padding-right: 22px; }}
+QAbstractSpinBox::up-button, QAbstractSpinBox::down-button {{ subcontrol-origin: border; width: 20px;
+    border: none; border-left: 1px solid {BORDER}; background: #F7F9FC; }}
+QAbstractSpinBox::up-button {{ subcontrol-position: top right; border-top-right-radius: 6px; }}
+QAbstractSpinBox::down-button {{ subcontrol-position: bottom right; border-bottom-right-radius: 6px; }}
+QAbstractSpinBox::up-button:hover, QAbstractSpinBox::down-button:hover {{ background: #E3EAF3; }}
+QAbstractSpinBox::up-arrow {{ image: url("{_RES}/spin_up.png"); width: 9px; height: 6px; }}
+QAbstractSpinBox::down-arrow {{ image: url("{_RES}/spin_down.png"); width: 9px; height: 6px; }}
+QAbstractSpinBox::up-arrow:disabled, QAbstractSpinBox::up-arrow:off {{ image: url("{_RES}/spin_up_off.png"); }}
+QAbstractSpinBox::down-arrow:disabled, QAbstractSpinBox::down-arrow:off {{
+    image: url("{_RES}/spin_down_off.png"); }}
 QPushButton#Stepper {{ font-size: 16px; font-weight: 700; padding: 2px 0; min-height: 28px; }}
 QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QPlainTextEdit:focus {{ border-color: {NAVY}; }}
 
@@ -171,4 +192,12 @@ QGroupBox {{ border: 1px solid {BORDER}; border-radius: 8px; margin-top: 14px; p
              background: white; font-weight: 600; color: {NAVY}; }}
 QGroupBox::title {{ subcontrol-origin: margin; left: 12px; padding: 0 4px; }}
 QSplitter::handle {{ background: transparent; }}
+QSplitter::handle:hover {{ background: #D6E4F5; }}
+
+#Palette {{ background: white; border: 1px solid {BORDER}; border-radius: 12px; }}
+#PaletteInput {{ font-size: 15px; padding: 9px 12px; border: 1px solid {NAVY}; border-radius: 8px; }}
+#PaletteList {{ border: none; background: white; outline: none; }}
+#PaletteList::item {{ padding: 7px 10px; border-radius: 6px; }}
+#PaletteList::item:selected {{ background: #D6E4F5; color: {TEXT}; }}
+#EmptyHint {{ color: {MUTED}; font-size: 13px; }}
 """

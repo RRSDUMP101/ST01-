@@ -35,7 +35,7 @@ from ...core.catalog import (
 )
 from ...core.qr import PREFIX, parse_payload
 from ..state import AppState
-from ..widgets import StatusChipRow, button, fill, selected_rows, table
+from ..widgets import StatusChipRow, button, empty_hint, fill, selected_rows, table
 
 COL_LOCATION = PART_STOCK_HEADERS.index("ตำแหน่ง")
 COL_STATUS = PART_STOCK_HEADERS.index("สถานะ")
@@ -81,6 +81,8 @@ class PartsReadyTab(QWidget):
         split.addWidget(self.groups)
         self.table = table(PART_STOCK_HEADERS, [150, 150, 200, 45, 90, 95, 75, 60, 140, 55, 115, 50, 45, 45, 90],
                            editable=True)
+        empty_hint(self.table, lambda: "ไม่พบรายการที่ตรงกับการค้นหา / ตัวกรอง" if self.search.text().strip() else
+                   "ยังไม่มีชิ้นส่วน – นำเข้าสต็อก หรือเปิดงานผลิต แล้วชิ้นส่วนจะแยกกลุ่มประกอบให้ที่นี่")
         self.table.itemChanged.connect(self._edited)
         split.addWidget(self.table)
         split.setSizes([230, 1050])
@@ -92,10 +94,12 @@ class PartsReadyTab(QWidget):
         hint.setObjectName("Hint")
         hint.setWordWrap(True)
         row.addWidget(hint, 1)
-        for text, slot, kind in (("ตั้งกลุ่มประกอบ…", self.set_group, ""), ("ตั้งตำแหน่งเก็บ…", self.set_location, ""),
-                                 ("พิมพ์ป้ายชั้นวาง (QR)…", self.print_labels, "accent"),
-                                 ("ส่งออก Excel…", self.export, "")):
-            b = button(text, kind) if kind else button(text)
+        for text, slot, kind, tip in (
+                ("ตั้งกลุ่มประกอบ…", self.set_group, "", "เลือกกลุ่มประกอบให้รหัสที่เลือก (แทนกลุ่มที่จัดจากชื่อ)"),
+                ("ตั้งตำแหน่งเก็บ…", self.set_location, "", "ตั้งตำแหน่งชั้นวางให้รหัสที่เลือก เช่น P-A-01"),
+                ("พิมพ์ป้ายชั้นวาง (QR)…", self.print_labels, "accent", "ป้ายติดชั้นวางพร้อม QR ของรหัสที่เลือก"),
+                ("ส่งออก Excel…", self.export, "", "ตารางชิ้นส่วนพร้อมประกอบเป็น Excel")):
+            b = button(text, kind, tip) if kind else button(text, tooltip=tip)
             b.clicked.connect(slot)
             row.addWidget(b)
         lay.addLayout(row)

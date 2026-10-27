@@ -4,13 +4,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QComboBox, QDoubleSpinBox, QHBoxLayout, QLabel, QSpinBox, QVBoxLayout, QWidget
 
 from ...core.production import reserved_by_jobs
 from ...core.replenish import (REPLENISH_HEADERS, RS_NEAR, RS_ORDER, RS_ORDER_STATES, ReplenishParams, apply_min_max,
                                compute, export_replenish, replenish_row)
 from ..state import AppState
-from ..widgets import StatusChipRow, button, fill, table
+from ..widgets import StatusChipRow, button, empty_hint, fill, table
 
 
 class ReplenishTab(QWidget):
@@ -42,7 +43,7 @@ class ReplenishTab(QWidget):
         row.addStretch(1)
         lay.addLayout(row)
         row = QHBoxLayout()
-        run = button("คำนวณ Min / Max", "accent")
+        run = button("คำนวณ Min / Max", "accent", "คำนวณ Min/Max ที่แนะนำจากยอดใช้จริงและระยะเวลาสั่งของ")
         run.clicked.connect(self.run)
         row.addWidget(run)
         self.chips = StatusChipRow(list(RS_ORDER_STATES), hide_zero=True)
@@ -54,12 +55,17 @@ class ReplenishTab(QWidget):
         self.hint.setWordWrap(True)
         lay.addWidget(self.hint)
         self.table = table(REPLENISH_HEADERS, [130, 240, 50, 70, 70, 70, 80, 70, 60, 60, 70, 70, 140, 140])
+        empty_hint(self.table, lambda: "กด คำนวณ Min / Max" if self.state.stock.items else
+                   "ยังไม่มีสต็อก – นำเข้าไฟล์สต็อกที่แท็บ สต็อกสโตร์ ก่อน")
         lay.addWidget(self.table, 1)
         row = QHBoxLayout()
         row.addStretch(1)
-        for text, slot, kind in (("ใช้ Min / Max ที่แนะนำ", self.apply, ""), ("ส่งออก Min/Max (Excel)", lambda: self.export(False), ""),
-                                 ("ใบขอซื้อ (ร่าง) ตามจุดสั่งซื้อ", lambda: self.export(True), "primary")):
-            b = button(text, kind) if kind else button(text)
+        for text, slot, kind, tip in (
+                ("ใช้ Min / Max ที่แนะนำ", self.apply, "", "ตั้ง Min/Max ของทุกรายการตามค่าที่แนะนำ (เก็บในโปรแกรม)"),
+                ("ส่งออก Min/Max (Excel)", lambda: self.export(False), "", "ตาราง Min/Max ทุกรายการเป็น Excel"),
+                ("ใบขอซื้อ (ร่าง) ตามจุดสั่งซื้อ", lambda: self.export(True), "primary",
+                 "เฉพาะรายการที่ต่ำกว่า Min พร้อมจำนวนที่ควรสั่ง")):
+            b = button(text, kind, tip) if kind else button(text, tooltip=tip)
             b.clicked.connect(slot)
             row.addWidget(b)
         lay.addLayout(row)
@@ -90,6 +96,11 @@ class ReplenishTab(QWidget):
         self.chips.set_counts(counts)
         n = counts.get(RS_ORDER, 0)
         self.state.notify(f"Min/Max {len(self.lines)} รายการ · ต้องสั่งซื้อ {n} · ใกล้ Min {counts.get(RS_NEAR, 0)}")
+
+    def showEvent(self, event):  # noqa: N802 - the first time the tab is opened: the numbers at once
+        super().showEvent(event)
+        if not self.lines and self.state.stock.items:
+            QTimer.singleShot(0, self.run)
 
     def apply(self) -> None:
         if not self.lines:

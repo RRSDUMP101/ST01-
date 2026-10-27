@@ -25,7 +25,7 @@ from ...core import steel
 from ...core.movements import DocLine
 from ...core.stock import _key
 from ..state import AppState
-from ..widgets import StatusChipRow, button, fill, selected_rows, table
+from ..widgets import StatusChipRow, button, empty_hint, fill, fit_to_screen, selected_rows, table
 
 KINDS = {"ทุกรายการ": None, "เหล็กแผ่น": steel.FORM_SHEET, "เส้น / ท่อ": steel.FORM_BAR,
          "ต้องสั่ง / ตรวจ": "need"}
@@ -74,6 +74,8 @@ class SteelTab(QWidget):
         hint.setWordWrap(True)
         lay.addWidget(hint)
         self.table = table(steel.HEADERS, [110, 300, 80, 80, 70, 120, 55, 75, 75, 110, 95, 95, 55, 95, 200])
+        empty_hint(self.table, lambda: "ไม่พบรายการที่ตรงกับการค้นหา / ตัวกรอง – ล้างช่องค้นหาเพื่อดูทั้งหมด" if self.lines else
+                   "ยังไม่มีเหล็กในสต็อก – กด นำเข้าไฟล์สต็อกเหล็ก… หรือนำเข้าสต็อกจาก Express")
         self.table.setSortingEnabled(False)
         lay.addWidget(self.table, 1)
         low = QHBoxLayout()
@@ -84,7 +86,7 @@ class SteelTab(QWidget):
         self.count_btn.clicked.connect(lambda: self.make_doc("AJ"))
         self.receive_btn = button("รับเหล็กเข้า → ใบรับ (RR)…", tooltip="จำนวนที่รับเข้าของแถวที่เลือก ระบบร่างใบรับสินค้าให้")
         self.receive_btn.clicked.connect(lambda: self.make_doc("RR"))
-        self.export_btn = button("ส่งออก Excel")
+        self.export_btn = button("ส่งออก Excel", tooltip="ตารางสต็อกเหล็กที่แสดงอยู่เป็น Excel")
         self.export_btn.clicked.connect(self.export)
         for b in (self.count_btn, self.receive_btn, self.export_btn):
             low.addWidget(b)
@@ -204,7 +206,7 @@ class QtyDialog(QDialog):
         super().__init__(parent)
         count = doc_type == "AJ"
         self.setWindowTitle("ตรวจนับเหล็ก (ใบปรับยอด AJ)" if count else "รับเหล็กเข้า (ใบรับ RR)")
-        self.resize(760, 420)
+        fit_to_screen(self, 760, 420)
         lay = QVBoxLayout(self)
         hint = QLabel("ใส่จำนวนที่นับได้จริง – ระบบร่างใบปรับยอดเฉพาะส่วนต่าง" if count else
                       "ใส่จำนวนที่รับเข้า – ระบบร่างใบรับสินค้า (ซื้อ)")

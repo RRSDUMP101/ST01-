@@ -17,7 +17,7 @@ from ...core.production import (DONE, FROM_STOCK, JOB_CANCELLED, JOB_STATUSES, S
                                 job_documents, job_from_parts, wip_from_stock)
 from ...core.qr import parse_payload
 from ..state import AppState
-from ..widgets import BarDelegate, PageHeader, StatusChipRow, button, fill, selected_rows, table
+from ..widgets import BarDelegate, PageHeader, StatusChipRow, button, empty_hint, fill, selected_rows, table
 
 PART_COLS = ["ลำดับ", "รหัส", "ชิ้นส่วน", "ต้องใช้", "ใช้จากสต็อก", "ต้องผลิต", "ขั้นตอน", *STEPS, "สถานะ",
              "รับเข้าแล้ว", "%"]
@@ -41,7 +41,7 @@ class ProductionPage(QWidget):
         menu.addAction("จาก Part List ปัจจุบัน (แบบที่เพิ่งนำเข้า)…", self.new_from_partlist)
         menu.addAction("จากแบบกระบะมาตรฐาน (เลือกรุ่นย่อย)…", lambda: self.actions.go("models"))
         new.setMenu(menu)
-        exp = header.add_action(button("ส่งออก ▾"))
+        exp = header.add_action(button("ส่งออก ▾", tooltip="สถานะการผลิตของงานที่เลือก หรือทุกงานที่ยังไม่ปิด เป็น Excel"))
         menu = QMenu(exp)
         menu.addAction("สถานะงานที่เลือก (Excel)…", lambda: self.export(False))
         menu.addAction("สถานะทุกงานที่ยังไม่ปิด (Excel)…", lambda: self.export(True))
@@ -64,8 +64,9 @@ class ProductionPage(QWidget):
         self.list.setObjectName("Plain")
         self.list.setWordWrap(True)
         self.list.currentRowChanged.connect(self._show)
+        empty_hint(self.list, "ยังไม่มีงาน – กด + เปิดงานผลิต ▾")
         ll.addWidget(self.list, 1)
-        rm = button("ลบงาน")
+        rm = button("ลบงาน", tooltip="ลบงานที่เลือกออกจากรายการ (ใบเบิก/รับที่บันทึกแล้วยังอยู่)")
         rm.clicked.connect(self.remove_job)
         ll.addWidget(rm)
         split.addWidget(left)
@@ -132,6 +133,7 @@ class ProductionPage(QWidget):
         self.tabs.addTab(self.parts, "ชิ้นส่วน")
         self.tabs.addTab(self._readiness_tab(), "ความพร้อมประกอบ")
         self.log = table(["เวลา", "รหัส", "ชิ้นส่วน", "ขั้น", "จำนวน", "หมายเหตุ"], [130, 170, 240, 80, 70])
+        empty_hint(self.log, "ยังไม่มีการบันทึก – กด ผ่านขั้นถัดไป / บันทึกจำนวน… หรือสแกนใบงาน (QR)")
         self.tabs.addTab(self.log, "บันทึกการทำงาน")
         self.wip = table(["รหัส", "รายการ", "รอขั้น", "จำนวน", "หมายเหตุ"], [140, 280, 90, 70])
         self.tabs.addTab(self.wip, "สถานะจากไฟล์นับสต๊อค")
@@ -158,7 +160,11 @@ class ProductionPage(QWidget):
         self.list.clear()
         for j in jobs:
             due = QDate.fromString(j.due, "yyyy-MM-dd").toString("dd/MM/yy") if j.due else "-"
-            item = QListWidgetItem(f"{j.job_no}\n{j.model} × {j.sets:g} คัน\n{j.progress:.0%} · {j.status} · ส่ง {due}")
+            nb = "\u00a0"  # a short line that does not break in the middle of the date
+            item = QListWidgetItem(f"{j.job_no}  ·  {j.progress:.0%}\n{j.model} × {j.sets:g} คัน\n"
+                                   f"{j.status.replace(' ', nb)} · ส่ง{nb}{due}")
+            item.setToolTip(f"{j.job_no} · {j.title or j.model} · {j.customer or '-'} · กำหนดส่ง {due}"
+                            + (" (เลยกำหนด)" if j.overdue else ""))
             item.setData(Qt.UserRole, j.job_no)
             if j.overdue:
                 item.setForeground(QBrush(QColor("#D64545")))
@@ -237,13 +243,18 @@ class ProductionPage(QWidget):
         row.addWidget(b)
         lay.addLayout(row)
         split = QSplitter(Qt.Vertical)
+        split.setChildrenCollapsible(False)
         self.ready_groups = table(READINESS_HEADERS, [170, 70, 70, 170, 70])
+        self.ready_groups.setMinimumHeight(115)  # header + 3 groups on a 768 px screen
         self._bars = BarDelegate(self.ready_groups)
         self.ready_groups.setItemDelegateForColumn(3, self._bars)
         self.ready_groups.itemSelectionChanged.connect(self._show_ready_lines)
         split.addWidget(self.ready_groups)
         self.ready_lines = table(LINE_HEADERS, [130, 150, 200, 60, 60, 50, 95])
+        self.ready_lines.setMinimumHeight(115)
         split.addWidget(self.ready_lines)
+        split.setStretchFactor(0, 2)
+        split.setStretchFactor(1, 3)
         split.setSizes([220, 380])
         lay.addWidget(split, 1)
         hint = QLabel("พร้อม = ใช้จากสต็อก + ผลิตผ่านครบทุกขั้น · ปล่อยประกอบชุดย่อยเมื่อกลุ่มนั้นครบ 100% · "

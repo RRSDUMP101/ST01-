@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QHBoxLayout, QHeade
 
 from ...core import dwg_io
 from ..state import AppState
-from ..widgets import Card, DrawingPreview, PageHeader, button, run_async
+from ..widgets import Card, DrawingPreview, PageHeader, button, empty_hint, run_async
 
 REG_COLUMNS = ["ไฟล์", "เลขที่แบบ", "ชื่อแบบ", "Rev.", "วัสดุ", "หนา", "รายการ", "จำนวนชิ้น", "นำเข้าเมื่อ", "สถานะแบบ"]
 DRAWING_STATUSES = ["รอตรวจ", "อนุมัติแล้ว", "แก้ไข", "ยกเลิก"]
@@ -27,11 +27,12 @@ class DrawingsPage(QWidget):
         header = PageHeader("แบบ 2D (ZWCAD DWG/DXF)",
                             "ทะเบียนแบบของงาน – อ่าน Title Block, ตาราง BOM และรูปคลี่ชิ้นงานจากแบบ "
                             "เพื่อสร้าง Part List ให้สโตร์และฝ่ายผลิตใช้ข้อมูลชุดเดียวกัน")
-        b = header.add_action(button("นำเข้าแบบ DWG/DXF", "primary"))
+        b = header.add_action(button("นำเข้าแบบ DWG/DXF", "primary",
+                                     "เลือกไฟล์ DWG/DXF (หลายไฟล์ได้) หรือลากไฟล์มาวางบนหน้าต่าง"))
         b.clicked.connect(lambda: actions.import_drawings())
         rev = header.add_action(button("เทียบ Rev.", tooltip="เทียบแบบ/Part List 2 Rev.: เพิ่ม ตัด จำนวน ขนาด วัสดุ รูปคลี่"))
         rev.clicked.connect(lambda: self.actions.window.compare_revisions())
-        b = header.add_action(button("ส่งออกทะเบียนแบบ"))
+        b = header.add_action(button("ส่งออกทะเบียนแบบ", tooltip="ทะเบียนแบบของงานนี้เป็น Excel"))
         b.clicked.connect(actions.export_drawing_register)
         lay.addWidget(header)
 
@@ -49,7 +50,9 @@ class DrawingsPage(QWidget):
         hh.setSectionResizeMode(len(REG_COLUMNS) - 1, QHeaderView.Fixed)
         self.table.setColumnWidth(len(REG_COLUMNS) - 1, 130)
         self.table.verticalHeader().setDefaultSectionSize(32)
+        self.table.setMinimumHeight(150)  # header + 3 rows even on a 768 px screen
         self.table.itemSelectionChanged.connect(self._selected)
+        empty_hint(self.table, "ยังไม่มีแบบในงานนี้ – กด นำเข้าแบบ DWG/DXF หรือลากไฟล์ .dwg / .dxf มาวางบนหน้าต่าง")
         split.addWidget(self.table)
 
         bottom = Card("ตัวอย่างแบบ")
@@ -59,11 +62,11 @@ class DrawingsPage(QWidget):
         self.preview = DrawingPreview()
         bottom.body.addWidget(self.preview, 1)
         row = QHBoxLayout()
-        self.reload_btn = button("อ่านแบบนี้อีกครั้ง")
+        self.reload_btn = button("อ่านแบบนี้อีกครั้ง", tooltip="อ่านไฟล์แบบที่เลือกใหม่ (เมื่อแก้แบบใน ZWCAD แล้ว)")
         self.reload_btn.clicked.connect(self._reload)
-        self.add_btn = button("เพิ่มรายการจากแบบนี้…")
+        self.add_btn = button("เพิ่มรายการจากแบบนี้…", tooltip="เปิดหน้าต่างนำเข้าของแบบนี้อีกครั้ง เลือกชิ้นส่วนที่จะเพิ่ม")
         self.add_btn.clicked.connect(self._add_again)
-        self.remove_btn = button("ลบออกจากทะเบียน")
+        self.remove_btn = button("ลบออกจากทะเบียน", tooltip="เอาแบบที่เลือกออกจากทะเบียนแบบ (รายการใน Part List ยังอยู่)")
         self.remove_btn.clicked.connect(self._remove)
         row.addWidget(self.reload_btn)
         row.addWidget(self.add_btn)
@@ -71,6 +74,9 @@ class DrawingsPage(QWidget):
         row.addWidget(self.remove_btn)
         bottom.body.addLayout(row)
         split.addWidget(bottom)
+        split.setStretchFactor(0, 2)
+        split.setStretchFactor(1, 3)
+        split.setChildrenCollapsible(False)
         split.setSizes([260, 460])
         lay.addWidget(split, 1)
 
@@ -89,11 +95,16 @@ class DrawingsPage(QWidget):
                 if c == 0:
                     item.setToolTip(d.path)
                 self.table.setItem(r, c, item)
-            combo = QComboBox()
-            combo.addItems(DRAWING_STATUSES)
+            combo = self.table.cellWidget(r, len(REG_COLUMNS) - 1)
+            if not isinstance(combo, QComboBox):  # made once per row, then kept (a new one each time would leave the
+                combo = QComboBox()  # old one on the screen until Qt deletes it)
+                combo.addItems(DRAWING_STATUSES)
+                combo.setToolTip("สถานะของแบบ: รอตรวจ / อนุมัติแล้ว / แก้ไข / ยกเลิก")
+                combo.currentTextChanged.connect(lambda s, row=r: self._status(row, s))
+                self.table.setCellWidget(r, len(REG_COLUMNS) - 1, combo)
+            combo.blockSignals(True)
             combo.setCurrentText(d.status)
-            combo.currentTextChanged.connect(lambda s, rec=d: self._status(rec, s))
-            self.table.setCellWidget(r, len(REG_COLUMNS) - 1, combo)
+            combo.blockSignals(False)
         if drawings and current < 0:
             self.table.selectRow(len(drawings) - 1)
         elif 0 <= current < len(drawings):
@@ -104,8 +115,10 @@ class DrawingsPage(QWidget):
         if not has:
             self.preview.show_drawing(None)
 
-    def _status(self, record, status: str) -> None:
-        if record.status != status:
+    def _status(self, row: int, status: str) -> None:
+        drawings = self.state.partlist.drawings
+        record = drawings[row] if 0 <= row < len(drawings) else None
+        if record is not None and record.status != status:
             record.status = status
             # deferred: refresh() rebuilds the combo boxes, including the one emitting this signal
             QTimer.singleShot(0, self.state.mark_dirty)

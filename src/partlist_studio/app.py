@@ -26,6 +26,7 @@ def main(argv: list[str] | None = None) -> int:
     app.setFont(theme.app_font())
     app.setStyleSheet(theme.STYLE_SHEET)
     window = MainWindow()
+    window.restore_session()  # the size, place and page it was left with (maximized on a laptop screen)
     window.show()
     for arg in argv[1:]:
         if arg.endswith(".rrspl"):

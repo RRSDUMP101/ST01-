@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QHBoxLayout, QHeade
 from ...core.models import COLUMN_KEYS, STATUSES, Part
 from ..state import AppState
 from ..table_models import ChoiceDelegate, PartFilterProxy, PartTableModel
-from ..widgets import PageHeader, button
+from ..widgets import PageHeader, button, empty_hint
 
 COLUMN_WIDTHS = {"item_no": 50, "part_no": 120, "drawing_no": 110, "name": 200, "material": 90, "spec": 130,
                  "thickness": 70,
@@ -36,7 +36,7 @@ class PartListPage(QWidget):
         imp_menu.addAction("ตาราง BOM จาก ZWCAD / Excel / CSV…", actions.import_table)
         imp_menu.addAction("จากแบบกระบะมาตรฐาน (หน้า แบบกระบะ)…", lambda: self.window().go("models"))
         imp.setMenu(imp_menu)
-        exp = header.add_action(button("ส่งออก ▾"))
+        exp = header.add_action(button("ส่งออก ▾", tooltip="ส่ง Part List ออกเป็นตารางใน ZWCAD (DXF/DWG), Excel หรือ CSV"))
         exp_menu = QMenu(exp)
         exp_menu.addAction("ตาราง Part List สำหรับ ZWCAD (DXF)…", actions.export_cad_dxf)
         exp_menu.addAction("ตาราง Part List สำหรับ ZWCAD (DWG)…", actions.export_cad_dwg)
@@ -65,9 +65,10 @@ class PartListPage(QWidget):
                                           "– น้ำหนักคำนวณใหม่")
         b.clicked.connect(self.change_material)
         tools.addWidget(b)
-        for text, slot in (("+ เพิ่มแถว", self.add_row), ("ลบแถวที่เลือก", self.remove_rows),
-                           ("เรียงลำดับใหม่", self.renumber)):
-            b = button(text)
+        for text, slot, tip in (("+ เพิ่มแถว", self.add_row, "เพิ่มแถวว่างท้ายตาราง แล้วดับเบิลคลิกเพื่อพิมพ์"),
+                                ("ลบแถวที่เลือก", self.remove_rows, "ลบแถวที่เลือก (คลิก/Shift/Ctrl เลือกหลายแถว)"),
+                                ("เรียงลำดับใหม่", self.renumber, "ตั้งเลขลำดับ 1, 2, 3 … ตามแถวในตารางใหม่")):
+            b = button(text, tooltip=tip)
             b.clicked.connect(slot)
             tools.addWidget(b)
         lay.addLayout(tools)
@@ -78,6 +79,9 @@ class PartListPage(QWidget):
         self.proxy.setSourceModel(self.model)
         self.view = QTableView()
         self.view.setModel(self.proxy)
+        empty_hint(self.view, lambda: "ไม่พบรายการที่ตรงกับการค้นหา / ตัวกรอง – ล้างช่องค้นหาเพื่อดูทั้งหมด" if self.state.partlist.parts else
+                   "ยังไม่มีรายการ – นำเข้าแบบ DWG/DXF ที่หน้า ① แบบ 2D (ลากไฟล์มาวางก็ได้) "
+                   "หรือกด เพิ่มรายการ ▾ (ตาราง BOM Excel/CSV, แบบกระบะมาตรฐาน)")
         self.view.setItemDelegate(ChoiceDelegate(self.view))
         self.view.setSortingEnabled(True)
         self.view.sortByColumn(-1, Qt.AscendingOrder)

@@ -6,7 +6,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QStandardPaths
 from PySide6.QtGui import QGuiApplication
-from PySide6.QtWidgets import (QFileDialog, QFormLayout, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QVBoxLayout,
+from PySide6.QtWidgets import (QFileDialog, QFormLayout, QGridLayout, QHBoxLayout, QLabel, QLineEdit,
                                QWidget)
 
 from ...core.gsheets import SheetsClient, SheetsError, detect_mode, service_account_email
@@ -16,7 +16,7 @@ from ...core.company_files import models_from_rows, models_to_rows
 from ...core.stock import REQUIREMENT_HEADERS, StockList, requirement_row
 from ...core.xref import CodeXref
 from ..state import AppState
-from ..widgets import Card, PageHeader, button, run_async
+from ..widgets import Card, PageHeader, button, run_async, scroll_body
 
 HELP = """<b>ตั้งค่าครั้งแรก</b><ol style='margin-left:-20px'>
 <li>เปิด Google Cloud Console → สร้างโปรเจกต์ → เปิดใช้ <i>Google Sheets API</i> และ <i>Google Drive API</i></li>
@@ -34,8 +34,7 @@ class GoogleSheetsPage(QWidget):
         self.actions = actions
         self.stock_page = stock_page
         s = state.settings
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(28, 24, 28, 16)
+        lay = scroll_body(self)  # taller than a 1366 x 768 screen: scrolls instead of squeezing the cards
         lay.setSpacing(14)
         lay.addWidget(PageHeader("Google Sheets", "ดึง/ส่ง Part List, สต็อกสโตร์ และผลตรวจวัตถุดิบ กับ Google Sheet "
                                                   "ที่ฝ่ายขาย สโตร์ จัดซื้อ และฝ่ายผลิตใช้ร่วมกัน"))
@@ -47,7 +46,7 @@ class GoogleSheetsPage(QWidget):
         self.cred = QLineEdit(s.get("google/credentials"))
         self.cred.setPlaceholderText("ไฟล์ JSON ของ Service Account หรือ OAuth Client (Desktop app)")
         cred_row.addWidget(self.cred, 1)
-        browse = button("เลือกไฟล์…")
+        browse = button("เลือกไฟล์…", tooltip="เลือกไฟล์ JSON ของ Service Account หรือ OAuth Client")
         browse.clicked.connect(self._browse)
         cred_row.addWidget(browse)
         form.addRow("Credentials", cred_row)
@@ -55,14 +54,16 @@ class GoogleSheetsPage(QWidget):
         self.account = QLabel("-")
         self.account.setObjectName("Hint")
         acct_row.addWidget(self.account, 1)
-        self.copy_btn = button("คัดลอกอีเมล")
+        self.copy_btn = button("คัดลอกอีเมล", tooltip="คัดลอกอีเมลของ Service Account ไปแชร์ Google Sheet ให้")
         self.copy_btn.clicked.connect(lambda: QGuiApplication.clipboard().setText(self.account.text()))
         acct_row.addWidget(self.copy_btn)
         form.addRow("บัญชี", acct_row)
         self.url = QLineEdit(s.get("google/sheet_url"))
         self.url.setPlaceholderText("https://docs.google.com/spreadsheets/d/…")
         form.addRow("ลิงก์ Google Sheet", self.url)
-        tabs = QHBoxLayout()
+        tabs = QGridLayout()  # two rows: each name keeps room on a small screen
+        tabs.setHorizontalSpacing(8)
+        tabs.setVerticalSpacing(6)
         self.ws_parts = QLineEdit(s.get("google/ws_parts", "PartList"))
         self.ws_stock = QLineEdit(s.get("google/ws_stock", "Stock"))
         self.ws_check = QLineEdit(s.get("google/ws_check", "MaterialCheck"))
@@ -70,15 +71,19 @@ class GoogleSheetsPage(QWidget):
         self.ws_models = QLineEdit(s.get("google/ws_models", "Models"))
         self.ws_production = QLineEdit(s.get("google/ws_production", "Production"))
         self.ws_movements = QLineEdit(s.get("google/ws_movements", "Movements"))
-        for label, edit in (("Part List", self.ws_parts), ("สต็อก", self.ws_stock), ("ผลตรวจ", self.ws_check),
-                            ("เทียบรหัส", self.ws_xref), ("แบบกระบะ", self.ws_models), ("งานผลิต", self.ws_production),
-                            ("เคลื่อนไหว", self.ws_movements)):
-            tabs.addWidget(QLabel(label))
-            tabs.addWidget(edit)
+        for n, (label, edit) in enumerate((("Part List", self.ws_parts), ("สต็อก", self.ws_stock),
+                                           ("ผลตรวจ", self.ws_check), ("เทียบรหัส", self.ws_xref),
+                                           ("แบบกระบะ", self.ws_models), ("งานผลิต", self.ws_production),
+                                           ("เคลื่อนไหว", self.ws_movements))):
+            edit.setToolTip(f"ชื่อแท็บใน Google Sheet ที่เก็บ {label}")
+            tabs.addWidget(QLabel(label), n // 4, (n % 4) * 2)
+            tabs.addWidget(edit, n // 4, (n % 4) * 2 + 1)
+        for c in range(4):
+            tabs.setColumnStretch(c * 2 + 1, 1)
         form.addRow("ชื่อแท็บ", tabs)
         conn.body.addLayout(form)
         test_row = QHBoxLayout()
-        test = button("ทดสอบการเชื่อมต่อ", "primary")
+        test = button("ทดสอบการเชื่อมต่อ", "primary", "เปิด Google Sheet ด้วยไฟล์ JSON และลิงก์ด้านบน")
         test.clicked.connect(self._test)
         test_row.addWidget(test)
         self.conn_status = QLabel("")
@@ -109,10 +114,10 @@ class GoogleSheetsPage(QWidget):
             hint.setObjectName("Hint")
             grid.addWidget(hint, r, 1)
             if pull:
-                b = button("⬇ ดึงจาก Google Sheet")
+                b = button("⬇ ดึงจาก Google Sheet", tooltip=f"อ่าน {title} จาก Google Sheet มาแทนข้อมูลในโปรแกรม")
                 b.clicked.connect(pull)
                 grid.addWidget(b, r, 2)
-            b = button("⬆ ส่งไป Google Sheet")
+            b = button("⬆ ส่งไป Google Sheet", tooltip=f"เขียน {title} ในโปรแกรมทับแท็บใน Google Sheet")
             b.clicked.connect(push)
             grid.addWidget(b, r, 3)
         grid.setColumnStretch(1, 1)

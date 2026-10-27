@@ -20,7 +20,8 @@ from ...core.nesting import Placement
 from ...core.stock import find_by_code, material_family
 from .. import theme
 from ..state import AppState
-from ..widgets import Card, PageHeader, button, fill, selected_rows, table
+from ..widgets import (Card, FlowLayout, PageHeader, button, empty_hint, fill, fit_to_screen, labeled, selected_rows,
+                       table)
 
 SRC_PARTLIST = "partlist"
 SRC_JOBS = "jobs"
@@ -32,13 +33,23 @@ CHECK_HEADERS = ["ระดับ", "รหัส", "ชิ้นส่วน", 
 class SheetView(QGraphicsView):
     """Sheets with the parts placed on them (wheel = zoom, drag = pan, double click = fit)."""
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, empty_text: str = "", min_height: int = 220):
         super().__init__(parent)
         self.setScene(QGraphicsScene(self))
         self.setRenderHint(QPainter.Antialiasing)
         self.setDragMode(QGraphicsView.ScrollHandDrag)
         self.setBackgroundBrush(QColor("#0F1B2B"))
-        self.setMinimumHeight(220)
+        self.setMinimumHeight(min_height)
+        self.empty_text = empty_text  # shown while nothing is drawn (instead of a black box)
+
+    def drawForeground(self, painter, rect):  # noqa: N802 - Qt API
+        if self.empty_text and not self.scene().items():
+            painter.save()
+            painter.resetTransform()
+            painter.setPen(QColor("#6F87A5"))
+            painter.drawText(self.viewport().rect().adjusted(20, 0, -20, 0), Qt.AlignCenter | Qt.TextWordWrap,
+                             self.empty_text)
+            painter.restore()
 
     def _pens(self):
         pens = []
@@ -148,7 +159,7 @@ class LaserSettingsDialog(QDialog):
     def __init__(self, params: laser.LaserParams, parent=None):
         super().__init__(parent)
         self.setWindowTitle("ค่าเครื่องตัดเลเซอร์")
-        self.resize(780, 720)
+        fit_to_screen(self, 780, 720)
         self.params = params
         outer = QVBoxLayout(self)
         self.tabs = QTabWidget()
@@ -198,10 +209,10 @@ class LaserSettingsDialog(QDialog):
             self.speeds.setItem(r, len(self.FAMILIES) + 1, QTableWidgetItem(f"{v:g}" if v else ""))
         lay.addWidget(self.speeds, 1)
         row = QHBoxLayout()
-        add = button("+ เพิ่มความหนา")
+        add = button("+ เพิ่มความหนา", tooltip="เพิ่มแถวค่าตัดของความหนาใหม่")
         add.clicked.connect(self._add_row)
         row.addWidget(add)
-        reset = button("คืนค่าเริ่มต้น")
+        reset = button("คืนค่าเริ่มต้น", tooltip="กลับไปใช้ค่าตัดมาตรฐาน")
         reset.clicked.connect(self._reset)
         row.addWidget(reset)
         row.addStretch(1)
@@ -425,7 +436,7 @@ class SheetSizesDialog(QDialog):
     def __init__(self, rows: list, bed: tuple[float, float], parent=None):
         super().__init__(parent)
         self.setWindowTitle("ขนาดแผ่นเหล็กเพิ่มเอง")
-        self.resize(720, 420)
+        fit_to_screen(self, 720, 420)
         self.bed = tuple(sorted(bed))
         lay = QVBoxLayout(self)
         hint = QLabel("ขนาดแผ่นที่แผนตัดเลือกใช้ได้ นอกจากแผ่นเหล็กที่มีในสต็อก (เช่น ขนาดที่สั่งซื้อได้ หรือแผ่นที่ยังไม่มีรหัส) "
@@ -450,7 +461,7 @@ class SheetSizesDialog(QDialog):
         self.preset.addItem("กำหนดเอง (พิมพ์ในตาราง)", (1219, 2440, ""))
         self.preset.activated.connect(self._preset)
         tools.addWidget(self.preset)
-        remove = button("ลบแถวที่เลือก")
+        remove = button("ลบแถวที่เลือก", tooltip="ลบขนาดแผ่นที่เลือก")
         remove.clicked.connect(self._remove)
         tools.addWidget(remove)
         tools.addStretch(1)
@@ -523,7 +534,7 @@ class FillDialog(QDialog):
                  params: nesting.NestParams, align: bool = True, parent=None):
         super().__init__(parent)
         self.setWindowTitle("เพิ่มชิ้นลงที่ว่างบนแผ่น")
-        self.resize(1100, 720)
+        fit_to_screen(self, 1100, 720)
         self.flats, self.sheets, self.params, self.align = flats, sheets, params, align
         lay = QVBoxLayout(self)
         head = QLabel(f"<b>{title}</b> · เลือกชิ้นจากคลังรูปคลี่ที่วัสดุ/ความหนาเดียวกับแผ่น แล้วใส่จำนวน "
@@ -663,15 +674,15 @@ class NestingPage(QWidget):
         lay.setContentsMargins(28, 24, 28, 16)
         lay.setSpacing(10)
         header = PageHeader("ตัดเลเซอร์",
-                            "ทำตามแท็บจากซ้ายไปขวา: วางแผนตัด → ตรวจก่อนตัด → คิวเลเซอร์ (ส่งออกไฟล์ / บันทึกตัดเสร็จ) · "
-                            "บันทึกแล้วชิ้นงานขึ้น รอพับ และระบบร่างใบ PD แผ่นเหล็กให้สโตร์")
-        run = header.add_action(button("คำนวณแผนตัด", "accent"))
+                            "วางแผนตัด → ตรวจก่อนตัด → คิวเลเซอร์ → บันทึกตัดเสร็จ (ชิ้นงานขึ้น รอพับ · ร่างใบ PD แผ่นเหล็กให้สโตร์)")
+        run = header.add_action(button("คำนวณแผนตัด", "accent",
+                                       "วางชิ้นงานลงแผ่นเหล็กของทุกวัสดุ/ความหนา เลือกขนาดแผ่นที่ใช้เหล็กน้อยที่สุดให้"))
         run.clicked.connect(self.run)
         self.make_btn = header.add_action(button("สร้างโปรแกรมตัด → คิวเลเซอร์", "primary",
                                                  "แผ่นที่วางเหมือนกันรวมเป็นโปรแกรมเดียว × จำนวนแผ่น"))
         self.make_btn.clicked.connect(self.make_programs)
         self.make_btn.setEnabled(False)
-        exp = header.add_action(button("ส่งออก ▾"))
+        exp = header.add_action(button("ส่งออก ▾", tooltip="ไฟล์ให้เครื่องเลเซอร์ แผนตัด (Excel) แผนวางชิ้น (DXF)"))
         menu = QMenu(exp)
         menu.addAction("ไฟล์ให้เครื่องเลเซอร์: โปรแกรมที่ยังไม่ตัด (DXF + ใบสั่งตัด)…", lambda: self.export_package(False))
         menu.addSeparator()
@@ -707,16 +718,15 @@ class NestingPage(QWidget):
         lay = QVBoxLayout(tab)
         lay.setContentsMargins(12, 12, 12, 12)
         params = Card("ชิ้นที่ต้องตัด และค่าที่ใช้วาง")
-        row = QHBoxLayout()
         self.source = QComboBox()
+        self.source.setMinimumWidth(300)
+        self.source.setToolTip("งานผลิต = ชิ้นที่งานผลิตยังตัดไม่ครบ (ใช้ตัดจริง) · Part List = ทดลองคำนวณก่อนเปิดงาน")
         self.source.addItem("งานผลิตที่ยังตัดไม่ครบ (ใช้ตัดจริง)", SRC_JOBS)
         self.source.addItem("ทดลองคำนวณจาก Part List (ยังไม่เปิดงาน)", SRC_PARTLIST)
         saved = self.state.settings.get("laser/source")
         if saved:
             self.source.setCurrentIndex(max(0, self.source.findData(saved)))
         self.source.currentIndexChanged.connect(self._source_changed)
-        row.addWidget(QLabel("ที่มา"))
-        row.addWidget(self.source)
         p = self.state.settings.laser
         self.gap = QDoubleSpinBox()
         self.gap.setRange(0, 100)
@@ -738,24 +748,35 @@ class NestingPage(QWidget):
         self.sets.setToolTip("จำนวนคันของ Part List แก้ได้ที่หน้าภาพรวมที่เดียว · งานที่เปิดแล้วแก้ที่หน้างานผลิต")
         self.sets_label = button("แก้ ›", tooltip="จำนวนคันของ Part List แก้ได้ที่หน้าภาพรวมที่เดียว · งานที่เปิดแล้วแก้ที่หน้างานผลิต")
         self.sets_label.clicked.connect(lambda: self.actions.go("dashboard"))
-        for label, w in (("ระยะห่างชิ้นงาน", self.gap), ("ขอบแผ่น", self.margin), ("", self.rotate),
-                         ("ความหนา (เมื่อแบบไม่ระบุ)", self.default_thk)):
-            if label:
-                row.addWidget(QLabel(label))
-            row.addWidget(w)
-        row.addWidget(self.sets)
-        row.addWidget(self.sets_label)
-        row.addStretch(1)
-        params.body.addLayout(row)
+        self.gap.setToolTip("ระยะห่างระหว่างชิ้นงานบนแผ่น (แผ่นหนาใช้ ความหนา × 1.0 ถ้ามากกว่า)")
+        self.margin.setToolTip("ระยะจากขอบแผ่นถึงชิ้นงาน")
+        self.default_thk.setToolTip("ความหนาที่ใช้กับชิ้นที่แบบไม่ระบุความหนา (ไม่ใช้ = ข้ามชิ้นนั้น)")
+        for spin in (self.gap, self.margin, self.default_thk):
+            spin.setMinimumWidth(110)
+        # one line on a wide screen, wrapped on a laptop; the jobs to cut beside it
+        body = QHBoxLayout()
+        body.setSpacing(16)
+        flow_box = QWidget()
+        flow = FlowLayout(flow_box)
+        sets_box = QWidget()
+        sets_lay = QHBoxLayout(sets_box)
+        sets_lay.setContentsMargins(0, 0, 0, 0)
+        sets_lay.addWidget(self.sets)
+        sets_lay.addWidget(self.sets_label)
+        self.sets_box = sets_box
+        for widget in (labeled("ที่มา", self.source), sets_box, labeled("ระยะห่างชิ้นงาน", self.gap),
+                       labeled("ขอบแผ่น", self.margin), labeled("ความหนาเมื่อแบบไม่ระบุ", self.default_thk),
+                       self.rotate):
+            flow.addWidget(widget)
+        body.addWidget(flow_box, 3)
         self.jobs = QListWidget()
         self.jobs.setObjectName("Plain")
-        self.jobs.setMaximumHeight(96)
+        self.jobs.setMaximumHeight(110)
+        self.jobs.setTextElideMode(Qt.ElideRight)  # a long job title ends with … (the whole of it in its tooltip)
+        self.jobs.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.jobs.setToolTip("ติ๊กงานที่จะตัดในรอบนี้ (ชิ้นที่ยังไม่ผ่านขั้น ตัด และยังไม่อยู่ในโปรแกรมตัด)")
-        params.body.addWidget(self.jobs)
-        self.summary = QLabel("กด คำนวณแผนตัด")
-        self.summary.setObjectName("Hint")
-        self.summary.setWordWrap(True)
-        params.body.addWidget(self.summary)
+        body.addWidget(self.jobs, 2)
+        params.body.addLayout(body)
         lay.addWidget(params)
         plan_tools = QHBoxLayout()
         self.fill_plan_btn = button("เพิ่มชิ้นลงที่ว่าง…", tooltip="เลือกชิ้นจากคลังรูปคลี่ (วัสดุ/ความหนาเดียวกัน) "
@@ -763,27 +784,40 @@ class NestingPage(QWidget):
         self.fill_plan_btn.clicked.connect(self.fill_plan)
         self.fill_plan_btn.setEnabled(False)
         plan_tools.addWidget(self.fill_plan_btn)
-        plan_tools.addSpacing(16)
-        plan_tools.addWidget(QLabel("ขนาดแผ่นของแถวที่เลือก"))
+        # the sheet of the selected row: the same choice as the drop-down in its แผ่นที่ใช้ cell (kept for the code
+        # that picks a sheet for a group; not shown - two places for one choice only confused)
         self.sheet_choice = QComboBox()
+        self.sheet_choice.setVisible(False)
         self.sheet_choice.setMinimumWidth(380)
         self.sheet_choice.setToolTip("เปลี่ยนขนาดแผ่นเหล็กที่ใช้ตัดวัสดุ/ความหนานี้ – อัตโนมัติ = ขนาดที่ใช้เหล็กน้อยที่สุด · "
                                      "รายการมาจากแผ่นเหล็กในสต็อก และขนาดที่เพิ่มเอง")
         self.sheet_choice.setEnabled(False)
         self.sheet_choice.activated.connect(self._sheet_chosen)
-        plan_tools.addWidget(self.sheet_choice)
         self.sizes_btn = button("ขนาดแผ่นเพิ่มเอง…", tooltip="เพิ่มขนาดแผ่นเหล็กที่ใช้วางแผนได้ นอกจากที่มีในสต็อก")
         self.sizes_btn.clicked.connect(self.edit_sheet_sizes)
         plan_tools.addWidget(self.sizes_btn)
-        plan_tools.addStretch(1)
+        plan_tools.addSpacing(10)
+        # the result of the plan, next to its tools (a line of its own took the room of the sheet picture)
+        self.summary = QLabel("กด <b>คำนวณแผนตัด</b> · เลือก / เปลี่ยนแผ่นเหล็กได้ที่ช่อง <b>แผ่นที่ใช้</b> ของแต่ละแถว")
+        self.summary.setObjectName("Hint")
+        self.summary.setWordWrap(True)
+        plan_tools.addWidget(self.summary, 1)
         lay.addLayout(plan_tools)
         split = QSplitter(Qt.Vertical)
+        split.setChildrenCollapsible(False)
         self.table = table(nesting.PLAN_HEADERS, [120, 70, 330, 110, 110, 80, 90, 70, 80, 60, 90, 300])
+        self.table.setMinimumHeight(150)  # header + 4 rows on a 768 px screen
+        empty_hint(self.table, "กด คำนวณแผนตัด – ระบบวางชิ้นงานลงแผ่นเหล็กทีละวัสดุ / ความหนา")
+        self.table.horizontalHeaderItem(nesting.PLAN_HEADERS.index("แผ่นที่ใช้")).setToolTip(
+            "คลิกช่องในคอลัมน์นี้เพื่อเลือก / เปลี่ยนแผ่นเหล็ก (รหัส · ขนาด · คงเหลือจากสต็อกเหล็ก)")
         self.table.itemSelectionChanged.connect(self._selected)
         split.addWidget(self.table)
-        self.view = SheetView()
+        self.view = SheetView(empty_text="กด คำนวณแผนตัด แล้วเลือกแถวในตาราง – ภาพการวางชิ้นงานบนแผ่นจะแสดงที่นี่\n"
+                                         "(ล้อเมาส์ = ซูม · ลาก = เลื่อน · ดับเบิลคลิก = ดูทั้งหมด)", min_height=110)
         split.addWidget(self.view)
-        split.setSizes([220, 420])
+        split.setStretchFactor(0, 1)
+        split.setStretchFactor(1, 1)
+        split.setSizes([260, 380])
         lay.addWidget(split, 1)
         self.tabs.addTab(tab, "วางแผนตัด")
         self._source_changed()
@@ -798,6 +832,7 @@ class NestingPage(QWidget):
         self.check_hint.setWordWrap(True)
         lay.addWidget(self.check_hint)
         self.checks = table(CHECK_HEADERS, [80, 160, 220, 110, 600])
+        empty_hint(self.checks, "ยังไม่มีผลตรวจ – กด คำนวณแผนตัด ก่อน")
         lay.addWidget(self.checks, 1)
         self.tabs.addTab(tab, "ตรวจก่อนตัด")
 
@@ -814,19 +849,22 @@ class NestingPage(QWidget):
         row.addWidget(self.show_done)
         lay.addLayout(row)
         tools = QHBoxLayout()
-        for text, slot, kind, tip in (
+        self._queue_any: list = []  # work with the selected programs or every open one
+        self._queue_one: list = []  # need a program selected
+        for text, slot, kind, tip, needs in (
                 ("ส่งออกแพ็กเลเซอร์…", lambda: self.export_package(True), "accent",
-                 "โปรแกรมที่เลือก (หรือทั้งหมดที่ยังไม่ตัด): DXF ต่อแผ่น + DXF ต่อชิ้น + ภาพแผ่น + ใบสั่งตัด"),
-                ("ใบสั่งตัด (Excel)…", self.export_order, "", "ใบสั่งตัดพร้อมภาพแผ่น สำหรับช่างเลเซอร์"),
-                ("เริ่มตัด ▶", self.start_cut, "", "เปลี่ยนสถานะเป็น กำลังตัด"),
+                 "โปรแกรมที่เลือก (หรือทั้งหมดที่ยังไม่ตัด): DXF ต่อแผ่น + DXF ต่อชิ้น + ภาพแผ่น + ใบสั่งตัด", False),
+                ("ใบสั่งตัด (Excel)…", self.export_order, "", "ใบสั่งตัดพร้อมภาพแผ่น สำหรับช่างเลเซอร์", False),
+                ("เริ่มตัด ▶", self.start_cut, "", "เปลี่ยนสถานะเป็น กำลังตัด", True),
                 ("บันทึกตัดแล้ว ✓…", self.record_cut, "primary",
-                 "ชิ้นงานของงานผ่านขั้น ตัด และร่างใบ PD จ่ายแผ่นเหล็ก"),
+                 "ชิ้นงานของงานผ่านขั้น ตัด และร่างใบ PD จ่ายแผ่นเหล็ก", True),
                 ("เพิ่มชิ้นลงที่ว่าง…", self.fill_program, "",
-                 "โปรแกรมที่ยังรอตัด: เลือกชิ้นจากคลังรูปคลี่ วางเพิ่มในที่ว่างของแผ่น (ทุกแผ่นของโปรแกรม)"),
-                ("ยกเลิกโปรแกรม", self.cancel_program, "", "ชิ้นที่ยังไม่ตัดกลับไปให้วางแผนใหม่ได้"),
-                ("ลบ", self.delete_program, "", "ลบออกจากคิว")):
+                 "โปรแกรมที่ยังรอตัด: เลือกชิ้นจากคลังรูปคลี่ วางเพิ่มในที่ว่างของแผ่น (ทุกแผ่นของโปรแกรม)", True),
+                ("ยกเลิกโปรแกรม", self.cancel_program, "", "ชิ้นที่ยังไม่ตัดกลับไปให้วางแผนใหม่ได้", True),
+                ("ลบ", self.delete_program, "", "ลบโปรแกรมที่เลือกออกจากคิว", True)):
             b = button(text, kind, tip) if kind else button(text, tooltip=tip)
             b.clicked.connect(slot)
+            (self._queue_one if needs else self._queue_any).append(b)
             tools.addWidget(b)
         tools.addStretch(1)
         lay.addLayout(tools)
@@ -834,8 +872,11 @@ class NestingPage(QWidget):
         self.programs = table(laser.PROGRAM_HEADERS,
                               [115, 70, 45, 95, 110, 45, 60, 70, 110, 75, 75, 70, 75, 160, 75, 200])
         self.programs.itemSelectionChanged.connect(self._program_selected)
+        empty_hint(self.programs, "คิวว่าง – วางแผนตัดแล้วกด สร้างโปรแกรมตัด → คิวเลเซอร์")
         split.addWidget(self.programs)
-        self.program_view = SheetView()
+        self.program_view = SheetView(empty_text="เลือกโปรแกรมในตารางเพื่อดูการวางชิ้นงานบนแผ่น\n"
+                                                 "(ยังไม่มีโปรแกรม: วางแผนตัดแล้วกด สร้างโปรแกรมตัด → คิวเลเซอร์)",
+                                      min_height=110)
         split.addWidget(self.program_view)
         split.setSizes([260, 380])
         lay.addWidget(split, 1)
@@ -858,7 +899,7 @@ class NestingPage(QWidget):
         b = button("บันทึกรูปคลี่จาก Part List ปัจจุบัน", tooltip="ทุกแถวที่มีรหัสและรูปคลี่ (จากการนำเข้าแบบ DWG)")
         b.clicked.connect(self.save_flats_from_partlist)
         row.addWidget(b)
-        b = button("ลบที่เลือก")
+        b = button("ลบที่เลือก", tooltip="ลบรูปคลี่ของรหัสที่เลือกออกจากคลัง")
         b.clicked.connect(self.remove_flats)
         row.addWidget(b)
         lay.addLayout(row)
@@ -870,8 +911,10 @@ class NestingPage(QWidget):
         split = QSplitter(Qt.Horizontal)
         self.flats = table(FLAT_HEADERS, [140, 200, 80, 60, 100, 40, 90, 90, 100, 50, 160, 90])
         self.flats.itemSelectionChanged.connect(self._flat_selected)
+        empty_hint(self.flats, lambda: "ไม่พบรหัสที่ค้นหา" if self.flat_search.text().strip() else
+                   "ยังไม่มีรูปคลี่ – นำเข้าแบบ DWG ที่มีรหัสชิ้นงาน รูปคลี่จะถูกเก็บที่นี่ให้เอง")
         split.addWidget(self.flats)
-        self.flat_view = SheetView()
+        self.flat_view = SheetView(empty_text="เลือกรหัสในตารางเพื่อดูรูปคลี่", min_height=110)
         split.addWidget(self.flat_view)
         split.setSizes([900, 360])
         lay.addWidget(split, 1)
@@ -913,6 +956,7 @@ class NestingPage(QWidget):
         self.jobs.setVisible(jobs)
         self.sets.setVisible(not jobs)
         self.sets_label.setVisible(not jobs)
+        self.sets_box.setVisible(not jobs)
         if index is not None:  # chosen by the user: remember it
             self.state.settings.set("laser/source", self.source.currentData())
 
@@ -931,6 +975,7 @@ class NestingPage(QWidget):
             left = sum(max(0.0, p.to_make - p.done_at(laser.CUT_STEP) - planned.get(laser.job_key(job.job_no, i), 0))
                        for i, p in enumerate(job.parts) if laser.CUT_STEP in p.route)
             item = QListWidgetItem(f"{job.job_no} · {job.title or job.model} · เหลือต้องตัด {left:g} ชิ้น")
+            item.setToolTip(item.text())
             item.setData(Qt.UserRole, job.job_no)
             item.setData(Qt.UserRole + 1, left)
             item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
@@ -1293,6 +1338,7 @@ class NestingPage(QWidget):
             self.programs.selectRow(nos.index(current.no) if current and current.no in nos else 0)
         else:
             self.program_view.show_program(None)
+        self._update_queue_buttons()
         open_ = q.open_programs()
         self.queue_summary.setText(
             f"รอตัด {sum(1 for p in open_ if p.status == laser.ST_WAIT)} · กำลังตัด "
@@ -1313,6 +1359,15 @@ class NestingPage(QWidget):
 
     def _program_selected(self) -> None:
         self.program_view.show_program(self._program())
+        self._update_queue_buttons()
+
+    def _update_queue_buttons(self) -> None:
+        """The buttons of the queue work only when there is something to work on."""
+        chosen = bool(self._selected_programs())
+        for b in self._queue_one:
+            b.setEnabled(chosen)
+        for b in self._queue_any:
+            b.setEnabled(chosen or bool(self.state.cut_queue.open_programs()))
 
     def _package_parts(self, progs: list[laser.CutProgram]) -> list[nesting.NestPart]:
         """Each part of the programs once, with the pieces still to cut - for nesting in the laser software."""
@@ -1422,6 +1477,10 @@ class NestingPage(QWidget):
             rows.append([f.code, f.name, f.material, f.thickness or "", f"{w:.0f} x {h:.0f}", f.holes,
                          round(length / 1000, 3), round(minutes, 2), f.drawing_no, f.revision, f.source, f.saved])
         fill(self.flats, rows)
+        if rows and not selected_rows(self.flats):  # a flat on the picture right away, not an empty box
+            self.flats.selectRow(0)
+        elif not rows:
+            self.flat_view.show_flat(None)
         total = len(self.state.flats.flats)
         self.flat_summary.setText(f"{total} รหัส" + (f" · แสดง {len(flats)}" if text else ""))
         self.tabs.setTabText(3, f"คลังรูปคลี่ ({total})")

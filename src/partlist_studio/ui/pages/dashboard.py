@@ -50,7 +50,8 @@ class DashboardPage(QWidget):
         lay.setSpacing(16)
 
         header = PageHeader("ภาพรวมงาน", "Part List ของงานผลิต เชื่อมแบบ ZWCAD กับสโตร์ คลังสินค้า และฝ่ายผลิต")
-        b = header.add_action(button("นำเข้าแบบ DWG/DXF", "primary"))
+        b = header.add_action(button("นำเข้าแบบ DWG/DXF", "primary",
+                                     "เลือกไฟล์ DWG/DXF (หลายไฟล์ได้) หรือลากไฟล์มาวางบนหน้าต่าง"))
         b.clicked.connect(lambda: actions.import_drawings())
         lay.addWidget(header)
         self._navigate = navigate
@@ -138,7 +139,7 @@ class DashboardPage(QWidget):
             text.setWordWrap(True)
             self.flow_rows[st.key] = text
             line.addWidget(text, 1)
-            go = button("ไป ›")
+            go = button("ไป ›", tooltip=f"ไปหน้า {st.title} (Ctrl+{st.num})")
             go.setFixedWidth(56)
             go.clicked.connect(lambda _=False, t=st.key: navigate(t))
             line.addWidget(go)

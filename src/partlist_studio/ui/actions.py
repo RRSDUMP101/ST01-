@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from PySide6.QtWidgets import QFileDialog, QMessageBox, QWidget
@@ -30,6 +31,18 @@ class Actions:
 
     def _remember(self, path: str) -> None:
         self.state.settings.set("last_dir", str(Path(path).parent))
+
+    def recent_files(self) -> list[str]:
+        """The Part List files opened or saved last (newest first) that are still there."""
+        try:
+            files = json.loads(self.state.settings.get("recent_files", "[]") or "[]")
+        except ValueError:
+            files = []
+        return [f for f in files if isinstance(f, str) and Path(f).is_file()][:8]
+
+    def _add_recent(self, path: str) -> None:
+        files = [str(Path(path))] + [f for f in self.recent_files() if Path(f) != Path(path)]
+        self.state.settings.set("recent_files", json.dumps(files[:8], ensure_ascii=False))
 
     def go(self, page: str) -> None:
         self.window.go(page)
@@ -251,6 +264,7 @@ class Actions:
             self.error("เปิดไฟล์ไม่ได้", str(exc))
             return
         self._remember(path)
+        self._add_recent(path)
         self.state.notify(f"เปิด {Path(path).name}")
 
     def save(self, save_as: bool = False) -> bool:
@@ -263,6 +277,7 @@ class Actions:
                 path += FILE_SUFFIX
         self.state.partlist.save(path)
         self.state.path = path
+        self._add_recent(path)
         self.state.dirty = False
         self.state.partlist_changed.emit()
         self.state.notify(f"บันทึก {Path(path).name} แล้ว")

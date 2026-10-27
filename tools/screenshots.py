@@ -352,6 +352,28 @@ def main() -> int:
     cut_page.table.selectRow(at + 1)  # the row of the part too big for the main sheet
     shot(w, "14k_laser_overflow_sheet.png")
     w.resize(1440, 860)
+    # ---- finding things: the command palette (Ctrl+K) over the window, the help with the shortcuts (F1)
+    from PySide6.QtGui import QPainter
+
+    from partlist_studio.ui.palette import CommandPalette
+
+    w.go("parts")
+    palette = CommandPalette(w.commands(), w)
+    palette.show()
+    palette.input.setText("ใบ")
+    for _ in range(5):
+        app.processEvents()
+    image = w.grab()
+    painter = QPainter(image)
+    painter.drawPixmap(palette.x() - w.geometry().x(), palette.y() - w.geometry().y(), palette.grab())
+    painter.end()
+    image.save(str(out / "18_command_palette.png"))
+    print("saved 18_command_palette.png")
+    palette.close()
+    box = w.help_box()
+    box.show()
+    shot(box, "18b_help_shortcuts.png")
+    box.close()
     state.dirty = False
     w.state.settings.q.clear()
     return 0

@@ -14,7 +14,7 @@ from ...core.movements import (DOC_TYPES, HISTORY_HEADERS, ST_CANCELLED, ST_DRAF
 from ...core.production import RAW_HEADERS, RawUse, mark_document, suggest_raw_uses
 from ...core.stock import find_by_code
 from ..state import AppState
-from ..widgets import PageHeader, button, fill, selected_rows, table
+from ..widgets import PageHeader, button, empty_hint, fill, selected_rows, table
 
 LINE_COLS = ["รหัส", "รายละเอียด", "คลัง", "จำนวน", "หน่วย", "ราคาต่อหน่วย", "จำนวนเงิน", "หมายเหตุ"]
 
@@ -45,7 +45,7 @@ class MovementsPage(QWidget):
         menu.addAction("OU จ่ายใช้ภายใน", lambda: self.from_partlist("OU"))
         menu.addAction("FR รับชิ้นงานผลิตเสร็จเข้าสต็อก", lambda: self.from_partlist("FR"))
         auto.setMenu(menu)
-        exp = header.add_action(button("ส่งออก ▾"))
+        exp = header.add_action(button("ส่งออก ▾", tooltip="ส่งเอกสาร / ประวัติการเคลื่อนไหวเป็น Excel สำหรับคีย์ Express"))
         menu = QMenu(exp)
         menu.addAction("เอกสารที่เลือก (ร่างสำหรับคีย์ Express)…", self.export_doc)
         menu.addAction("ประวัติการเคลื่อนไหว (บัตรสินค้า)…", self.export_history)
@@ -66,8 +66,9 @@ class MovementsPage(QWidget):
         self.filter.addItems(["ทุกสถานะ", ST_DRAFT, ST_POSTED, ST_CANCELLED])
         self.filter.currentIndexChanged.connect(self.refresh)
         ll.addWidget(self.filter)
-        self.docs = table(["เลขที่", "ประเภท", "วันที่", "งาน / SO", "สถานะ", "เลขที่ Express"], [105, 40, 80, 100, 80])
+        self.docs = table(["เลขที่", "ประเภท", "วันที่", "งาน / SO", "สถานะ", "เลขที่ Express"], [100, 62, 80, 100, 80])
         self.docs.itemSelectionChanged.connect(self._doc_selected)
+        empty_hint(self.docs, "ยังไม่มีเอกสาร – กด ใบใหม่ ▾ หรือสร้างจากหน้างานผลิต / ตัดเลเซอร์ (ระบบร่างให้)")
         ll.addWidget(self.docs, 1)
         split.addWidget(left)
         right = QWidget()
@@ -94,10 +95,13 @@ class MovementsPage(QWidget):
         self.lines.itemChanged.connect(self._line_edited)
         rl.addWidget(self.lines, 1)
         row = QHBoxLayout()
-        for text, slot, kind in (("+ บรรทัด", self.add_line, ""), ("ลบบรรทัด", self.remove_lines, ""),
-                                 ("ลบร่าง", self.delete_draft, ""), ("ยกเลิกเอกสาร", self.cancel_doc, ""),
-                                 ("บันทึก (ตัด/รับสต็อก)", self.post_doc, "primary")):
-            b = button(text, kind) if kind else button(text)
+        for text, slot, kind, tip in (
+                ("+ บรรทัด", self.add_line, "", "เพิ่มบรรทัดในใบนี้ แล้วพิมพ์รหัส / จำนวน"),
+                ("ลบบรรทัด", self.remove_lines, "", "ลบบรรทัดที่เลือก (ใบร่างเท่านั้น)"),
+                ("ลบร่าง", self.delete_draft, "", "ลบใบร่างนี้ทิ้ง (ใบที่บันทึกแล้วลบไม่ได้ – ใช้ ยกเลิกเอกสาร)"),
+                ("ยกเลิกเอกสาร", self.cancel_doc, "", "ยกเลิกใบนี้ – ใบที่บันทึกแล้ว ยอดที่ตัด/รับไปจะถูกคืน"),
+                ("บันทึก (ตัด/รับสต็อก)", self.post_doc, "primary", "บันทึกใบนี้: ยอดในโปรแกรมเปลี่ยนทันที แล้วคีย์เข้า Express")):
+            b = button(text, kind, tip) if kind else button(text, tooltip=tip)
             b.clicked.connect(slot)
             if text.startswith("+"):
                 row.addWidget(b)
@@ -129,6 +133,7 @@ class MovementsPage(QWidget):
         row.addWidget(self.type_filter)
         hl.addLayout(row)
         self.history = table(HISTORY_HEADERS, [80, 190, 105, 100, 100, 150, 240, 70, 70, 70, 50])
+        empty_hint(self.history, "ยังไม่มีการเคลื่อนไหว – บันทึกใบเบิก / รับในแท็บ เอกสาร แล้วประวัติจะขึ้นที่นี่")
         hl.addWidget(self.history, 1)
         self.tabs.addTab(hist, "ประวัติการเคลื่อนไหว")
 
@@ -143,9 +148,11 @@ class MovementsPage(QWidget):
         hint.setWordWrap(True)
         rwl.addWidget(hint)
         row = QHBoxLayout()
-        for text, slot in (("แนะนำจากชื่อแผ่นใน Express", self.suggest_raw), ("+ เพิ่ม", self.add_raw),
-                           ("ลบ", self.remove_raw)):
-            b = button(text)
+        for text, slot, tip in (
+                ("แนะนำจากชื่อแผ่นใน Express", self.suggest_raw, "หาแผ่นเหล็กที่ชิ้นส่วนใช้จากชื่อแผ่นในสต็อก Express"),
+                ("+ เพิ่ม", self.add_raw, "เพิ่มวัตถุดิบของชิ้นส่วนเอง"),
+                ("ลบ", self.remove_raw, "ลบแถวที่เลือก")):
+            b = button(text, tooltip=tip)
             b.clicked.connect(slot)
             row.addWidget(b)
         row.addStretch(1)

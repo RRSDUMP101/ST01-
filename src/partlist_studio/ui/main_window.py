@@ -5,13 +5,14 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import QSize, Qt, QTimer
-from PySide6.QtGui import QAction, QColor, QKeySequence
-from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QMainWindow,
-                               QMessageBox, QStackedWidget, QVBoxLayout, QWidget)
+from PySide6.QtGui import QAction, QColor, QGuiApplication, QKeySequence, QShortcut
+from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow,
+                               QMessageBox, QPushButton, QStackedWidget, QTabWidget, QVBoxLayout, QWidget)
 
 from .. import APP_NAME, __version__
 from ..core.movements import DOC_TYPES
 from .actions import Actions
+from .palette import Command, CommandPalette
 from .pages.dashboard import DashboardPage
 from .pages.drawings import DrawingsPage
 from .pages.express import ExpressPage
@@ -36,7 +37,7 @@ NAV_GROUPS = [
         ("parts", "②   Part List"),
         ("production", "③   งานผลิต (SO)"),
         ("nesting", "④   ตัดเลเซอร์"),
-        ("stock", "⑤   สโตร์ / ชิ้นส่วนพร้อมประกอบ"),
+        ("stock", "⑤   สโตร์ / พร้อมประกอบ"),
         ("movements", "⑥   เบิก / รับ สต็อก"),
     ]),
     ("ข้อมูลหลัก & เชื่อมต่อ", [
@@ -47,6 +48,28 @@ NAV_GROUPS = [
     ]),
 ]
 NAV = [entry for _title, entries in NAV_GROUPS for entry in entries]
+STEP_KEYS = ["dashboard", "drawings", "parts", "production", "nesting", "stock", "movements"]  # Ctrl+0 … Ctrl+6
+HELP_TEXT = """<h3>ทำงานตามขั้นตอน 1 → 6</h3>
+<ol>
+<li><b>แบบ 2D</b> – นำเข้าไฟล์ DWG/DXF (ลากไฟล์มาวางบนหน้าต่างก็ได้) ตรวจรายการแล้วกด <i>เพิ่มเข้า Part List</i></li>
+<li><b>Part List</b> – ตรวจ/แก้รายการ ดับเบิลคลิกเพื่อแก้ แล้วกด <i>ตรวจวัตถุดิบเทียบสต็อก</i></li>
+<li><b>งานผลิต (SO)</b> – เปิดงานจาก Part List หรือแบบกระบะ บันทึกจำนวนที่ผ่านแต่ละขั้น พิมพ์ใบงาน QR</li>
+<li><b>ตัดเลเซอร์</b> – คำนวณแผนตัด เลือกแผ่นเหล็กในช่อง <i>แผ่นที่ใช้</i> สร้างโปรแกรมตัด บันทึกตัดเสร็จ</li>
+<li><b>สโตร์</b> – สต็อก ผลตรวจวัตถุดิบ Min/Max ชิ้นส่วนพร้อมประกอบ สต็อกเหล็ก</li>
+<li><b>เบิก / รับ</b> – ตรวจใบร่าง PD / FR / RR / AJ แล้วกด <i>บันทึก</i> เพื่อตัด/รับสต็อก แล้วคีย์เข้า Express</li>
+</ol>
+<p>ปุ่ม <b>ขั้นต่อไป</b> (มุมขวาบน) พาไปทำสิ่งที่รออยู่ต่อทันที</p>
+<h3>ปุ่มลัด</h3>
+<table cellpadding="3">
+<tr><td><b>Ctrl+K</b></td><td>ค้นหาคำสั่ง – พิมพ์ชื่อหน้า แท็บ หรือปุ่ม แล้วกด Enter</td></tr>
+<tr><td><b>Ctrl+F</b></td><td>ไปที่ช่องค้นหาของหน้านี้</td></tr>
+<tr><td><b>Ctrl+0</b></td><td>ภาพรวม / เริ่มงาน</td></tr>
+<tr><td><b>Ctrl+1 … Ctrl+6</b></td><td>ขั้นตอนงาน ① – ⑥</td></tr>
+<tr><td><b>Ctrl+Enter</b></td><td>ทำขั้นต่อไป</td></tr>
+<tr><td><b>Ctrl+N / Ctrl+O / Ctrl+S</b></td><td>งานใหม่ / เปิด / บันทึก</td></tr>
+<tr><td><b>F1</b></td><td>หน้านี้</td></tr>
+</table>
+<p>ในตาราง: คลิก / Shift / Ctrl เลือกหลายแถว · ดับเบิลคลิกเพื่อแก้ · เอาเมาส์ชี้ปุ่มเพื่อดูคำอธิบาย</p>"""
 
 
 class MainWindow(QMainWindow):
@@ -76,6 +99,12 @@ class MainWindow(QMainWindow):
         sub.setWordWrap(True)
         sl.addWidget(brand)
         sl.addWidget(sub)
+        self.palette_btn = QPushButton("⌕   ค้นหาคำสั่ง…        Ctrl+K")
+        self.palette_btn.setObjectName("PaletteButton")
+        self.palette_btn.setCursor(Qt.PointingHandCursor)
+        self.palette_btn.setToolTip("พิมพ์ชื่อหน้า แท็บ หรือปุ่มที่ต้องการ แล้วกด Enter – ไม่ต้องจำว่าอยู่เมนูไหน")
+        self.palette_btn.clicked.connect(self.open_palette)
+        sl.addWidget(self.palette_btn)
         self.nav = QListWidget()
         self.nav.setObjectName("NavList")
         self.nav.setCursor(Qt.PointingHandCursor)
@@ -88,12 +117,14 @@ class MainWindow(QMainWindow):
                 font.setPointSizeF(max(7.0, font.pointSizeF() - 1))
                 font.setBold(True)
                 head.setFont(font)
-                head.setSizeHint(QSize(200, 30))
+                head.setSizeHint(QSize(200, 24))
                 self.nav.addItem(head)
             for key, label in entries:
                 item = QListWidgetItem(label)
                 item.setData(Qt.UserRole, key)
-                item.setSizeHint(QSize(200, 42))
+                item.setSizeHint(QSize(200, 35))  # all 11 fit a 1366 x 768 screen without scrolling
+                if key in STEP_KEYS:
+                    item.setToolTip(f"{label.split('   ', 1)[-1]}  (Ctrl+{STEP_KEYS.index(key)})")
                 self.nav.addItem(item)
         sl.addWidget(self.nav, 1)
         self.foot = QLabel(f"v{__version__}")
@@ -131,7 +162,8 @@ class MainWindow(QMainWindow):
         self.go("dashboard")
 
         self._build_menu()
-        self.statusBar().showMessage("พร้อมใช้งาน")
+        self._build_shortcuts()
+        self.statusBar().showMessage("พร้อมใช้งาน · Ctrl+K ค้นหาคำสั่ง · F1 วิธีใช้และปุ่มลัด")
         self.state.message.connect(lambda m: self.statusBar().showMessage(m, 8000))
         self.state.partlist_changed.connect(self._update_title)
         self._update_title()
@@ -151,6 +183,9 @@ class MainWindow(QMainWindow):
             act.setShortcut(key)
             act.triggered.connect(slot)
             file_menu.addAction(act)
+            if text == "เปิด…":
+                self.recent_menu = file_menu.addMenu("เปิดไฟล์ล่าสุด")
+                self.recent_menu.aboutToShow.connect(self._fill_recent)
         file_menu.addSeparator()
         imp = file_menu.addMenu("นำเข้า")
         imp.addAction("แบบ 2D ZWCAD (DWG/DXF)…", lambda: a.import_drawings())
@@ -215,7 +250,141 @@ class MainWindow(QMainWindow):
         quit_act.triggered.connect(self.close)
         file_menu.addAction(quit_act)
         help_menu = self.menuBar().addMenu("ช่วยเหลือ")
+        act = QAction("วิธีใช้ย่อ และปุ่มลัด", self)
+        act.setShortcut(QKeySequence("F1"))
+        act.triggered.connect(self.show_help)
+        help_menu.addAction(act)
+        act = QAction("ค้นหาคำสั่ง…", self)
+        act.setShortcut(QKeySequence("Ctrl+K"))
+        act.triggered.connect(self.open_palette)
+        help_menu.addAction(act)
+        help_menu.addSeparator()
         help_menu.addAction("เกี่ยวกับโปรแกรม", self._about)
+
+    def _build_shortcuts(self) -> None:
+        for n, key in enumerate(STEP_KEYS):
+            QShortcut(QKeySequence(f"Ctrl+{n}"), self, activated=lambda k=key: self.go(k))
+        QShortcut(QKeySequence.Find, self, activated=self.focus_search)
+
+    # ---- finding things: the command palette, the search box of a page, recent files, help ------
+    def commands(self) -> list[Command]:
+        """Every page, tab, menu command and button of the pages, for the command palette."""
+        out: list[Command] = []
+        titles = {key: label.split("   ", 1)[-1] for key, label in NAV}
+        for key, title in titles.items():
+            n = STEP_KEYS.index(key) if key in STEP_KEYS else -1
+            out.append(Command(f"ไปหน้า {title}", "หน้า", lambda k=key: self.go(k), f"Ctrl+{n}" if n >= 0 else ""))
+
+        def walk(menu, path):
+            for act in menu.actions():
+                if act.isSeparator() or not act.text():
+                    continue
+                text = act.text().replace("&&", "&")
+                if act.menu() is not None:
+                    walk(act.menu(), f"{path} › {text}")
+                elif menu is not self.recent_menu:
+                    out.append(Command(text.rstrip("…").strip(), f"เมนู {path}", act.trigger,
+                                       act.shortcut().toString(QKeySequence.NativeText)))
+
+        for act in self.menuBar().actions():
+            if act.menu() is not None:
+                walk(act.menu(), act.text())
+        seen = {(c.title, c.where) for c in out}
+        for key, page in self.pages.items():
+            tabs = getattr(page, "tabs", None)
+            tabs = tabs if isinstance(tabs, QTabWidget) else None
+            if tabs is not None:
+                for i in range(tabs.count()):
+                    name = tabs.tabText(i).replace("&&", "&")
+                    out.append(Command(name, f"แท็บในหน้า {titles[key]}",
+                                       lambda k=key, t=tabs, i=i: (self.go(k), t.setCurrentIndex(i))))
+            for btn in page.findChildren(QPushButton):
+                text = btn.text().replace("&&", "&").strip()
+                if not text or btn.objectName() in ("Step", "Stepper") or text.startswith("ไป ›") or len(text) < 3:
+                    continue
+                tab = next((i for i in range(tabs.count()) if tabs.widget(i).isAncestorOf(btn)), -1) if tabs else -1
+                where = f"หน้า {titles[key]}" + (f" › {tabs.tabText(tab).replace('&&', '&')}" if tab >= 0 else "")
+                if btn.menu() is not None:
+                    for act in btn.menu().actions():
+                        if act.text() and not act.isSeparator() and (act.text(), where) not in seen:
+                            seen.add((act.text(), where))
+                            out.append(Command(act.text().rstrip("…").strip(), f"{text.rstrip(' ▾')} · {where}",
+                                               lambda k=key, t=tabs, i=tab, a=act: self._run_button(k, t, i, a)))
+                    continue
+                title = text.rstrip("…").strip()
+                tip = btn.toolTip().split("\n", 1)[0]
+                if (title, where) in seen:
+                    continue
+                seen.add((title, where))
+                out.append(Command(title, where, lambda k=key, t=tabs, i=tab, b=btn: self._run_button(k, t, i, b),
+                                   detail=tip))
+        return out
+
+    def _run_button(self, key: str, tabs, index: int, target) -> None:
+        self.go(key)
+        if tabs is not None and index >= 0:
+            tabs.setCurrentIndex(index)
+        if isinstance(target, QAction):
+            target.trigger()
+        elif target.isEnabled():
+            target.click()
+        else:
+            self.state.notify(f"“{target.text()}” ยังกดไม่ได้ – " + (target.toolTip() or "เลือกแถวหรือเตรียมข้อมูลก่อน"))
+
+    def open_palette(self) -> None:
+        palette = CommandPalette(self.commands(), self)
+        if palette.exec() and palette.chosen is not None:
+            QTimer.singleShot(0, palette.chosen.run)  # after the palette is closed: dialogs open on top of the window
+
+    def focus_search(self) -> None:
+        """Ctrl+F: the search box of the page (and tab) on screen."""
+        page = self.pages.get(self.current_page())
+        if page is None:
+            return
+        for edit in page.findChildren(QLineEdit):
+            hint = edit.placeholderText()
+            if edit.isVisible() and ("ค้นหา" in hint or "สแกน" in hint):
+                edit.setFocus(Qt.ShortcutFocusReason)
+                edit.selectAll()
+                return
+        self.state.notify("หน้านี้ไม่มีช่องค้นหา – กด Ctrl+K เพื่อค้นหาคำสั่ง")
+
+    def _fill_recent(self) -> None:
+        self.recent_menu.clear()
+        files = self.actions.recent_files()
+        for path in files:
+            self.recent_menu.addAction(Path(path).name, lambda p=path: self.actions.open(p)).setToolTip(path)
+        if not files:
+            self.recent_menu.addAction("(ยังไม่มี)").setEnabled(False)
+
+    def help_box(self) -> QMessageBox:
+        box = QMessageBox(self)
+        box.setWindowTitle("วิธีใช้ย่อ และปุ่มลัด")
+        box.setTextFormat(Qt.RichText)
+        box.setText(HELP_TEXT)
+        box.setStyleSheet("QLabel { min-width: 640px; }")  # one line per step, not a narrow column
+        return box
+
+    def show_help(self) -> None:
+        self.help_box().exec()
+
+    # ---- the window as it was left: size, place, page -----------------------
+    def restore_session(self) -> None:
+        s = self.state.settings
+        geometry = s.q.value("window/geometry")
+        if geometry is None or not self.restoreGeometry(geometry):
+            screen = QGuiApplication.primaryScreen()
+            avail = screen.availableGeometry() if screen is not None else None
+            if avail is not None and (avail.width() < 1440 or avail.height() < 880):
+                self.setWindowState(Qt.WindowMaximized)  # a laptop screen: use all of it
+        page = s.get("window/page")
+        if page in self.pages:
+            self.go(page)
+
+    def save_session(self) -> None:
+        s = self.state.settings
+        s.set("window/geometry", self.saveGeometry())
+        s.set("window/page", self.current_page())
 
     def compare_revisions(self) -> None:
         CompareDialog(self.state, self.actions, self).exec()
@@ -291,6 +460,7 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):  # noqa: N802
         if self.actions.confirm_discard():
+            self.save_session()
             event.accept()
         else:
             event.ignore()

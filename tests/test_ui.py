@@ -964,3 +964,103 @@ def test_drawing_dialog_tick_all_and_many_rows(app):
     [(_d, parts)] = dialog.selected_parts()
     assert [p.part_no for p in parts] == ["RRS-T-005"]
     assert "เลือกแล้ว 1 รายการ" in dialog.summary.text()
+
+
+def test_command_palette_shortcuts_and_session(window, app, tmp_path):
+    """Ctrl+K finds every page, tab, menu command and button; Ctrl+0…6 go to the steps; the window comes back
+    on the page it was left; recent files."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+
+    from partlist_studio.core.models import Part
+    from partlist_studio.ui.palette import CommandPalette, rank
+
+    cmds = window.commands()
+    titles = {c.title for c in cmds}
+    assert {"ไปหน้า Part List", "Min / Max & เตือนสั่งซื้อ", "คำนวณแผนตัด", "บันทึก"} <= titles
+    assert rank(cmds, "min max")[0].title == "Min / Max & เตือนสั่งซื้อ"
+    rank(cmds, "min max")[0].run()
+    assert window.current_page() == "stock" and window.pages["stock"].tabs.currentIndex() == 2
+    google = [c for c in rank(cmds, "part list google") if c.title.startswith("⬆")]
+    assert google and "Part List" in google[0].detail
+    palette = CommandPalette(cmds, window)
+    palette.input.setText("คิวเลเซอร์")
+    assert palette.list.count() and palette.list.currentRow() == 0
+    QTest.keyClick(palette.input, Qt.Key_Down)
+    assert palette.list.currentRow() == 1
+    QTest.keyClick(palette.input, Qt.Key_Return)
+    assert palette.chosen is not None and palette.chosen.title == palette.list.item(1).data(Qt.UserRole).title
+
+    from PySide6.QtGui import QKeySequence, QShortcut
+
+    keys = {s.key().toString(): s for s in window.findChildren(QShortcut)}  # (a test window is never active)
+    keys["Ctrl+4"].activated.emit()
+    assert window.current_page() == "nesting"
+    keys["Ctrl+0"].activated.emit()
+    assert window.current_page() == "dashboard"
+    assert keys[QKeySequence(QKeySequence.Find).toString()] is not None
+
+    window.go("production")
+    window.save_session()
+    other = type(window)(window.state)
+    other.restore_session()
+    assert other.current_page() == "production"
+    other.state.dirty = False
+    other.deleteLater()
+
+    window.state.partlist.parts = [Part(part_no="RRS-T-001", name="เฟรมบน", qty=1)]
+    path = tmp_path / "job.rrspl"
+    window.state.path = str(path)
+    assert window.actions.save()
+    assert window.actions.recent_files() == [str(path)]
+    window._fill_recent()
+    assert [a.text() for a in window.recent_menu.actions()] == ["job.rrspl"]
+
+
+def test_stock_search_sort_and_small_screen_layouts(window, app):
+    """The stock list is searched and sorted without changing the stock; rows removed through the search are
+    the right ones; the laser queue buttons wait for a program; the drawing status boxes are kept."""
+    from PySide6.QtCore import Qt
+
+    from partlist_studio.core import dwg_io
+    from partlist_studio.core.stock import StockList
+    from partlist_studio.ui.widgets import FlowLayout
+
+    page = window.pages["stock"]
+    page.set_stock(StockList.from_file(SAMPLES / "store_stock.csv"), "store_stock.csv")
+    items = list(window.state.stock.items)
+    page.stock_search.setText("SUS")
+    shown = page.stock_proxy.rowCount()
+    assert 0 < shown < len(items) and page.source_label.text().startswith(f"พบ {shown} จาก {len(items)}")
+    code = page.stock_proxy.index(0, 0).data()
+    page.stock_view.selectRow(0)
+    page._remove_items()
+    assert code not in {i.code for i in window.state.stock.items}
+    assert len(window.state.stock.items) == len(items) - 1
+    page.stock_search.clear()
+    page.stock_view.sortByColumn(0, Qt.DescendingOrder)
+    codes = [page.stock_proxy.index(r, 0).data() for r in range(page.stock_proxy.rowCount())]
+    assert codes == sorted(codes, reverse=True)
+    assert [i.code for i in window.state.stock.items] == [i.code for i in items if i.code != code]  # untouched
+    assert page.tabs.tabText(2) == "Min / Max && เตือนสั่งซื้อ"  # shows as one '&', not an underlined letter
+
+    nest = window.pages["nesting"]
+    assert all(not b.isEnabled() for b in nest._queue_one)  # nothing in the queue: nothing to act on
+
+    box = QtWidgets.QWidget()
+    flow = FlowLayout(box)
+    for _ in range(6):
+        b = QtWidgets.QPushButton("ปุ่มทดสอบยาว ๆ")
+        b.setFixedWidth(150)
+        flow.addWidget(b)
+    assert flow.heightForWidth(400) > flow.heightForWidth(1200)  # wraps on a narrow window
+
+    data = dwg_io.read_drawing(SAMPLES / "RRS-T-SET_frame_parts.dxf")
+    window.state.partlist.drawings.append(dwg_io.drawing_record(data, 5, []))
+    drawings = window.pages["drawings"]
+    drawings.refresh()
+    combo = drawings.table.cellWidget(0, drawings.table.columnCount() - 1)
+    drawings.refresh()
+    assert drawings.table.cellWidget(0, drawings.table.columnCount() - 1) is combo  # kept, not stacked up
+    combo.setCurrentText("อนุมัติแล้ว")
+    assert window.state.partlist.drawings[0].status == "อนุมัติแล้ว"

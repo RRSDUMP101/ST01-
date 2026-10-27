@@ -45,13 +45,13 @@ class SettingsPage(QWidget):
         self.conv_path.setPlaceholderText("ว่างไว้ = ค้นหาอัตโนมัติในตำแหน่งติดตั้งมาตรฐาน")
         self.conv_path.editingFinished.connect(self._save_conv)
         row.addWidget(self.conv_path, 1)
-        b = button("เลือก…")
+        b = button("เลือก…", tooltip="เลือกไฟล์ ODAFileConverter หรือ dwg2dxf ที่ติดตั้งไว้")
         b.clicked.connect(self._browse)
         row.addWidget(b)
-        b = button("ค้นหาอัตโนมัติ")
+        b = button("ค้นหาอัตโนมัติ", tooltip="หาโปรแกรมแปลง DWG ในตำแหน่งติดตั้งมาตรฐาน")
         b.clicked.connect(self._auto)
         row.addWidget(b)
-        b = button("ดาวน์โหลด ODA File Converter")
+        b = button("ดาวน์โหลด ODA File Converter", tooltip="เปิดหน้าดาวน์โหลด (ฟรี) ในเบราว์เซอร์")
         b.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(ODA_URL)))
         row.addWidget(b)
         conv.body.addLayout(row)
@@ -121,9 +121,10 @@ class SettingsPage(QWidget):
         self.table.itemChanged.connect(self._save_densities)
         dens.body.addWidget(self.table)
         row = QHBoxLayout()
-        for text, slot in (("+ เพิ่มวัสดุ", self._add_density), ("ลบที่เลือก", self._remove_density),
-                           ("คืนค่าเริ่มต้น", self._reset_densities)):
-            b = button(text)
+        for text, slot, tip in (("+ เพิ่มวัสดุ", self._add_density, "เพิ่มวัสดุ แล้วพิมพ์ชื่อ (ขึ้นต้นด้วย) และ kg/dm³"),
+                                ("ลบที่เลือก", self._remove_density, "ลบวัสดุที่เลือก"),
+                                ("คืนค่าเริ่มต้น", self._reset_densities, "กลับไปใช้ค่าความหนาแน่นมาตรฐานทุกวัสดุ")):
+            b = button(text, tooltip=tip)
             b.clicked.connect(slot)
             row.addWidget(b)
         row.addStretch(1)

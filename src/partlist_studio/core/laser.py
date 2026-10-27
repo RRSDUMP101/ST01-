@@ -433,7 +433,9 @@ def demand_from_jobs(jobs, library: FlatLibrary, programs: list[CutProgram] | No
             left = p.to_make - p.done_at(CUT_STEP) - planned.get(key, 0)
             if left <= 0:
                 continue
-            flat = library.get(p.code, xref_lookup)
+            # the flat pattern is kept under the code of the drawing; the job part may carry its stock code
+            flat = (library.get(p.drawing_code, xref_lookup) if p.drawing_code else None) or library.get(
+                p.code, xref_lookup)
             if flat is None or not flat.outline:
                 out.missing.append((job.job_no, p.code, p.name, left, "ไม่มีรูปคลี่ในคลัง (นำเข้าแบบ DWG ของชิ้นนี้)"))
                 continue

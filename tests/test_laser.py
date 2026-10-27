@@ -346,3 +346,18 @@ def test_plan_sheet_size_chosen_or_added_by_hand():
     _, doc = laser.apply_cut(prog, 1, [], ledger, "ช่าง")
     line = doc.lines[0]
     assert line.name == "แผ่นSS400 3มม. 1500x3000 (เพิ่มเอง: สั่งซื้อ)" and "เลือกรหัสแผ่น" in doc.remark
+
+
+def test_demand_finds_the_flat_of_a_part_tied_to_a_stock_code(set_parts):
+    """After the stock check a Part List row carries its stock code (RRS-A-001-250): the job made from it still
+    cuts the flat pattern of its drawing code."""
+    lib = laser.FlatLibrary()
+    lib.add_parts(set_parts)
+    part = next(p for p in set_parts if p.part_no == "RRS-T-001")
+    tied = Part(part_no=part.part_no, name=part.name, stock_code="RRS-A-001-250", qty=1, thickness=part.thickness,
+                material=part.material)
+    job = production.job_from_parts("SO-T", [tied], 2, None, False)
+    assert (job.parts[0].code, job.parts[0].drawing_code) == ("RRS-A-001-250", "RRS-T-001")
+    demand = laser.demand_from_jobs([job], lib)
+    assert not demand.missing and [p.code for p in demand.parts] == ["RRS-A-001-250"]
+    assert demand.parts[0].outline == lib.get("RRS-T-001").outline

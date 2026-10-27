@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox, 
 
 from ...core import laser, nesting
 from ...core.nesting import Placement
-from ...core.stock import material_family
+from ...core.stock import find_by_code, material_family
 from .. import theme
 from ..state import AppState
 from ..widgets import Card, PageHeader, button, fill, selected_rows, table
@@ -776,7 +776,7 @@ class NestingPage(QWidget):
         plan_tools.addStretch(1)
         lay.addLayout(plan_tools)
         split = QSplitter(Qt.Vertical)
-        self.table = table(nesting.PLAN_HEADERS, [120, 70, 260, 110, 110, 80, 90, 70, 80, 60, 90, 300])
+        self.table = table(nesting.PLAN_HEADERS, [120, 70, 330, 110, 110, 80, 90, 70, 80, 60, 90, 300])
         self.table.itemSelectionChanged.connect(self._selected)
         split.addWidget(self.table)
         self.view = SheetView()
@@ -943,6 +943,7 @@ class NestingPage(QWidget):
     def _clear_plan(self, text: str) -> None:
         self.groups, self.issues, self.demand = [], [], None
         self._show_checks()
+        self._drop_sheet_boxes()
         fill(self.table, [])
         self.view.show_group(None)
         self.make_btn.setEnabled(False)
@@ -995,6 +996,7 @@ class NestingPage(QWidget):
         for g in self.groups:
             self._row_group += [g] * max(1, len(g.sheet_counts()))
         fill(self.table, rows)
+        self._sheet_boxes()
         sheets = sum(len(g.sheets) for g in self.groups)
         by_weight = sum(g.by_weight for g in self.groups)
         area = sum(g.sheet_area for g in self.groups)
@@ -1042,39 +1044,82 @@ class NestingPage(QWidget):
         self.fill_plan_btn.setEnabled(bool(rows))
         self._show_sheet_choice(group)
 
-    def _show_sheet_choice(self, group: nesting.NestGroup | None) -> None:
-        """The sheet sizes the selected material/thickness can be cut from: in stock (with the balance) and added
-        by hand; the one in use is selected."""
-        box = self.sheet_choice
+    def _sheet_label(self, option: tuple) -> str:
+        """'01-B00 -0003 เหล็กแผ่นดำ 2.5 มม.4x8ฟุต · 1219 x 2440 · คงเหลือ 6 แผ่น'."""
+        w, h, code, name = option
+        item = find_by_code(code, self.state.stock) if code else None
+        where = (f"คงเหลือ {item.on_hand:g} {item.unit_name or 'แผ่น'}" if item is not None
+                 else "เพิ่มเอง" if name.startswith(nesting.CUSTOM) else "ขนาดมาตรฐาน (ไม่มีในสต็อก)")
+        label = " ".join(x for x in (code, name.split(": ", 1)[-1]) if x)
+        return f"{label} · {w:.0f} x {h:.0f} มม. · {where}"
+
+    def _fill_sheet_box(self, box: QComboBox, group: nesting.NestGroup | None, in_table: bool = False) -> None:
+        """The sheets the material/thickness can be cut from - each plate of the steel stock (with its balance),
+        the sizes added by hand and the standard sizes; the one in use is selected."""
         box.blockSignals(True)
         box.clear()
         if group is not None:
-            box.addItem("อัตโนมัติ – ขนาดที่ใช้เหล็กน้อยที่สุด", None)
-            for w, h, code, name in group.options:
-                item = next((i for i in self.state.stock.items if code and i.code == code), None)
-                where = (f"สต็อก คงเหลือ {item.on_hand:g} {item.unit or 'แผ่น'}" if item is not None
-                         else "เพิ่มเอง" if name.startswith(nesting.CUSTOM) else "ขนาดมาตรฐาน (ไม่มีในสต็อก)")
-                box.addItem(f"{w:.0f} x {h:.0f} มม. · {name.split(': ', 1)[-1]} · {where}", (w, h))
-            if group.chosen:
-                at = next((n for n in range(1, box.count()) if nesting.same_size(
-                    (*box.itemData(n), "", ""), (group.sheet_w, group.sheet_h))), 0)
+            used = next((o for o in group.options if o[2] and o[2] == group.sheet_code), None) or next(
+                (o for o in group.options if nesting.same_size(o, (group.sheet_w, group.sheet_h))), None)
+            auto = "อัตโนมัติ – ใช้เหล็กน้อยที่สุด"
+            if in_table and not group.chosen and used is not None:
+                auto = f"{used[3].split(': ', 1)[-1]} (อัตโนมัติ)"
+            box.addItem(auto, None)
+            for option in group.options:
+                box.addItem(self._sheet_label(option), (option[0], option[1], option[2]))
+            if group.chosen and used is not None:
+                at = next((n for n in range(1, box.count()) if box.itemData(n)[2] == used[2]
+                           and nesting.same_size(box.itemData(n), used)), 0)
                 box.setCurrentIndex(at)
+            box.setToolTip("เลือกแผ่นเหล็กที่ใช้ตัดวัสดุ/ความหนานี้ – รายการจากสต็อกเหล็ก (รหัส · ขนาด · คงเหลือ) "
+                           "ขนาดที่เพิ่มเอง และขนาดมาตรฐาน · อัตโนมัติ = แผ่นที่ใช้เหล็กน้อยที่สุด")
         box.setEnabled(group is not None)
         box.blockSignals(False)
 
+    def _sheet_boxes(self) -> None:
+        """A drop-down in the แผ่นที่ใช้ column of the first row of every material/thickness."""
+        col = self._drop_sheet_boxes()
+        row = 0
+        for group in self.groups:
+            box = QComboBox()
+            box.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+            box.view().setMinimumWidth(560)
+            self._fill_sheet_box(box, group, in_table=True)
+            box.activated.connect(lambda i, b=box, key=group.key: self._sheet_picked(key, b.itemData(i)))
+            self.table.setCellWidget(row, col, box)
+            row += max(1, len(group.sheet_counts()))
+
+    def _drop_sheet_boxes(self) -> int:
+        """Take the drop-downs of the last plan out of the table (hidden at once: Qt deletes them later)."""
+        col = nesting.PLAN_HEADERS.index("แผ่นที่ใช้")
+        for r in range(self.table.rowCount()):
+            box = self.table.cellWidget(r, col)
+            if box is not None:
+                box.hide()
+                self.table.removeCellWidget(r, col)
+        return col
+
+    def _show_sheet_choice(self, group: nesting.NestGroup | None) -> None:
+        self._fill_sheet_box(self.sheet_choice, group)
+
     def _sheet_chosen(self, index: int) -> None:
         group = self._group()
-        if group is None or self.demand is None:
+        if group is not None:
+            self._sheet_picked(group.key, self.sheet_choice.itemData(index))
+
+    def _sheet_picked(self, key: tuple[str, float], sheet: tuple | None) -> None:
+        """A sheet picked for one material/thickness (None = automatic): lay out that plan again."""
+        if self.demand is None:
             return
-        size = self.sheet_choice.itemData(index)
-        if size is None:
-            self.sheet_chosen.pop(group.key, None)
+        if sheet is None:
+            self.sheet_chosen.pop(key, None)
         else:
-            self.sheet_chosen[group.key] = size
-        self._lay_out(self.laser_params(), group.key)
-        new = next((g for g in self.groups if g.key == group.key), None)
+            self.sheet_chosen[key] = tuple(sheet)
+        self._lay_out(self.laser_params(), key)
+        new = next((g for g in self.groups if g.key == key), None)
         if new is not None:
-            self.state.notify(f"{new.family} หนา {new.thickness:g} มม.: ใช้แผ่น {new.sheet_w:.0f}x{new.sheet_h:.0f} "
+            name = " ".join(x for x in (new.sheet_code, new.sheet_name.split(": ", 1)[-1]) if x)
+            self.state.notify(f"{new.family} หนา {new.thickness:g} มม.: ใช้ {name} ({new.sheet_w:.0f}x{new.sheet_h:.0f}) "
                               f"{len(new.sheets)} แผ่น · ใช้เนื้อเหล็ก {new.utilization:.0%}"
                               + (" (เลือกเอง)" if new.chosen else " (อัตโนมัติ)"))
 

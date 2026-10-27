@@ -23,6 +23,7 @@ from ..table_models import RequirementModel, StockTableModel
 from ..widgets import PageHeader, StatusChipRow, button, fill, selected_rows, table
 from .parts_ready import PartsReadyTab
 from .replenish import ReplenishTab
+from .steel import SteelTab
 
 
 def _table(model) -> QTableView:
@@ -186,6 +187,8 @@ class StockPage(QWidget):
         self.tabs.addTab(self.replenish, "Min / Max & เตือนสั่งซื้อ")
         self.ready = PartsReadyTab(state, actions)
         self.tabs.addTab(self.ready, "ชิ้นส่วนพร้อมประกอบ (แยกกลุ่ม)")
+        self.steel = SteelTab(state, actions)
+        self.tabs.addTab(self.steel, "สต็อกเหล็ก")
 
         state.stock_changed.connect(self._stock_replaced)
         state.partlist_changed.connect(self._sync_build)

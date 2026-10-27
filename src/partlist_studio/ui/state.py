@@ -133,6 +133,20 @@ class Settings:
         self.set("laser/custom_sheets", json.dumps([list(r) for r in rows], ensure_ascii=False))
 
 
+_FILL_EXTRA = ("width_mm", "length_mm", "count_code", "category_name", "item_kind")
+
+
+def _fill_item(item: StockItem, other: StockItem) -> None:
+    """What `item` lacks of the master data (material, thickness, plate size, stock-count code) from `other`."""
+    if not item.material and other.material:
+        item.material = other.material
+    if not item.spec and other.spec:
+        item.spec = other.spec
+    for key in _FILL_EXTRA:
+        if key in other.extra and key not in item.extra:
+            item.extra[key] = other.extra[key]
+
+
 class AppState(QObject):
     partlist_changed = Signal()  # rows or job info changed
     partlist_replaced = Signal()  # a different document was opened
@@ -223,15 +237,26 @@ class AppState(QObject):
         (self.data_dir() / "library.json").write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
 
     def _merge_stock(self) -> None:
-        items: list[StockItem] = []
-        seen: set[str] = set()
+        """One item per code over the active sources, the first source first. A list without balances (the steel
+        register, an item list) gives way to a later source that has the balance of the same code, and what one
+        of them lacks (material, thickness, plate size, stock-count code) is filled in from the other."""
+        kept: dict[str, tuple[StockItem, bool]] = {}
+        order: list[str] = []
         for name in self.active_sources:
-            for item in self.stock_sources[name].items:
+            source = self.stock_sources[name]
+            for item in source.items:
                 key = _key(item.code) or "#" + _key(item.name)
-                if key in seen:
+                if key not in kept:
+                    kept[key] = (item, source.has_quantities)
+                    order.append(key)
                     continue
-                seen.add(key)
-                items.append(item)
+                first, counted = kept[key]
+                if not counted and source.has_quantities:
+                    _fill_item(item, first)
+                    kept[key] = (item, True)
+                else:
+                    _fill_item(first, item)
+        items = [kept[k][0] for k in order]
         self.stock = StockList(items=items, source=" + ".join(self.active_sources),
                                has_quantities=all(self.stock_sources[n].has_quantities for n in self.active_sources))
 

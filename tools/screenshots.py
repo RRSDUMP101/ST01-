@@ -209,7 +209,7 @@ def main() -> int:
     cut_page.run()
     cut_page.table.selectRow(2)
     box = cut_page.sheet_choice
-    at = next(i for i in range(box.count()) if box.itemData(i) == (1500, 3000))
+    at = next(i for i in range(box.count()) if (box.itemData(i) or (0, 0))[:2] == (1500, 3000))
     box.setCurrentIndex(at)
     cut_page._sheet_chosen(at)
     shot(w, "14i_laser_sheet_choice.png")
@@ -305,6 +305,29 @@ def main() -> int:
     compare.show()
     shot(compare, "17_compare_rev.png")
     compare.close()
+    # ---- สต็อกเหล็ก: the steel register with the balance of the stock, and the plate picked in the laser plan
+    from partlist_studio.core import steel as steel_mod
+
+    register = steel_mod.read_register(samples / "steel_stock_sample.xlsx")
+    for k, item in enumerate(register.items):
+        item.on_hand, item.min_qty = (k * 7) % 11, 2 if item.is_sheet else 0
+    register.has_quantities = True
+    state.add_stock_source("สต็อกเหล็ก: steel_stock_sample.xlsx", register)
+    w.go("stock")
+    w.pages["stock"].tabs.setCurrentIndex(4)
+    w.pages["stock"].steel.refresh()
+    shot(w, "15c_steel_stock.png")
+    w.go("nesting")
+    state.jobs.append(production.job_from_parts("SO6910-017", frame_parts, 2, None, False, model="ชุดเฟรมกระบะ",
+                                                title="ชุดเฟรมกระบะ (แบบ RRS-T-SET)", customer="บจก. ขนส่งตัวอย่าง"))
+    state.save_jobs()
+    cut_page.source.setCurrentIndex(cut_page.source.findData("jobs"))
+    cut_page.tabs.setCurrentIndex(0)
+    cut_page.run()
+    cut_page.tabs.setCurrentIndex(0)
+    row = next((r for r, g in enumerate(cut_page._row_group) if g.thickness == 3), 0)
+    cut_page.table.selectRow(row)
+    shot(w, "14j_laser_sheet_dropdown.png")
     state.dirty = False
     w.state.settings.q.clear()
     return 0

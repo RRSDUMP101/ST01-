@@ -147,6 +147,38 @@ def left_right_pairs():
     doc.saveas(OUT / "RRS-T-LR_left_right_pairs.dxf")
 
 
+def steel_register():
+    """ไฟล์สต็อกเหล็ก: the steel register with the columns of the ทะเบียนสินค้า tab (thickness, width, length typed
+    in, no balances - those come from Express / the stock count)."""
+    import openpyxl
+
+    headers = ["รหัสสินค้า", "ชื่อสินค้า", "หมวด", "ชื่อหมวด", "กลุ่มรหัส", "ประเภท", "หน่วยย่อย", "หน่วยซื้อ", "หน่วยขาย",
+               "รหัสบ/ช", "ราคามาตรฐาน", "ผู้จัดจำหน่าย", "หมายเหตุ (Express)", "กลุ่มวัสดุ", "ความหนา (มม.)",
+               "กว้าง (มม.)", "ยาว (มม.)", "ความหนาแน่น (kg/dm³)", "น้ำหนัก/แผ่น (kg)", "รหัสนับสต็อก",
+               "ยอดคงเหลือ (นับสต็อก)", "หมายเหตุนับสต็อก", "ตรวจรหัส"]
+    rows = [  # code, name, family, thickness, width, length, unit
+        ("01-B00 -0101", "เหล็กแผ่นดำ 2 มม.4x8ฟุต(ตัวอย่าง)1219x2440", "STEEL", 2, 1219, 2440, "แผ่น"),
+        ("01-B00 -0102", "เหล็กแผ่นดำ 2.3มม. 4x8ฟุต(ตัวอย่าง)1219x2440", "STEEL", 2.3, 1219, 2440, "แผ่น"),
+        ("01-B00 -0103", "เหล็กแผ่นดำ 3 มม.4x8ฟุต(ตัวอย่าง)1219x2440", "STEEL", 3, 1219, 2440, "แผ่น"),
+        ("01-B00 -0104", "เหล็กแผ่นดำ 3มม. 4x2530(พื้นตัวอย่าง)", "STEEL", 3, 1219.2, 2530, "แผ่น"),
+        ("01-B00 -0105", "เหล็กแผ่นดำ 3มม.5x10ฟุต(ตัวอย่าง)1524x3050", "STEEL", 3, 1524, 3050, "แผ่น"),
+        ("01-B00 -0106", "เหล็กแผ่นดำ 4มม. 5x10ฟุต(ตัวอย่าง)1524x3050", "STEEL", 4, 1524, 3050, "แผ่น"),
+        ("07-B00 -0101", "เหล็กแผ่นตีนไก่ 3 มม.4x8(ตัวอย่าง)", "STEEL", 3, 1219.2, 2438.4, "แผ่น"),
+        ("03-S00 -0101", "แผ่นสแตนเลส 304 1.5มม. 4x8(ตัวอย่าง)", "SUS", 1.5, 1219.2, 2438.4, "แผ่น"),
+        ("02-A00 -0101", "แผ่นอลูมิเนียม 2มม. 4x8(ตัวอย่าง)", "AL", 2, 1219.2, 2438.4, "แผ่น"),
+        ("01-FB0 -0101", "FB เหล็กแบนแฟลตบาร์ 2นิ้ว 6มม.(ตัวอย่าง)", "STEEL", 6, None, None, "เส้น"),
+        ("07-B00 -0102", "เหล็กกล่องดำ 2*2\"หนา 2.3(ตัวอย่าง)", "STEEL", 2.3, None, None, "เส้น"),
+    ]
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "ทะเบียนสินค้า"
+    ws.append(headers)
+    for code, name, fam, thk, w, h, unit in rows:
+        ws.append([code, name, "21", "รายการเหล็กสำหรับผลิต (ตัวอย่าง)", code[:6], "วัตถุดิบ", unit, unit, unit, "ST01", 0,
+                   None, None, fam, thk, w, h, None, None, None, None, None, None])
+    wb.save(OUT / "steel_stock_sample.xlsx")
+
+
 def broken_lines():
     """A drawing sent before it was checked: corners that do not meet, a line past the corner, a line drawn twice,
     bend lines on the cut layer, the bend angle '90' left as text and as exploded lines, a centre mark on the
@@ -381,6 +413,7 @@ def main() -> int:
     side_panel()
     frame_set()
     left_right_pairs()
+    steel_register()
     broken_lines()
     assembly()
     zwcad_tableexport_csv()

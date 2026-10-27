@@ -44,7 +44,7 @@ STOCK_ALIASES: dict[str, list[str]] = {
              "รายการ", "ชื่อ"],
     "category": ["หมวด", "หมวดสินค้า", "กลุ่มสินค้า", "category"],
     "account_group": ["กลุ่มบัญชี", "กลุ่มบ/ช", "กลุ่มบัญชีส/ค", "กลุ่มบช", "account group"],
-    "material": ["material", "วัสดุ"],
+    "material": ["material", "วัสดุ", "กลุ่มวัสดุ"],
     "spec": ["spec", "size", "thickness", "ขนาด/ความหนา", "ขนาด", "ความหนา"],
     "unit": ["unit", "uom", "หน่วย", "หน่วยนับ", "หน่วยย่อย"],
     "on_hand": ["on hand", "balance", "stock", "qty", "คงเหลือ", "ยอดคงเหลือ", "จำนวนคงเหลือ", "จำนวน"],
@@ -55,6 +55,16 @@ STOCK_ALIASES: dict[str, list[str]] = {
     "shelf": ["ชั้นเก็บ", "shelf", "bin"],
     "remark": ["หมายเหตุ", "remark", "note", "สถานะ"],
 }
+# Columns of the item register (ฟอร์มทะเบียนสินค้า / ไฟล์สต็อกเหล็ก) kept with the item (StockItem.extra): the
+# plate size typed in the register, and the code the item has in the store's stock-count file.
+EXTRA_ALIASES: dict[str, list[str]] = {
+    "width_mm": ["กว้าง", "กว้าง (มม.)", "ความกว้าง", "width", "width (mm)"],
+    "length_mm": ["ยาว", "ยาว (มม.)", "ความยาว", "length", "length (mm)"],
+    "count_code": ["รหัสนับสต็อก", "รหัสนับสต๊อค", "count code"],
+    "category_name": ["ชื่อหมวด"],
+    "item_kind": ["ประเภท"],
+}
+_EXTRA_LOOKUP = {normalize(a): k for k, names in EXTRA_ALIASES.items() for a in names}
 # A count sheet: what was counted replaces the book balance when it is filled in.
 COUNTED_ALIASES = ["นับได้จริง", "นับจริง", "จำนวนนับได้", "ยอดนับจริง", "counted", "physical count"]
 _SUMMARY_ROWS = {"รวม", "รวมทั้งสิ้น", "ยอดรวม", "total", "grandtotal", "รวมทั้งหมด"}
@@ -182,6 +192,13 @@ class StockList:
                 re.sub(r"\s*\(.*?\)\s*", "", normalize(header)))  # "Minimum (pcs.)", "ยอดคงเหลือ (pcs.)"
             if key and key not in mapping.values():
                 mapping[idx] = key
+        extra_cols = {}
+        for idx, header in enumerate(rows[h]):
+            key = _EXTRA_LOOKUP.get(normalize(header)) or _EXTRA_LOOKUP.get(
+                re.sub(r"\s*\(.*?\)\s*", "", normalize(header)))
+            if key and idx not in mapping and key not in extra_cols.values():
+                extra_cols[idx] = key
+        qty_col = next((i for i, k in mapping.items() if k == "on_hand"), None)
         if "unit" not in mapping.values():
             # e.g. "Format Stock R1": the unit column is headed a second "ยอดคงเหลือ"
             width = max(len(r) for r in rows[h + 1:h + 60]) if rows[h + 1:] else 0
@@ -194,11 +211,19 @@ class StockList:
                     mapping[idx] = "unit"
                     break
         items = []
+        counted_any = False  # a balance in the file (a register without balances leaves them to other files)
         for row in rows[h + 1:]:
             item = StockItem()
             for idx, key in mapping.items():
                 if idx < len(row):
                     item.set(key, row[idx])
+            for idx, key in extra_cols.items():
+                value = row[idx] if idx < len(row) else None
+                if value is not None and str(value).strip() not in ("", "None"):
+                    item.extra[key] = to_number(value) if key.endswith("_mm") else str(value).strip()
+            if qty_col is not None and qty_col < len(row) and re.fullmatch(
+                    r"\s*-?[\d,]+(?:\.\d+)?\s*\S*\s*", str(row[qty_col] if row[qty_col] is not None else "")):
+                counted_any = True
             if not item.code and normalize(item.name).replace(" ", "") in _SUMMARY_ROWS:
                 continue  # the total line under the table
             if counted_col is not None and counted_col < len(row) and str(row[counted_col]).strip() != "":
@@ -207,7 +232,7 @@ class StockList:
             if item.code or item.name:
                 item.infer_from_name()
                 items.append(item)
-        return cls(items=items, source=source)
+        return cls(items=items, source=source, has_quantities=counted_any or counted_col is not None)
 
     @classmethod
     def from_file(cls, path: str | Path) -> StockList:
@@ -330,7 +355,8 @@ def sheet_size_mm(name: str) -> tuple[float, float] | None:
     """'1524x3050' -> (1524, 3050); '5x10ฟุต' -> (1524, 3048); '4x2530' -> (1219, 2530)."""
     match = re.search(r"(\d{3,4})\s*[xX×*]\s*(\d{3,4})", name or "")
     if not match:
-        match = re.search(r"(?<![\d.])(\d{1,2}(?:\.\d+)?)\s*[xX×*]\s*(\d{1,4})", name or "")
+        # '4x8ฟุต', 'มม.4*8' (a full stop after มม is not part of the number)
+        match = re.search(r"(?<!\d)(?<!\d\.)(\d{1,2}(?:\.\d+)?)\s*[xX×*]\s*(\d{1,4})", name or "")
     if not match:
         return None
     a, b = (float(v) for v in match.groups())
@@ -338,10 +364,18 @@ def sheet_size_mm(name: str) -> tuple[float, float] | None:
     return a, b
 
 
+def item_size_mm(item: StockItem) -> tuple[float, float] | None:
+    """Width x length of a plate: the register's กว้าง / ยาว (มม.) columns, else read from the name."""
+    w, h = to_number(item.extra.get("width_mm", 0)), to_number(item.extra.get("length_mm", 0))
+    if w > 0 and h > 0:
+        return w, h
+    return sheet_size_mm(item.name)
+
+
 def sheet_weight_kg(item: StockItem, densities: dict[str, float] | None = None) -> float:
     from .dwg_io import density_for, parse_thickness
 
-    size = sheet_size_mm(item.name)
+    size = item_size_mm(item)
     thk = parse_thickness(item.spec)
     if not size or not thk:
         return 0

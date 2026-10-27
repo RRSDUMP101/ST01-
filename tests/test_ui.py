@@ -783,13 +783,13 @@ def test_laser_sheet_size_choice_and_sizes_added_by_hand(window, app, monkeypatc
     assert state.settings.custom_sheets == [(1500.0, 3000.0, 0.0, "1500x3000"), (9000.0, 1500.0, 0.0, "ใหญ่เกินโต๊ะ")]
     group = page._group()
     assert group.thickness == 3 and any(o[:2] == (1500, 3000) for o in group.options)
-    at = next(i for i in range(box.count()) if box.itemData(i) == (1500, 3000))
+    at = next(i for i in range(box.count()) if (box.itemData(i) or (0, 0))[:2] == (1500, 3000))
     assert "เพิ่มเอง" in box.itemText(at)
     box.setCurrentIndex(at)
     page._sheet_chosen(at)
     group = page._group()
     assert group.thickness == 3 and group.chosen and {s.size for s in group.sheets} == {"1500x3000"}
-    assert box.currentIndex() == at and page.sheet_chosen[group.key] == (1500, 3000)
+    assert box.currentIndex() == at and page.sheet_chosen[group.key] == (1500, 3000, "")
     others = [g for g in page.groups if g.key != group.key]
     assert all(not g.chosen for g in others)  # only the selected thickness changes
     page._sheet_chosen(0)  # automatic again
@@ -826,3 +826,62 @@ def test_drawing_dialog_left_and_right(app):
     ears = [p for p in parts if p.part_no == "RRS-T-027"]
     assert [(p.name, p.qty, p.thickness) for p in ears] == [("หูช้าง (ซ้าย)", 1, 3), ("หูช้าง (ขวา)", 1, 3)]
     assert ears[0].drawing_box and ears[0].side_source.startswith(dwg_io.SIDE_FROM_LAYOUT)
+
+
+def test_steel_stock_tab_and_laser_sheet_dropdown(window, app, monkeypatch):
+    """สต็อกเหล็ก: the register gives the size, Express the balance (merged by code); counts become an AJ draft;
+    the laser plan picks the plate in a drop-down of its row."""
+    from partlist_studio.core import dwg_io, production
+    from partlist_studio.core.stock import StockItem, StockList
+    from partlist_studio.ui.pages import nesting as page_mod
+    from partlist_studio.ui.pages import steel as steel_page
+
+    state = window.state
+    express = StockList(items=[StockItem(code="01-B00 -0103", name="เหล็กแผ่นดำ 3 มม.4x8ฟุต", unit="แผ่น", on_hand=6)],
+                        source="express")
+    state.add_stock_source("Express: express.csv", express)
+    tab = window.pages["stock"].steel
+    tab.import_file(str(SAMPLES / "steel_stock_sample.xlsx"))
+    merged = next(i for i in state.stock.items if i.code == "01-B00 -0103")
+    assert merged is express.items[0] and merged.on_hand == 6  # the balance of Express …
+    assert merged.extra["width_mm"] == 1219 and merged.material == "STEEL"  # … with the size of the register
+    line = next(s for s in tab.lines if s.item is merged)
+    assert line.counted and line.status == "พอ" and line.source == "Express: express.csv"
+    other = next(s for s in tab.lines if s.item.code == "01-B00 -0105")
+    assert not other.counted and other.status == "ยังไม่มียอด"
+    tab.kind.setCurrentIndex(list(steel_page.KINDS).index("เหล็กแผ่น"))
+    assert tab.table.rowCount() == 9
+    tab.search.setText("5x10")
+    assert {tab.table.item(r, 0).text() for r in range(tab.table.rowCount())} == {"01-B00 -0105", "01-B00 -0106"}
+    tab.search.clear()
+    row = next(r for r, s in enumerate(tab._shown) if s.item.code == "01-B00 -0105")
+    tab.table.selectRow(row)
+    monkeypatch.setattr(steel_page.QtyDialog, "exec", lambda d: (d.spins[0].setValue(4), 1)[1])
+    tab.make_doc("AJ")
+    doc = state.ledger.docs[-1]
+    assert (doc.doc_type, doc.status, doc.lines[0].code, doc.lines[0].qty) == ("AJ", "ร่าง", "01-B00 -0105", 4)
+    state.post_doc(doc)
+    assert next(s for s in tab.lines if s.item.code == "01-B00 -0105").on_hand == 4  # counted: a balance now
+
+    # laser plan: a drop-down in the แผ่นที่ใช้ column of the 3 mm row
+    data = dwg_io.read_drawing(SAMPLES / "RRS-T-SET_frame_parts.dxf")
+    parts = [c.part for c in dwg_io.drawing_to_candidates(data)]
+    state.flats.add_parts(parts)
+    state.jobs.append(production.job_from_parts("SO6910-030", parts, 2, None, False))
+    state.save_jobs()
+    page = window.pages["nesting"]
+    page.source.setCurrentIndex(page.source.findData(page_mod.SRC_JOBS))
+    page.run()
+    row = next(r for r, g in enumerate(page._row_group) if g.thickness == 3)
+    col = page_mod.nesting.PLAN_HEADERS.index("แผ่นที่ใช้")
+    box = page.table.cellWidget(row, col)
+    assert box is not None and box.currentIndex() == 0 and "(อัตโนมัติ)" in box.currentText()
+    labels = [box.itemText(i) for i in range(box.count())]
+    assert any(t.startswith("01-B00 -0103 ") and "คงเหลือ 6 แผ่น" in t for t in labels)
+    at = next(i for i in range(box.count()) if (box.itemData(i) or ("", "", ""))[2] == "01-B00 -0105")
+    box.setCurrentIndex(at)
+    box.activated.emit(at)
+    group = next(g for g in page.groups if g.thickness == 3)
+    assert group.chosen and group.sheet_code == "01-B00 -0105" and page.sheet_chosen[group.key][2] == "01-B00 -0105"
+    new_box = page.table.cellWidget(page._row_group.index(group), col)
+    assert new_box.itemData(new_box.currentIndex())[2] == "01-B00 -0105"

@@ -21,10 +21,12 @@ from pathlib import Path
 from .cad_fix import convex_hull
 from .dwg_io import density_for, parse_thickness
 from .models import Part, PartList
-from .stock import StockList, material_family, sheet_size_mm
+from .stock import StockList, _key, item_size_mm, material_family
 
 DEFAULT_SHEETS = [(1219.0, 2440.0, "", "4x8 ฟุต"), (1524.0, 3048.0, "", "5x10 ฟุต")]
 CUSTOM = "เพิ่มเอง"  # name of a sheet size added by hand
+# plates that are another product of the same thickness: chosen by hand only, never by the plan itself
+SPECIAL_SHEET_WORDS = ("ตะแกรง", "ตีนไก่", "ตีนเป็ด", "เจาะรู", "ลูกฟูก", "กันลื่น")
 
 
 @dataclass
@@ -371,22 +373,31 @@ def best_orientation(part: NestPart, min_gain: float = 0.03) -> NestPart:
 
 
 def sheet_options(stock: StockList, family: str, thickness: float) -> list[tuple[float, float, str, str]]:
-    """(width, length, code, name) of the sheets in stock with this material family and thickness."""
+    """(width, length, code, name) of the sheets in stock with this material family and thickness: every item
+    with a code (two items of one size are two choices, the one with more on hand first); a sheet without a code
+    (the สต๊อกเหล็ก tab of the company file) only when no coded item has its size (3048 vs 3050 is one size)."""
     out = []
     for item in stock.items:
         if not item.is_sheet:
             continue
         if material_family(item.material or item.name) != family or parse_thickness(item.spec) != thickness:
             continue
-        size = sheet_size_mm(item.name)
+        size = item_size_mm(item)
         if size:
             w, h = sorted(size)
-            out.append((w, h, item.code, item.name))
-    # the same size from two sources (Express + สต๊อกเหล็ก, 3048 vs 3050): keep one, the one with a code
-    best: dict[tuple[int, int], tuple[float, float, str, str]] = {}
-    for opt in sorted(out, key=lambda o: not o[2]):
-        best.setdefault((round(opt[0] / 10), round(opt[1] / 10)), opt)
-    return list(best.values())
+            out.append((w, h, item.code, item.name, item.on_hand))
+    out.sort(key=lambda o: (not o[2], -o[4]))
+    coded = {(round(o[0] / 10), round(o[1] / 10)) for o in out if o[2]}
+    seen: set = set()
+    kept = []
+    for w, h, code, name, _qty in out:
+        size_key = (round(w / 10), round(h / 10))
+        key = _key(code) if code else size_key
+        if key in seen or (not code and size_key in coded):
+            continue
+        seen.add(key)
+        kept.append((w, h, code, name))
+    return kept
 
 
 def custom_options(custom: list, thickness: float) -> list[tuple[float, float, str, str]]:
@@ -402,25 +413,48 @@ def custom_options(custom: list, thickness: float) -> list[tuple[float, float, s
 
 def group_options(stock: StockList, family: str, thickness: float,
                   custom: list | None = None) -> list[tuple[float, float, str, str]]:
-    """The sheet sizes a material/thickness can be cut from, smallest first: the plates in stock (none: the
-    standard 4x8 and 5x10 ฟุต) and the sizes added by hand. One size kept per size, the stock item first."""
-    options = (sheet_options(stock, family, thickness) or list(DEFAULT_SHEETS)) + custom_options(custom, thickness)
-    seen: dict[tuple[int, int], tuple[float, float, str, str]] = {}
-    for opt in options:
-        seen.setdefault((round(opt[0] / 10), round(opt[1] / 10)), opt)
-    return sorted(seen.values(), key=lambda o: o[0] * o[1])
+    """The sheets a material/thickness can be cut from, smallest first: the plates in stock - each item of the
+    steel stock with its code - (none: the standard 4x8 and 5x10 ฟุต) and the sizes added by hand that no stock
+    item has."""
+    stocked = sheet_options(stock, family, thickness) or list(DEFAULT_SHEETS)
+    sizes = {(round(o[0] / 10), round(o[1] / 10)) for o in stocked}
+    added = [o for o in custom_options(custom, thickness) if (round(o[0] / 10), round(o[1] / 10)) not in sizes]
+    seen: set = set()
+    options = []
+    for opt in added:
+        key = (round(opt[0] / 10), round(opt[1] / 10))
+        if key not in seen:
+            seen.add(key)
+            options.append(opt)
+    return sorted(stocked + options, key=lambda o: (is_special(o), o[0] * o[1]))
 
 
-def same_size(option: tuple, size: tuple[float, float]) -> bool:
-    w, h = sorted(size)
+def is_special(option: tuple) -> bool:
+    """A mesh, checker or perforated plate (ตะแกรง / ตีนไก่ / เจาะรู …): offered in the list, not picked by the plan."""
+    return any(w in option[3] for w in SPECIAL_SHEET_WORDS)
+
+
+def same_size(option: tuple, size: tuple) -> bool:
+    w, h = sorted(size[:2])
     return round(option[0] / 10) == round(w / 10) and round(option[1] / 10) == round(h / 10)
+
+
+def chosen_option(options: list[tuple], want: tuple) -> tuple | None:
+    """The option a person picked: want = (width, length) or (width, length, code) - the item of that code,
+    else the size."""
+    code = want[2] if len(want) > 2 else ""
+    if code:
+        found = next((o for o in options if o[2] and _key(o[2]) == _key(code)), None)
+        if found is not None:
+            return found
+    return next((o for o in options if same_size(o, want)), None)
 
 
 def plan(parts: list[NestPart], stock: StockList | None = None, params: NestParams | None = None,
          densities: dict[str, float] | None = None, custom: list | None = None,
-         chosen: dict[tuple[str, float], tuple[float, float]] | None = None) -> list[NestGroup]:
-    """custom: sheet sizes added by hand (custom_options) · chosen: (family, thickness) -> (width, length) the user
-    picked for that group, instead of the size with the least steel."""
+         chosen: dict[tuple[str, float], tuple] | None = None) -> list[NestGroup]:
+    """custom: sheet sizes added by hand (custom_options) · chosen: (family, thickness) -> (width, length) or
+    (width, length, stock code) the user picked for that group, instead of the sheet with the least steel."""
     params = params or NestParams()
     stock = stock or StockList()
     groups: dict[tuple[str, float], list[NestPart]] = {}
@@ -433,21 +467,27 @@ def plan(parts: list[NestPart], stock: StockList | None = None, params: NestPara
         gp = replace(params, gap=params.gap_for(thk))
         group = NestGroup(material=items[0].material, family=family, thickness=thk, parts=items, gap=gp.gap)
         options = group_options(stock, family, thk, custom)
-        primaries = options
+        plain = [o for o in options if not is_special(o)] or options
+        primaries = plain
         want = (chosen or {}).get((family, thk))
         if want:
-            pick = next((o for o in options if same_size(o, want)), None)
+            pick = chosen_option(options, want)
             if pick is None:  # a size typed for this plan
-                w, h = sorted(want)
+                w, h = sorted(want[:2])
                 pick = (float(w), float(h), "", f"{CUSTOM} {w:.0f}x{h:.0f}")
-                options = sorted(options + [pick], key=lambda o: o[0] * o[1])
+                options = sorted(options + [pick], key=lambda o: (is_special(o), o[0] * o[1]))
             primaries, group.chosen = [pick], True
         group.options = options
         best = None
+        tried: set = set()
         for primary in primaries:
+            size_key = (round(primary[0] / 10), round(primary[1] / 10))
+            if size_key in tried:
+                continue  # another item of a size already tried (the one with more on hand came first)
+            tried.add(size_key)
             sheets, left = _pack_on(items, list(range(len(items))), primary, gp)
             # parts too big for this size go on the smallest size they fit
-            for bigger in options:
+            for bigger in sorted(plain, key=lambda o: o[0] * o[1]):
                 if not left or bigger[0] * bigger[1] <= primary[0] * primary[1]:
                     continue
                 more, left = _pack_on(items, left, bigger, gp)

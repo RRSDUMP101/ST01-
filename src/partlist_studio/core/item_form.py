@@ -14,7 +14,7 @@ from pathlib import Path
 from .company_files import ModelBOM, base_code
 from .dwg_io import DEFAULT_DENSITIES, parse_thickness
 from .express import CODE_FAMILY_NAMES, code_family, item_kind
-from .stock import MATERIAL_FAMILIES, StockItem, StockList, _key, sheet_size_mm
+from .stock import MATERIAL_FAMILIES, StockItem, StockList, _key, item_size_mm
 from .xref import CodeXref
 
 MASTER = "ทะเบียนสินค้า"
@@ -116,7 +116,7 @@ def build_item_form(express: StockList, path: str | Path, counted: StockList | N
     for r, item in enumerate(express.items, start=2):
         x = item.extra
         fam = _family(item)
-        size = sheet_size_mm(item.name) if item.is_sheet else None
+        size = item_size_mm(item) if item.is_sheet else None
         thk = parse_thickness(item.spec) or None
         count_code = next((c for c in xref.lookup(item.code) if _key(c) in counted_by_code), "")
         values = [item.code, item.name, item.category, x.get("category_name", ""), code_family(item.code), None,

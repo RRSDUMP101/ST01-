@@ -66,11 +66,12 @@ class NestPart:
 @dataclass
 class Placement:
     part: int  # index in NestGroup.parts
-    x: float
+    x: float  # corner of the box around the placed piece (mm from the sheet corner)
     y: float
-    w: float
+    w: float  # size of that box
     h: float
-    rotated: bool
+    rotated: bool  # turned 90° (the plan's own placing)
+    angle: float = 0.0  # placed by hand at any angle (degrees, counter-clockwise); 0 = `rotated` says 0 or 90°
 
 
 @dataclass
@@ -571,7 +572,8 @@ def export_plan(groups: list[NestGroup], path: str | Path, params: NestParams, t
             for pl in s.placements:
                 p = g.parts[pl.part]
                 detail.append([f"{g.material} t{g.thickness:g}", n, p.code, p.name, round(pl.x), round(pl.y),
-                               round(pl.w), round(pl.h), "หมุน 90°" if pl.rotated else ""])
+                               round(pl.w), round(pl.h),
+                               f"หมุน {placement_angle(pl):g}°" if placement_angle(pl) else ""])
     head = [[title or "แผนตัดแผ่นเหล็กจากรูปคลี่"],
             ["ระยะห่างชิ้นงาน (มม.)", params.gap, "ขอบแผ่น (มม.)", params.margin,
              "วิธีวาง", "สี่เหลี่ยมล้อมรูป หมุน 90° ได้" if params.rotate else "สี่เหลี่ยมล้อมรูป ไม่หมุน"]]
@@ -617,6 +619,171 @@ def place_point(pt, part: NestPart, pl: Placement, x0: float, y0: float) -> tupl
     xs = [q[0] for q in (part.outline[0] if part.outline else [(0, 0)])]
     ys = [q[1] for q in (part.outline[0] if part.outline else [(0, 0)])]
     px, py = pt[0] - min(xs), pt[1] - min(ys)
+    if pl.angle % 360:  # any angle: turned about the box corner, then moved into the placed box
+        a = math.radians(pl.angle)
+        _w, _h, dx, dy = rotated_box(part, pl.angle)
+        rx = px * math.cos(a) - py * math.sin(a) - dx
+        ry = px * math.sin(a) + py * math.cos(a) - dy
+        return x0 + pl.x + rx, y0 + pl.y + ry
     if pl.rotated:  # 90° counter-clockwise inside the placed box
         px, py = part.height - py, px
     return x0 + pl.x + px, y0 + pl.y + py
+
+
+# --------------------------------------------------------------------------
+# Placing by hand: any angle, moved anywhere, checked against the edge and the other pieces
+# --------------------------------------------------------------------------
+def placement_angle(pl: Placement) -> float:
+    """The angle a piece is placed at, 0 … 360°."""
+    return pl.angle % 360 if pl.angle % 360 else (90.0 if pl.rotated else 0.0)
+
+
+def _outer(part: NestPart) -> list:
+    if part.outline:
+        return part.outline[0]
+    return [(0.0, 0.0), (part.width, 0.0), (part.width, part.height), (0.0, part.height)]
+
+
+def rotated_box(part: NestPart, angle: float) -> tuple[float, float, float, float]:
+    """(width, height, dx, dy): the box around the part's outline turned by `angle`° about its corner, and where
+    that box starts (kept on the part: a piece is drawn many times while it is dragged)."""
+    angle = round(angle % 360, 6)
+    cache = part.__dict__.setdefault("_turned", {})
+    hit = cache.get(angle)
+    if hit is None:
+        outer = _outer(part)
+        x0, y0 = min(q[0] for q in outer), min(q[1] for q in outer)
+        a = math.radians(angle)
+        c, s = math.cos(a), math.sin(a)
+        xs = [(x - x0) * c - (y - y0) * s for x, y in outer]
+        ys = [(x - x0) * s + (y - y0) * c for x, y in outer]
+        hit = tuple(round(v, 6) for v in (max(xs) - min(xs), max(ys) - min(ys), min(xs), min(ys)))
+        cache[angle] = hit
+    return hit
+
+
+def turn(pl: Placement, part: NestPart, angle: float) -> None:
+    """Turn a placed piece to `angle`° (any angle), about the middle of its box."""
+    angle = angle % 360
+    if abs(angle - round(angle)) < 1e-9:
+        angle = float(round(angle)) % 360
+    cx, cy = pl.x + pl.w / 2, pl.y + pl.h / 2
+    if angle == 90:
+        pl.rotated, pl.angle = True, 0.0
+    elif angle == 0:
+        pl.rotated, pl.angle = False, 0.0
+    else:
+        pl.rotated, pl.angle = False, angle
+    w, h, _dx, _dy = rotated_box(part, placement_angle(pl))
+    pl.w, pl.h = w, h
+    pl.x, pl.y = cx - w / 2, cy - h / 2
+
+
+def place_piece(sheet: SheetLayout, part_index: int, part: NestPart, cx: float, cy: float,
+                angle: float = 0.0) -> Placement:
+    """One piece put down by hand with the middle of its box at (cx, cy)."""
+    pl = Placement(part_index, cx - part.width / 2, cy - part.height / 2, part.width, part.height, False)
+    turn(pl, part, angle)
+    sheet.placements.append(pl)
+    return pl
+
+
+def placed_outline(part: NestPart, pl: Placement) -> list:
+    """The outer cut line of a placed piece in sheet coordinates."""
+    return [place_point(pt, part, pl, 0, 0) for pt in _outer(part)]
+
+
+def _too_close(a, b, gap: float) -> float | None:
+    """Two closed outlines: None when they are at least `gap` apart, else how close they are (0 = they touch or
+    overlap)."""
+    import numpy as np
+
+    pa, pb = np.asarray(a, float), np.asarray(b, float)
+    lo = np.maximum(pa.min(0), pb.min(0)) - gap
+    hi = np.minimum(pa.max(0), pb.max(0)) + gap
+    if (lo > hi).any():
+        return None
+
+    def edges(p):
+        q = np.roll(p, -1, axis=0)
+        keep = ~((np.maximum(p, q) < lo).any(1) | (np.minimum(p, q) > hi).any(1))
+        return p[keep], q[keep]
+
+    a0, a1 = edges(pa)
+    b0, b1 = edges(pb)
+    if _inside(pa[0], pb) or _inside(pb[0], pa):
+        return 0.0
+    if not len(a0) or not len(b0):
+        return None
+
+    def cross(o, p, q):
+        return (p[..., 0] - o[..., 0]) * (q[..., 1] - o[..., 1]) - (p[..., 1] - o[..., 1]) * (q[..., 0] - o[..., 0])
+
+    A0, A1 = a0[:, None, :], a1[:, None, :]
+    B0, B1 = b0[None, :, :], b1[None, :, :]
+    d1, d2 = cross(B0, B1, A0), cross(B0, B1, A1)
+    d3, d4 = cross(A0, A1, B0), cross(A0, A1, B1)
+    if ((d1 * d2 < 0) & (d3 * d4 < 0)).any():
+        return 0.0
+
+    def point_seg(p, s0, s1):  # every point of p to every segment s0-s1
+        d = s1 - s0
+        ln = (d ** 2).sum(-1)
+        t = np.clip(((p[:, None, :] - s0[None]) * d[None]).sum(-1) / np.where(ln > 0, ln, 1), 0, 1)
+        near = s0[None] + t[..., None] * d[None]
+        return np.sqrt(((p[:, None, :] - near) ** 2).sum(-1)).min()
+
+    dist = min(point_seg(a0, b0, b1), point_seg(b0, a0, a1))
+    return float(dist) if dist < gap - 1e-6 else None
+
+
+def _inside(pt, poly) -> bool:
+    x, y = float(pt[0]), float(pt[1])
+    inside = False
+    n = len(poly)
+    for i in range(n):
+        x1, y1 = poly[i]
+        x2, y2 = poly[(i + 1) % n]
+        if (y1 > y) != (y2 > y) and x < (x2 - x1) * (y - y1) / (y2 - y1) + x1:
+            inside = not inside
+    return inside
+
+
+OFF_SHEET, OVERLAP, TOO_CLOSE, NEAR_EDGE = "เกินขอบแผ่น", "ทับกัน", "ชิดกันเกิน", "ชิดขอบแผ่น"
+BLOCKING = (OFF_SHEET, OVERLAP)  # cannot be cut; the others only come closer than the plan would
+
+
+def layout_problems(sheet: SheetLayout, parts: list[NestPart], params: NestParams,
+                    only: int | None = None) -> dict[int, tuple[str, str]]:
+    """Pieces placed by hand that cannot be cut as they are: off the sheet (or inside the edge margin), on another
+    piece, or closer to another piece than the gap. index -> (problem, what). only: check that piece alone."""
+    outlines = [placed_outline(parts[pl.part], pl) for pl in sheet.placements]
+    out: dict[int, tuple[str, str]] = {}
+    m, gap = params.margin, params.gap
+    for i, loop in enumerate(outlines):
+        if only is not None and i != only:
+            continue
+        xs, ys = [q[0] for q in loop], [q[1] for q in loop]
+        if min(xs) < -1e-6 or min(ys) < -1e-6 or max(xs) > sheet.width + 1e-6 or max(ys) > sheet.height + 1e-6:
+            out[i] = (OFF_SHEET, "อยู่นอกแผ่น")
+        elif min(xs) < m - 0.05 or min(ys) < m - 0.05 or max(xs) > sheet.width - m + 0.05 or \
+                max(ys) > sheet.height - m + 0.05:
+            out[i] = (NEAR_EDGE, f"ชิดขอบแผ่นเกินระยะขอบ {m:g} มม.")
+    boxes = [(min(q[0] for q in o), min(q[1] for q in o), max(q[0] for q in o), max(q[1] for q in o)) for o in outlines]
+    for i in range(len(outlines)):
+        for j in range(i + 1, len(outlines)):
+            if only is not None and only not in (i, j):
+                continue
+            a, b = boxes[i], boxes[j]
+            if a[0] - gap > b[2] or b[0] - gap > a[2] or a[1] - gap > b[3] or b[1] - gap > a[3]:
+                continue  # far apart: no need to look at the outlines
+            d = _too_close(outlines[i], outlines[j], gap)
+            if d is None:
+                continue
+            kind = OVERLAP if d <= 1e-6 else TOO_CLOSE
+            for a, b in ((i, j), (j, i)):
+                code = parts[sheet.placements[b].part].code or parts[sheet.placements[b].part].name
+                text = f"ทับกับ {code}" if kind == OVERLAP else f"ห่าง {code} {d:.1f} มม. (ระยะห่าง {gap:g})"
+                if a not in out or out[a][0] not in BLOCKING:
+                    out[a] = (kind, text)
+    return out

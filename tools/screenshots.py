@@ -210,6 +210,10 @@ def main() -> int:
 
     sizes_dialog = SheetSizesDialog([(1500, 3000, 0, "สั่งซื้อได้"), (1524, 6096, 0, "5x20 ฟุต"),
                                      (1250, 2500, 3, "แผ่นไม่มีรหัส")], (2500, 8000), w)
+    sizes_dialog._add(1000, 1000, 0, "เศษแผ่น (พิมพ์เป็นฟุต)")
+    last = sizes_dialog.table.rowCount() - 1
+    sizes_dialog.table.item(last, 0).setText("4 ฟุต")  # converted to mm in the cell
+    sizes_dialog.table.item(last, 1).setText("6ft")
     sizes_dialog.show()
     shot(sizes_dialog, "14h_laser_sheet_sizes.png")
     state.settings.custom_sheets = sizes_dialog.rows()
@@ -352,6 +356,25 @@ def main() -> int:
     cut_page.table.selectRow(at + 1)  # the row of the part too big for the main sheet
     shot(w, "14k_laser_overflow_sheet.png")
     w.resize(1440, 860)
+    # ---- a sheet of a size added by hand laid out by hand: pieces added, moved and turned freely
+    from partlist_studio.ui.pages.sheet_editor import SheetEditor
+
+    nest = cut_page.laser_params().nest_params()
+    offcut = nest_mod.SheetLayout(1219.2, 1828.8, name=nest_mod.CUSTOM + ": เศษแผ่น 4x6 ฟุต")
+    flats = laser_mod.flats_for(state.flats, "STEEL", 3)
+    editor = SheetEditor("แผน Steel หนา 3 มม. · แผ่นเพิ่มเอง 1219x1829", [("แผ่นที่ 1 · 1219x1829", offcut)],
+                         [], flats, nest, True, w)
+    editor.flat_table.item(0, 0).setCheckState(Qt.Checked)
+    editor.flat_table.item(0, 2).setText("12")
+    editor.add_checked()  # automatically in the free space
+    for k, (x, y, angle) in enumerate(((300, 1300, 30), (650, 1350, 0), (950, 1250, 75))):
+        editor.pending = [editor.part_index(flats[0])]
+        editor.angle.setValue(angle)
+        editor.drop_at(x, y)  # by hand, at an angle
+    editor.items[-2].setSelected(True)
+    editor.show()
+    shot(editor, "14l_laser_layout_by_hand.png")
+    editor.close()
     # ---- finding things: the command palette (Ctrl+K) over the window, the help with the shortcuts (F1)
     from PySide6.QtGui import QPainter
 

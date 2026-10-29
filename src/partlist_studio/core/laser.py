@@ -554,7 +554,7 @@ class CutProgram:
     sheet_name: str = ""
     repeat: int = 1  # sheets laid out this same way
     items: dict = field(default_factory=dict)  # key -> {code, name, job, width, height, outline}
-    placements: list = field(default_factory=list)  # {key, x, y, w, h, rotated}
+    placements: list = field(default_factory=list)  # {key, x, y, w, h, rotated, angle}
     cut_length: float = 0  # one sheet, mm
     pierces: int = 0  # one sheet
     minutes: float = 0  # one sheet, cutting + travel + handling
@@ -652,7 +652,8 @@ class CutQueue:
 
 def _layout_signature(g: NestGroup, sheet) -> tuple:
     return (round(sheet.width), round(sheet.height),
-            tuple(sorted((g.parts[pl.part].key, round(pl.x), round(pl.y), pl.rotated) for pl in sheet.placements)))
+            tuple(sorted((g.parts[pl.part].key, round(pl.x), round(pl.y), pl.rotated, round(pl.angle, 2))
+                         for pl in sheet.placements)))
 
 
 def make_programs(groups: list[NestGroup], queue: CutQueue, params: LaserParams, source: str = "") -> list[CutProgram]:
@@ -673,12 +674,23 @@ def make_programs(groups: list[NestGroup], queue: CutQueue, params: LaserParams,
             for pl in sheet.placements:
                 p = g.parts[pl.part]
                 prog.items.setdefault(p.key, _program_item(p))
-                prog.placements.append({"key": p.key, "x": pl.x, "y": pl.y, "w": pl.w, "h": pl.h,
-                                        "rotated": pl.rotated})
+                prog.placements.append(_raw(p.key, pl))
             program_metrics(prog, params)
             out.append(prog)
     queue.programs.extend(out)
     return out
+
+
+def _raw(key: str, pl: Placement) -> dict:
+    raw = {"key": key, "x": pl.x, "y": pl.y, "w": pl.w, "h": pl.h, "rotated": pl.rotated}
+    if pl.angle % 360:
+        raw["angle"] = pl.angle
+    return raw
+
+
+def raw_placement(raw: dict, part: int = 0) -> Placement:
+    """A placement of a program (saved as a dict) as a Placement."""
+    return Placement(part, raw["x"], raw["y"], raw["w"], raw["h"], raw["rotated"], float(raw.get("angle", 0) or 0))
 
 
 def _program_item(p: NestPart) -> dict:
@@ -728,8 +740,7 @@ def program_sheet(prog: CutProgram) -> tuple[SheetLayout, list[str]]:
     for raw in prog.placements:
         if raw["key"] not in keys:
             keys.append(raw["key"])
-        sheet.placements.append(Placement(keys.index(raw["key"]), raw["x"], raw["y"], raw["w"], raw["h"],
-                                          raw["rotated"]))
+        sheet.placements.append(raw_placement(raw, keys.index(raw["key"])))
     return sheet, keys
 
 
@@ -750,11 +761,27 @@ def add_to_program(prog: CutProgram, part: NestPart, qty: int, params: LaserPara
     if placed:
         prog.items.setdefault(part.key, _program_item(part))
         for pl in sheet.placements[before:]:
-            prog.placements.append({"key": part.key, "x": pl.x, "y": pl.y, "w": pl.w, "h": pl.h,
-                                    "rotated": pl.rotated})
+            prog.placements.append(_raw(part.key, pl))
         program_metrics(prog, params)
         prog.note = (prog.note + " · " if prog.note else "") + f"เพิ่มเอง {part.code} × {placed}/แผ่น"
     return placed
+
+
+def set_program_layout(prog: CutProgram, sheet: SheetLayout, parts: list[NestPart], params: LaserParams) -> None:
+    """A program not cut yet laid out again by hand (pieces moved, turned, added or taken out): the same layout
+    on every sheet of the program."""
+    if prog.status != ST_WAIT or prog.cut_sheets:
+        raise ValueError("จัดวางใหม่ได้เฉพาะโปรแกรมที่ยังรอตัด")
+    items = {}
+    placements = []
+    for pl in sheet.placements:
+        part = parts[pl.part]
+        items.setdefault(part.key, prog.items.get(part.key) or _program_item(part))
+        placements.append(_raw(part.key, pl))
+    prog.items, prog.placements = items, placements
+    program_metrics(prog, params)
+    if "จัดวางเอง" not in prog.note:
+        prog.note = (prog.note + " · " if prog.note else "") + "จัดวางเอง"
 
 
 def apply_cut(prog: CutProgram, sheets: int, jobs, ledger: Ledger | None = None, operator: str = "",
@@ -960,7 +987,7 @@ def export_program_dxf(prog: CutProgram, path: str | Path, params: LaserParams) 
                            dxfattribs={"layer": "SHEET"})
     for raw in prog.placements:
         part = prog.nest_part(raw["key"])
-        pl = Placement(0, raw["x"], raw["y"], raw["w"], raw["h"], raw["rotated"])
+        pl = raw_placement(raw)
         outline = part.outline or _rect(part.width, part.height)
         if not part.outline:
             part.outline = outline
@@ -1021,7 +1048,7 @@ def program_png(prog: CutProgram, path: str | Path, width_px: int = 900, params:
 
     for raw in prog.placements:
         part = prog.nest_part(raw["key"])
-        pl = Placement(0, raw["x"], raw["y"], raw["w"], raw["h"], raw["rotated"])
+        pl = raw_placement(raw)
         outline = part.outline or _rect(part.width, part.height)
         if not part.outline:
             part.outline = outline

@@ -1064,3 +1064,87 @@ def test_stock_search_sort_and_small_screen_layouts(window, app):
     assert drawings.table.cellWidget(0, drawings.table.columnCount() - 1) is combo  # kept, not stacked up
     combo.setCurrentText("อนุมัติแล้ว")
     assert window.state.partlist.drawings[0].status == "อนุมัติแล้ว"
+
+
+def test_laser_layout_by_hand_on_sheet_sizes_added_by_hand(window, app, monkeypatch):
+    """แผ่นขนาดที่เพิ่มเอง: เพิ่มชิ้นลงที่ว่าง opens the layout editor - pieces added automatically or one by one by
+    hand, moved and turned to any angle; the plan and then the program take the layout. Sizes typed in feet."""
+    from PySide6.QtCore import Qt
+
+    from partlist_studio.core import dwg_io, laser, nesting, production
+    from partlist_studio.ui.pages import nesting as page_mod
+    from partlist_studio.ui.pages import sheet_editor
+
+    state = window.state
+    data = dwg_io.read_drawing(SAMPLES / "RRS-T-SET_frame_parts.dxf")
+    parts = [c.part for c in dwg_io.drawing_to_candidates(data)]
+    state.flats.add_parts(parts)
+    state.jobs.append(production.job_from_parts("SO6910-060", parts, 1, None, False))
+    state.save_jobs()
+
+    def sizes(dialog):  # 1000 x 4 ฟุต typed in feet: 1219.2 มม.
+        dialog._add(1000, 1000, 0, "เศษแผ่น")
+        dialog.table.item(dialog.table.rowCount() - 1, 1).setText("4 ฟุต")
+        assert dialog.table.item(dialog.table.rowCount() - 1, 4).text() == "3.28 x 4"
+        return 1
+
+    monkeypatch.setattr(page_mod.SheetSizesDialog, "exec", sizes)
+    page = window.pages["nesting"]
+    page.edit_sheet_sizes()
+    assert state.settings.custom_sheets[-1][:2] == (1000, 1219.2)
+    page.source.setCurrentIndex(page.source.findData(page_mod.SRC_JOBS))
+    page.run()
+    group = next(g for g in page.groups if g.thickness == 3)
+    custom = next(o for o in group.options if o[3].startswith(nesting.CUSTOM))
+    page._sheet_picked(group.key, (custom[0], custom[1], ""))
+    group = next(g for g in page.groups if g.key == group.key)
+    page.table.selectRow(page._row_group.index(group))
+    before = len(group.sheets[0].placements)
+
+    def lay_out(editor):
+        assert editor.flat_table.rowCount() and editor.ok.isEnabled()
+        editor.flat_table.item(0, 0).setCheckState(Qt.Checked)
+        editor.flat_table.item(0, 2).setText("2")
+        editor.add_checked()  # automatically, in the free space
+        assert len(editor.sheet.placements) == before + 2
+        editor.manual.setChecked(True)
+        editor.flat_table.item(0, 2).setText("1")
+        editor.add_checked()  # by hand: one click on the sheet
+        assert editor.pending
+        editor.drop_at(800, 1000)
+        new = editor.items[-1]
+        new.setSelected(True)
+        editor.angle.setValue(30)
+        editor._angle_typed()
+        assert editor.problems == {} and editor.ok.isEnabled()
+        editor.items[-1].setSelected(True)
+        editor.nudge(-800, 0)  # onto the other pieces / off the sheet: cannot be saved
+        assert editor.problems and not editor.ok.isEnabled()
+        editor.undo_last()
+        assert editor.ok.isEnabled()
+        return 1
+
+    monkeypatch.setattr(sheet_editor.SheetEditor, "exec", lay_out)
+    page.fill_plan()
+    group = next(g for g in page.groups if g.key == group.key)
+    placed = group.sheets[0].placements
+    assert len(placed) == before + 3
+    extra = [p for p in group.parts if p.key.startswith(laser.EXTRA_KEY)]
+    assert len(extra) == 1 and extra[0].qty == 3
+    assert nesting.placement_angle(placed[-1]) == 30 and (placed[-1].x + placed[-1].w / 2) == pytest.approx(800)
+
+    page.make_programs()
+    prog = next(p for p in state.cut_queue.programs if p.sheet_name.startswith(nesting.CUSTOM) and p.thickness == 3)
+    assert prog.placements[-1]["angle"] == 30 and prog.pieces == before + 3
+    page.programs.selectRow(page._programs.index(prog))
+
+    def turn_all(editor):
+        for item in editor.items:
+            item.setSelected(True)
+        editor.repack()  # every piece again automatically
+        assert all(nesting.placement_angle(p) in (0, 90) for p in editor.sheet.placements)
+        return 1
+
+    monkeypatch.setattr(sheet_editor.SheetEditor, "exec", turn_all)
+    page.fill_program()
+    assert all("angle" not in raw for raw in prog.placements) and "จัดวางเอง" in prog.note

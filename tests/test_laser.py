@@ -394,3 +394,65 @@ def test_demand_finds_the_flat_of_a_part_tied_to_a_stock_code(set_parts):
     demand = laser.demand_from_jobs([job], lib)
     assert not demand.missing and [p.code for p in demand.parts] == ["RRS-A-001-250"]
     assert demand.parts[0].outline == lib.get("RRS-T-001").outline
+
+
+def test_pieces_placed_by_hand_at_any_angle(tmp_path):
+    """จัดวางเอง: a piece turned to any angle keeps its middle; the outline, the program and its laser file are
+    turned the same way; pieces off the sheet, on another piece or closer than the gap are found."""
+    import ezdxf
+
+    square = [(0.0, 0.0), (200.0, 0.0), (200.0, 100.0), (0.0, 100.0)]
+    hole = [(90.0, 40.0), (110.0, 40.0), (110.0, 60.0), (90.0, 60.0)]
+    part = nesting.NestPart("extra:A", "RRS-X-1", "แผ่น", "SS400", 3, 200, 100, 0, outline=[square, hole])
+    sheet = nesting.SheetLayout(1000, 600, name=nesting.CUSTOM + ": เศษแผ่น")
+    pl = nesting.place_piece(sheet, 0, part, 300, 300)
+    assert (pl.x, pl.y, pl.w, pl.h) == (200, 250, 200, 100) and nesting.placement_angle(pl) == 0
+    nesting.turn(pl, part, 45)
+    assert pl.angle == 45 and not pl.rotated and (pl.x + pl.w / 2, pl.y + pl.h / 2) == pytest.approx((300, 300))
+    xs = [x for x, _ in nesting.placed_outline(part, pl)]
+    assert max(xs) - min(xs) == pytest.approx(pl.w) and pl.w == pytest.approx((200 + 100) / 2 ** 0.5)
+    nesting.turn(pl, part, 90)  # a right angle is the plan's own 90° turn
+    assert pl.rotated and pl.angle == 0 and (pl.w, pl.h) == pytest.approx((100, 200))
+    nesting.turn(pl, part, 405)
+    assert pl.angle == 45
+    params = nesting.NestParams(gap=10, margin=10)
+    assert nesting.layout_problems(sheet, [part], params) == {}
+    other = nesting.place_piece(sheet, 0, part, 300, 300, 10)  # on top of the first one
+    problems = nesting.layout_problems(sheet, [part], params)
+    assert problems[0][0] == problems[1][0] == nesting.OVERLAP and "RRS-X-1" in problems[0][1]
+    other.x, other.y = 600, 250  # beside it, 5 mm away: closer than the gap
+    first_right = max(x for x, _ in nesting.placed_outline(part, pl))
+    nesting.turn(other, part, 0)
+    other.x = first_right + 5
+    assert nesting.layout_problems(sheet, [part], params)[1][0] == nesting.TOO_CLOSE
+    other.x = 995  # over the edge of the sheet
+    assert nesting.layout_problems(sheet, [part], params)[1][0] == nesting.OFF_SHEET
+    other.x = 1000 - 200 - 4  # on the sheet, inside the edge margin: a warning only
+    assert nesting.layout_problems(sheet, [part], params)[1][0] == nesting.NEAR_EDGE
+    other.x = 700
+    assert nesting.layout_problems(sheet, [part], params) == {}
+
+    group = nesting.NestGroup("SS400", "STEEL", 3, [part], sheets=[sheet])
+    lp = laser.LaserParams()
+    [prog] = laser.make_programs([group], laser.CutQueue(), lp)
+    assert prog.placements[0]["angle"] == 45 and "angle" not in prog.placements[1]
+    again, keys = laser.program_sheet(prog)
+    assert nesting.placement_angle(again.placements[0]) == 45
+    path = laser.export_program_dxf(prog, tmp_path / "p.dxf", lp)
+    loops = [e for e in ezdxf.readfile(path).modelspace() if e.dxftype() == "LWPOLYLINE" and e.dxf.layer != "SHEET"]
+    turned = [[(round(x, 1), round(y, 1)) for x, y, *_ in e.get_points()] for e in loops]
+    assert any(len({x for x, _ in pts}) == len(pts) for pts in turned)  # no two corners on one vertical: turned 45°
+    again.placements[1].x = 750
+    laser.set_program_layout(prog, again, [prog.nest_part(k) for k in keys], lp)
+    assert prog.placements[1]["x"] == 750 and "จัดวางเอง" in prog.note
+
+
+def test_length_typed_in_mm_or_feet():
+    """ขนาดแผ่นเพิ่มเอง: feet become mm like the plates of the stock (1 ฟุต = 304.8 มม.)."""
+    from partlist_studio.core.stock import length_mm, sheet_size_mm
+
+    assert [length_mm(t) for t in ("1219", "1219 มม.", "4 ฟุต", "4ft", "4'", "8", "48 นิ้ว", "121.9 ซม.")] == \
+        [1219, 1219, 1219.2, 1219.2, 1219.2, 2438.4, 1219.2, 1219]
+    assert length_mm("8", "mm") == 8 and length_mm("1219", "ft") == pytest.approx(371551.2)
+    assert length_mm("4'6\"") == pytest.approx(1371.6) and length_mm("ยาว") is None
+    assert sheet_size_mm("4x8ฟุต") == (length_mm("4 ฟุต"), length_mm("8 ฟุต"))

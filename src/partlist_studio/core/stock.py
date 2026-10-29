@@ -351,6 +351,39 @@ def find_stock_item(part: Part, stock: StockList) -> StockItem | None:
     return candidates[0] if candidates else None
 
 
+FOOT_MM, INCH_MM = 304.8, 25.4
+_NUM = r"(\d+(?:\.\d+)?)"
+_FEET = r"(?:'|ft\.?|feet|foot|ฟุต|ฟ\.?)"
+_INCH = r"(?:\"|in\.?|inch(?:es)?|นิ้ว)"
+
+
+def length_mm(text, unit: str = "auto") -> float | None:
+    """A length typed by hand in mm: '1219', '1219 มม.', '4 ฟุต', '4ft', "4'", "4'6\"", '48 นิ้ว', '121.9 ซม.'.
+    unit = what a bare number is: "mm", "ft", or "auto" - under 30 is feet, as in the stock names ('4x8ฟุต' =
+    1219.2 x 2438.4 มม.: 1 ฟุต = 304.8 มม.). None when it is no length."""
+    if isinstance(text, (int, float)):
+        text = f"{text:g}"
+    t = str(text or "").strip().lower().replace(",", "")
+    if not t:
+        return None
+    m = re.fullmatch(_NUM + r"\s*" + _FEET + r"\s*(?:" + _NUM + r"\s*(?:" + _INCH + r")?)?", t)
+    if m:
+        return round(float(m.group(1)) * FOOT_MM + float(m.group(2) or 0) * INCH_MM, 1)
+    m = re.fullmatch(_NUM + r"\s*" + _INCH, t)
+    if m:
+        return round(float(m.group(1)) * INCH_MM, 1)
+    m = re.fullmatch(_NUM + r"\s*(?:ซม\.?|cm)", t)
+    if m:
+        return round(float(m.group(1)) * 10, 1)
+    m = re.fullmatch(_NUM + r"\s*(mm|มม\.?|มิล)?", t)
+    if not m:
+        return None
+    value = float(m.group(1))
+    if not m.group(2) and (unit == "ft" or (unit == "auto" and 0 < value < 30)):
+        return round(value * FOOT_MM, 1)
+    return round(value, 1)
+
+
 def sheet_size_mm(name: str) -> tuple[float, float] | None:
     """'1524x3050' -> (1524, 3050); '5x10ฟุต' -> (1524, 3048); '4x2530' -> (1219, 2530)."""
     match = re.search(r"(\d{3,4})\s*[xX×*]\s*(\d{3,4})", name or "")
@@ -360,7 +393,7 @@ def sheet_size_mm(name: str) -> tuple[float, float] | None:
     if not match:
         return None
     a, b = (float(v) for v in match.groups())
-    a, b = (v * 304.8 if v < 30 else v for v in (a, b))  # small numbers are feet
+    a, b = (v * FOOT_MM if v < 30 else v for v in (a, b))  # small numbers are feet
     return a, b
 
 

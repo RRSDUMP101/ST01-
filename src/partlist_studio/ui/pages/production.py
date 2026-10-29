@@ -132,7 +132,7 @@ class ProductionPage(QWidget):
         self.parts.itemChanged.connect(self._cell_edited)
         self.tabs.addTab(self.parts, "ชิ้นส่วน")
         self.tabs.addTab(self._readiness_tab(), "ความพร้อมประกอบ")
-        self.log = table(["เวลา", "รหัส", "ชิ้นส่วน", "ขั้น", "จำนวน", "หมายเหตุ"], [130, 170, 240, 80, 70])
+        self.log = table(["เวลา", "รหัส", "ชิ้นส่วน", "ขั้น", "จำนวน", "ผู้บันทึก", "หมายเหตุ"], [130, 170, 240, 90, 70, 130])
         empty_hint(self.log, "ยังไม่มีการบันทึก – กด ผ่านขั้นถัดไป / บันทึกจำนวน… หรือสแกนใบงาน (QR)")
         self.tabs.addTab(self.log, "บันทึกการทำงาน")
         self.wip = table(["รหัส", "รายการ", "รอขั้น", "จำนวน", "หมายเหตุ"], [140, 280, 90, 70])
@@ -226,7 +226,8 @@ class ProductionPage(QWidget):
                 if editable:
                     item.setBackground(QBrush(QColor("#FFF8E1")))
         self.parts.blockSignals(False)
-        fill(self.log, [[e.when.replace("T", " "), e.code, e.name, e.step, e.qty, e.note] for e in reversed(job.log)])
+        fill(self.log, [[e.when.replace("T", " "), e.code, e.name, e.step, e.qty, e.by or "คอม", e.note]
+                        for e in reversed(job.log)])
         self._show_readiness()
 
     def _readiness_tab(self) -> QWidget:

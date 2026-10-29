@@ -23,6 +23,7 @@ from .stock import StockList, _key, find_by_code
 STEPS = ["ตัด", "พับ", "เหยียบปิด", "เชื่อม", "กลึง", "ทำสี"]
 DEFAULT_ROUTE = ["ตัด", "พับ", "เชื่อม"]
 DONE = "เสร็จ"
+SCRAP = "เสีย"
 FROM_STOCK = "ใช้จากสต็อก"
 JOB_OPEN = "เปิดงาน"
 JOB_RUNNING = "กำลังผลิต"
@@ -74,6 +75,7 @@ class JobPart:
     spec: str = ""  # size / spec from the Part List: 't3 x 150 x 60'
     material: str = ""
     thickness: float = 0
+    scrapped: dict[str, float] = field(default_factory=dict)  # step -> pieces spoiled there (เสีย)
 
     @property
     def to_make(self) -> float:
@@ -146,6 +148,27 @@ class JobPart:
             self.done[step] = self.done_at(step) + qty
         return qty
 
+    def scrap(self, step: str, qty: float) -> float:
+        """Pieces spoiled at a step (เสีย): they passed the step before and are thrown away, so they have to be made
+        again from the first step - the steps before count that many pieces less ("รอตัด" goes up). Pieces spoiled
+        at the first step were never counted: only the scrap is kept. At most the pieces waiting at the step.
+        Returns the pieces taken."""
+        if step not in self.route or qty <= 0:
+            return 0.0
+        i = self.route.index(step)
+        if i:
+            qty = min(qty, self.done_at(self.route[i - 1]) - self.done_at(step))
+            if qty <= 0:
+                return 0.0
+            for s in self.route[:i]:
+                self.done[s] = self.done_at(s) - qty
+        self.scrapped[step] = self.scrapped.get(step, 0) + qty
+        return qty
+
+    @property
+    def scrapped_total(self) -> float:
+        return sum(self.scrapped.values())
+
 
 @dataclass
 class LogEntry:
@@ -155,6 +178,7 @@ class LogEntry:
     step: str
     qty: float
     note: str = ""
+    by: str = ""  # who recorded it (the name of the phone, '' = on the PC)
 
 
 @dataclass
@@ -195,15 +219,25 @@ class Job:
     def overdue(self) -> bool:
         return bool(self.due) and self.status not in CLOSED | {JOB_DONE} and self.due < date.today().isoformat()
 
-    def record(self, part: JobPart, step: str, qty: float, note: str = "") -> float:
+    def record(self, part: JobPart, step: str, qty: float, note: str = "", by: str = "") -> float:
         taken = part.record(step, qty)
         if taken:
             self.log.append(LogEntry(datetime.now().isoformat(timespec="minutes"), part.code, part.name, step,
-                                     taken, note))
+                                     taken, note, by))
             if self.status == JOB_OPEN:
                 self.status = JOB_RUNNING
             if all(p.status in (DONE, FROM_STOCK) for p in self.parts):
                 self.status = JOB_DONE
+        return taken
+
+    def scrap(self, part: JobPart, step: str, qty: float, reason: str = "", by: str = "") -> float:
+        """Pieces spoiled at a step: logged as 'เสีย (พับ)' with the reason; the part is made again for them."""
+        taken = part.scrap(step, qty)
+        if taken:
+            self.log.append(LogEntry(datetime.now().isoformat(timespec="minutes"), part.code, part.name,
+                                     f"{SCRAP} ({step})", taken, reason, by))
+            if self.status in (JOB_OPEN, JOB_DONE):
+                self.status = JOB_RUNNING
         return taken
 
     def set_sets(self, sets: float, note: str = "") -> float:

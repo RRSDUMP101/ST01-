@@ -65,6 +65,10 @@ STATUS_COLORS = {
     "ตัดแล้ว": "#2E9D5B",
     "ต้องแก้": "#D64545",
     "แก้แล้ว": "#2E9D5B",
+    # what the phones sent (มือถือ & AR)
+    "รอแก้": "#D64545",
+    "ยืนยันแล้ว": "#2E9D5B",
+    "ไม่ใช้": "#B0B8C4",
     # how a drawing part found its stock item (part_match)
     "รหัสสโตร์ใน Part List": "#2E9D5B",
     "ตารางเทียบรหัส": "#2E9D5B",
@@ -155,6 +159,10 @@ QPushButton[kind="primary"] {{ background: {NAVY}; color: white; border: 1px sol
 QPushButton[kind="primary"]:hover {{ background: {NAVY_DARK}; color: white; }}
 QPushButton[kind="accent"] {{ background: {ACCENT}; color: white; border: 1px solid {ACCENT}; font-weight: 600; }}
 QPushButton[kind="accent"]:hover {{ background: #D9771A; color: white; }}
+QPushButton[kind="primary"]:disabled, QPushButton[kind="accent"]:disabled {{ background: #C9D2DE; border-color: #C9D2DE; color: #F4F6FA; }}
+QPushButton[kind="danger"] {{ color: #C23B3B; border-color: #EBC4C4; }}
+QPushButton[kind="danger"]:hover {{ background: #FDECEC; color: #B02A2A; border-color: #D64545; }}
+QPushButton[kind="danger"]:disabled {{ color: #D9B2B2; border-color: #F0DEDE; }}
 QToolButton {{ border: none; padding: 4px; }}
 
 QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox, QPlainTextEdit {{

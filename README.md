@@ -36,6 +36,11 @@
    ตำแหน่งเก็บ, ป้าย QR ชั้นวาง
 9. **ตรวจและแก้แบบก่อนส่งตัด** – ต่อมุมที่ต่อไม่สนิท ตัดเส้นเกิน ลบเส้นซ้ำ แยกเส้นพับ ลบตัวเลข `90` ที่ลืมลบ อัตโนมัติ ·
    ใส่ **Mark** (รหัส, เส้นพับ) · **Nest** (ระยะห่างตามความหนา, หมุนชิ้นที่วาดเอียง) · **Gap / micro-joint** ([docs/PRE_CUT_CHECK.md](docs/PRE_CUT_CHECK.md))
+10. **แอปมือถือ Android · iPhone · iPad** (หน้า *มือถือ & AR* – สแกน QR บนจอแล้วใช้ได้เลย ผ่าน Wi-Fi ในโรงงาน ไม่ต้องลงแอปจาก Store)
+    – ติดตามการผลิต: คิวสถานี บันทึกเสร็จ 2 แตะ บันทึกเสีย (ทำใหม่อัตโนมัติ) แจ้งปัญหา (Andon) ·
+    **AR Inventory Scanning**: ส่องป้าย QR หลายใบพร้อมกัน เห็นสต็อก/สเปกลอยบนป้าย นับด้วยการแตะภาพหรือนับอัตโนมัติ → ใบปรับยอด AJ ·
+    **AR-Guided Picking**: ลูกศรนำไปช่องที่ต้องหยิบตามใบจัดชุด ภาพ 3 มิติของชิ้นจากรูปคลี่ เตือนเมื่อหยิบผิดรุ่น/ผิดข้าง → ใบ PD
+    ([docs/MOBILE_APP.md](docs/MOBILE_APP.md))
 
 รายละเอียดการวิเคราะห์ระบบ DWG ↔ สโตร์ ↔ ผลิต: [docs/DWG_INTEGRATION.md](docs/DWG_INTEGRATION.md)
 การเชื่อม Express / Google Sheet / ไฟล์ Excel ของบริษัท: [docs/EXPRESS_INTEGRATION.md](docs/EXPRESS_INTEGRATION.md)
@@ -43,6 +48,7 @@
 ปรับเมนูให้เป็นเส้นทางงานเดียว 6 ขั้น + ปุ่มขั้นต่อไป: [docs/UI_FLOW_REDESIGN.md](docs/UI_FLOW_REDESIGN.md)
 ระบบสต็อกชิ้นส่วนรอประกอบ + การผลิตถึงประกอบ (กลุ่มประกอบ, ใบงาน QR, ความพร้อมประกอบ – ระยะ 1 ทำแล้ว): [docs/STOCK_PRODUCTION_DESIGN.md](docs/STOCK_PRODUCTION_DESIGN.md)
 จากแบบ DWG สู่เครื่องตัดเลเซอร์: [docs/LASER_CUTTING.md](docs/LASER_CUTTING.md)
+แอปมือถือ (ติดตามการผลิต · AR นับสต็อก · หยิบของนำทางด้วย AR): [docs/MOBILE_APP.md](docs/MOBILE_APP.md)
 ตรวจและแก้แบบก่อนส่งตัด · Mark · Nest · Gap: [docs/PRE_CUT_CHECK.md](docs/PRE_CUT_CHECK.md)
 
 ## ติดตั้ง / รัน
@@ -144,7 +150,10 @@ src/partlist_studio/
     nesting.py       วางแผนตัดแผ่นเหล็กจากรูปคลี่ (MaxRects), Excel + DXF
     laser.py         ตัดเลเซอร์: คลังรูปคลี่, สิ่งที่ต้องตัดจากงานผลิต, ตรวจก่อนตัด, โปรแกรมตัด/คิว, ไฟล์ DXF สำหรับเครื่อง
     catalog.py       ประเภทสินค้า, 10 กลุ่มประกอบ, สต็อก 6 ช่อง, ความพร้อมประกอบ, ใบจัดชุด, ใบงาน, ป้ายชั้นวาง
-    qr.py            ข้อความใน QR ของใบงาน/ป้ายชั้นวาง และการอ่านกลับ
+    qr.py            ข้อความใน QR ของใบงาน/ป้ายชั้นวาง/ป้ายตำแหน่ง และการอ่านกลับ
+    mobile.py        แอปมือถือ: สิ่งที่มือถืออ่าน/บันทึก (คิวสถานี เสีย ปัญหา สแกน นับ หยิบ → AJ/PD), เครื่องที่จับคู่
+    mobile_server.py เซิร์ฟเวอร์ HTTPS ของแอปมือถือ + หน้าติดตั้งใบรับรอง
+    certs.py         ใบรับรองของเครื่องนี้ (HTTPS ในโรงงาน) · store_map.py ผังสโตร์ + ทิศไปยังช่อง (AR)
     replenish.py     Min / Max จากยอดใช้จริง, เตือนสั่งซื้อ
     revision.py      เทียบ Rev. แบบ / Part List
     item_form.py     ฟอร์มทะเบียนสินค้า Express (Excel/Google Sheet พร้อมสูตร)
@@ -154,6 +163,7 @@ src/partlist_studio/
     gsheets.py       Google Sheets (gspread)
     tabular.py       อ่าน/เขียน CSV/TXT/XLSX/XLS
   ui/              หน้าจอ PySide6 (Qt)
+  resources/mobile/ แอปมือถือ (เว็บแอป Preact + AR: อ่าน QR, ติดตามป้าย, ภาพ 3 มิติ, นับอัตโนมัติ)
 tests/             pytest (core + UI แบบ headless)
 packaging/         PyInstaller spec + ไอคอน
 scripts/           รัน/build บน Windows, macOS

@@ -11,12 +11,15 @@ from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QLineEdit, QListWidg
 
 from .. import APP_NAME, __version__
 from ..core.movements import DOC_TYPES
+from . import theme
 from .actions import Actions
 from .palette import Command, CommandPalette
 from .pages.dashboard import DashboardPage
 from .pages.drawings import DrawingsPage
+from .mobile_hub import MobileHub
 from .pages.express import ExpressPage
 from .pages.gsheets import GoogleSheetsPage
+from .pages.mobile import MobilePage
 from .pages.models import ModelsPage
 from .pages.movements import MovementsPage
 from .pages.nesting import NestingPage
@@ -44,6 +47,7 @@ NAV_GROUPS = [
         ("models", "▣   แบบกระบะมาตรฐาน"),
         ("express", "₿   Express"),
         ("sheets", "⇅   Google Sheets"),
+        ("mobile", "▯   มือถือ & AR"),
         ("settings", "⚙   ตั้งค่า"),
     ]),
 ]
@@ -59,6 +63,8 @@ HELP_TEXT = """<h3>ทำงานตามขั้นตอน 1 → 6</h3>
 <li><b>เบิก / รับ</b> – ตรวจใบร่าง PD / FR / RR / AJ แล้วกด <i>บันทึก</i> เพื่อตัด/รับสต็อก แล้วคีย์เข้า Express</li>
 </ol>
 <p>ปุ่ม <b>ขั้นต่อไป</b> (มุมขวาบน) พาไปทำสิ่งที่รออยู่ต่อทันที</p>
+<p><b>มือถือ & AR</b> – เปิดใช้งาน แล้วสแกน QR บนจอด้วยมือถือ: ติดตามการผลิต บันทึกเสร็จ/เสีย แจ้งปัญหา
+สแกน AR นับสต็อก หยิบของนำทางด้วย AR (Android · iPhone · iPad ผ่าน Wi-Fi)</p>
 <h3>ปุ่มลัด</h3>
 <table cellpadding="3">
 <tr><td><b>Ctrl+K</b></td><td>ค้นหาคำสั่ง – พิมพ์ชื่อหน้า แท็บ หรือปุ่ม แล้วกด Enter</td></tr>
@@ -122,7 +128,7 @@ class MainWindow(QMainWindow):
             for key, label in entries:
                 item = QListWidgetItem(label)
                 item.setData(Qt.UserRole, key)
-                item.setSizeHint(QSize(200, 35))  # all 11 fit a 1366 x 768 screen without scrolling
+                item.setSizeHint(QSize(200, 35))  # all 12 fit a 1366 x 768 screen without scrolling
                 if key in STEP_KEYS:
                     item.setToolTip(f"{label.split('   ', 1)[-1]}  (Ctrl+{STEP_KEYS.index(key)})")
                 self.nav.addItem(item)
@@ -155,6 +161,8 @@ class MainWindow(QMainWindow):
         self.pages["movements"] = MovementsPage(self.state, self.actions, self.pages["stock"])
         self.pages["sheets"] = GoogleSheetsPage(self.state, self.actions, self.pages["stock"])
         self.pages["express"] = ExpressPage(self.state, self.actions, self.pages["stock"], self.pages["sheets"])
+        self.mobile_hub = MobileHub(self.state)
+        self.pages["mobile"] = MobilePage(self.state, self.actions, self.mobile_hub)
         self.pages["settings"] = SettingsPage(self.state)
         for key, _label in NAV:
             self.stack.addWidget(self.pages[key])
@@ -172,6 +180,26 @@ class MainWindow(QMainWindow):
                        self.state.ledger_changed, self.state.stock_changed):
             signal.connect(self._steps_changed)
         self.refresh_steps()
+        self.pages["mobile"].refresh()  # the badge of the inbox in the sidebar
+        if self.mobile_hub.option("autostart"):
+            QTimer.singleShot(800, self._start_mobile)
+
+    def _start_mobile(self) -> None:
+        if not self.mobile_hub.start():
+            self.state.notify(f"เปิดการเชื่อมต่อมือถืออัตโนมัติไม่ได้: {self.mobile_hub.error}")
+
+    def set_nav_badge(self, key: str, count: int) -> None:
+        """'▯   มือถือ & AR  (3)': what waits on that page."""
+        label = dict(NAV).get(key, "")
+        for row in range(self.nav.count()):
+            item = self.nav.item(row)
+            if item.data(Qt.UserRole) == key:
+                item.setText(f"{label}  ({count})" if count else label)
+                if count:
+                    item.setForeground(QColor(theme.ACCENT))
+                else:
+                    item.setData(Qt.ForegroundRole, None)
+                return
 
     def _build_menu(self) -> None:
         a = self.actions
@@ -461,6 +489,7 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event):  # noqa: N802
         if self.actions.confirm_discard():
             self.save_session()
+            self.mobile_hub.stop()
             event.accept()
         else:
             event.ignore()

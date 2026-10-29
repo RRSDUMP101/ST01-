@@ -1148,3 +1148,92 @@ def test_laser_layout_by_hand_on_sheet_sizes_added_by_hand(window, app, monkeypa
     monkeypatch.setattr(sheet_editor.SheetEditor, "exec", turn_all)
     page.fill_program()
     assert all("angle" not in raw for raw in prog.placements) and "จัดวางเอง" in prog.note
+
+
+def test_mobile_page_pairs_a_phone_and_confirms_its_work(window, app, monkeypatch, tmp_path):
+    import json
+    import ssl
+    import threading
+    import urllib.request
+
+    from PySide6.QtCore import QEventLoop, QTimer
+
+    from partlist_studio.core.models import Part
+    from partlist_studio.core.production import job_from_parts
+    from partlist_studio.core.stock import StockItem, StockList
+
+    state = window.state
+    state.add_stock_source("ไฟล์นับสต๊อค", StockList(items=[StockItem(code="RRS-T-022-L-84", name="เสาหลัง(ซ้าย) 84",
+                                                                        unit="ต้น", on_hand=4)], has_quantities=True))
+    state.catalog.set_location("RRS-T-022-L-84", "P-POST-04")
+    state.jobs = [job_from_parts("SO6910-015", [Part(item_no="1", part_no="RRS-T-022-L-84", name="เสาหลัง(ซ้าย) 84",
+                                                     qty=1)], 2, state.stock)]
+    state.save_jobs()
+    window.go("mobile")
+    page = window.pages["mobile"]
+    hub = window.mobile_hub
+    hub.set_options(port=0, http_port=0)
+    page.toggle()
+    assert hub.running and "เปิดอยู่" in page.status.text() and not page.qr.pixmap().isNull()
+    assert len(page.code.text().replace(" ", "")) == 8
+    ctx = ssl.create_default_context(cafile=str(hub.folder / "certs" / "ca.pem"))
+    result = {}
+
+    def phone():  # a phone on the Wi-Fi: pair, count, report a problem
+        def post(path, body, token=""):
+            req = urllib.request.Request(f"https://127.0.0.1:{hub.server.port}/api/{path}", json.dumps(body).encode(),
+                                         {"Content-Type": "application/json", "Authorization": f"Bearer {token}"})
+            with urllib.request.urlopen(req, context=ctx, timeout=10) as res:
+                return json.loads(res.read())
+
+        try:
+            token = post("pair", {"code": hub.service.pair_code, "name": "แอน 2", "role": "store"})["token"]
+            post("count", {"lines": [{"code": "RRS-T-022-L-84", "counted": 6}]}, token)
+            post("problem", {"text": "เครื่องพับเสีย", "job_no": "SO6910-015", "index": 0, "step": "ตัด"}, token)
+            result["ok"] = True
+        except Exception as e:  # noqa: BLE001
+            result["error"] = repr(e)
+
+    thread = threading.Thread(target=phone)
+    thread.start()
+    loop = QEventLoop()
+    timer = QTimer()
+    timer.timeout.connect(lambda: None if thread.is_alive() else loop.quit())
+    timer.start(20)
+    QTimer.singleShot(20000, loop.quit)
+    loop.exec()  # the phone's calls run on this (main) thread
+    timer.stop()
+    thread.join(5)
+    assert result.get("ok"), result
+    app.processEvents()
+    assert page.devices.rowCount() == 1 and page.inbox.rowCount() == 2
+    nav = [window.nav.item(r).text() for r in range(window.nav.count())]
+    assert any(t.endswith("มือถือ & AR  (2)") for t in nav)
+    page.tabs.setCurrentIndex(2)
+    count_row = next(r for r in range(page.inbox.rowCount()) if page.inbox.item(r, 1).text() == "นับสต็อก")
+    page.inbox.selectRow(count_row)
+    assert page.lines.rowCount() == 1 and page.lines.item(0, 5).text() == "+2"
+    page.confirm_post()
+    item = next(i for i in state.stock.items if i.code == "RRS-T-022-L-84")
+    assert item.on_hand == 6 and any(d.doc_type == "AJ" and d.status == "บันทึกแล้ว" for d in state.ledger.docs)
+    page.inbox.selectRow(0)
+    assert page.solve_btn.isEnabled() and not page.confirm_btn.isEnabled()  # the problem left
+    page.solve()
+    nav = [window.nav.item(r).text() for r in range(window.nav.count())]
+    assert page.inbox.rowCount() == 0 and "▯   มือถือ & AR" in nav  # nothing waits: no number on the menu
+    # store map from the shelf locations, labels to print
+    page.tabs.setCurrentIndex(3)
+    page.auto_racks()
+    assert page.racks.item(0, 0).text() == "P-POST"
+    page.racks.item(0, 5).setText("2")  # levels
+    page.racks.item(0, 6).setText("4")  # slots per level
+    rack = hub.service.data.store_map.racks[0]
+    assert (rack.levels, rack.slots) == (2, 4)
+    labels = page.location_labels()
+    assert len(labels) == 8 and labels[3][0] == "RRS1|L|P-POST-04" and "ชั้นที่ 1" in labels[3][2]
+    out = tmp_path / "labels.pdf"
+    monkeypatch.setattr("partlist_studio.ui.pages.mobile.QFileDialog.getSaveFileName", lambda *a, **k: (str(out), ""))
+    page.print_labels()
+    assert out.stat().st_size > 2000
+    page.toggle()
+    assert not hub.running and "ปิดอยู่" in page.status.text()

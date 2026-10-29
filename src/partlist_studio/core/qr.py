@@ -7,6 +7,7 @@ read back by the program:
                                             details after the quantity are for a person scanning with a phone
                                             (the program reads the first six)
     RRS1|I|<code>|<location>                ป้ายชั้นวาง
+    RRS1|L|<location>|<name>                ป้ายตำแหน่ง (AR): a slot or a rack, for finding the way with a phone
 """
 
 from __future__ import annotations
@@ -32,9 +33,14 @@ def item_payload(code: str, location: str = "") -> str:
     return "|".join([PREFIX, "I", _clean(code), _clean(location)])
 
 
+def location_payload(location: str, name: str = "") -> str:
+    fields = [PREFIX, "L", _clean(location), _clean(name)]
+    return "|".join(fields if fields[-1] else fields[:-1])
+
+
 @dataclass
 class Scan:
-    kind: str  # 'job' / 'item' / 'text' (anything else: a code typed or a code-only barcode)
+    kind: str  # 'job' / 'item' / 'location' / 'text' (anything else: a code typed or a code-only barcode)
     job_no: str = ""
     line: int = 0
     code: str = ""
@@ -60,6 +66,8 @@ def parse_payload(text: str) -> Scan:
                     details=parts[6:])
     if len(parts) >= 3 and parts[0].upper() == PREFIX and parts[1].upper() == "I":
         return Scan("item", code=parts[2], location=parts[3] if len(parts) > 3 else "", text=raw)
+    if len(parts) >= 3 and parts[0].upper() == PREFIX and parts[1].upper() == "L":
+        return Scan("location", location=parts[2], text=raw, details=parts[3:])
     return Scan("text", code=raw, text=raw)
 
 

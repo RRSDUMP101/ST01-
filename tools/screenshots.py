@@ -375,6 +375,40 @@ def main() -> int:
     editor.show()
     shot(editor, "14l_laser_layout_by_hand.png")
     editor.close()
+    # ---- มือถือ & AR: pairing QR, phones, what they sent, the store map, location labels
+    from partlist_studio.ui.printing import location_labels_image
+
+    hub = w.mobile_hub
+    hub.set_options(port=0, http_port=0)
+    mobile = w.pages["mobile"]
+    w.go("mobile")
+    mobile.toggle()
+    svc = hub.service
+    store_phone, _token = svc.pair(svc.pair_code, "แอน 2 (สโตร์)", "store")
+    station_phone, _token = svc.pair(svc.pair_code, "สมชาย สถานีพับ", "station", "พับ")
+    svc.pair(svc.pair_code, "แท็บเล็ตหัวหน้า", "planner")
+    first = state.jobs[0]
+    counted = [i for i in state.stock.items if i.code.startswith("RRS")][:3]
+    svc.submit_count(store_phone, [{"code": i.code, "counted": i.on_hand + (1 if k == 0 else 0), "method": "ar"}
+                                   for k, i in enumerate(counted)])
+    svc.report_problem(station_phone, "เครื่องพับ 2: ไฮดรอลิกรั่ว", first.job_no, 0, "พับ")
+    mobile.auto_racks()
+    racks = svc.data.store_map.racks
+    for rack in racks:
+        rack.levels, rack.slots = 3, 4
+    svc.set_racks(racks)
+    mobile.refresh()
+    mobile.tabs.setCurrentIndex(0)
+    shot(w, "19_mobile_connect.png")
+    mobile.tabs.setCurrentIndex(2)
+    mobile.inbox.selectRow(1)
+    shot(w, "19b_mobile_inbox.png")
+    mobile.tabs.setCurrentIndex(3)
+    shot(w, "19c_mobile_store_map.png")
+    mobile.racks.selectRow(0)
+    location_labels_image(mobile.location_labels(), 4, 50).save(str(out / "19d_location_labels.png"))
+    print("saved 19d_location_labels.png")
+    mobile.toggle()
     # ---- finding things: the command palette (Ctrl+K) over the window, the help with the shortcuts (F1)
     from PySide6.QtGui import QPainter
 

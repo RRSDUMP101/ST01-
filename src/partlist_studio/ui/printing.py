@@ -409,6 +409,74 @@ def write_labels_pdf(path: str | Path, labels: list[ShelfLabel]) -> int:
     return len(labels)
 
 
+# --------------------------------------------------------------------------
+# ป้ายตำแหน่ง (AR): one slot or rack per label with a big QR, read by the phone camera from a few metres
+# --------------------------------------------------------------------------
+LOCATION_LAYOUTS = {1: (1, 1), 2: (1, 2), 4: (2, 2), 8: (2, 4)}  # labels per A4 -> (columns, rows)
+
+
+def _paint_location_labels(p: QPainter, mm: _Mm, labels: list[tuple[str, str, str]], cols: int, rows: int) -> None:
+    w, h = 210.0 / cols, 297.0 / rows
+    for n, (payload, location, sub) in enumerate(labels[:cols * rows]):
+        x, y = (n % cols) * w, (n // cols) * h
+        pen = QPen(LINE, mm.v(0.2))
+        pen.setStyle(Qt.DashLine)
+        p.setPen(pen)
+        p.setBrush(Qt.NoBrush)
+        p.drawRect(mm(x + 0.5, y + 0.5, w - 1, h - 1))
+        pad = max(5.0, min(w, h) * 0.06)
+        text_h = h * 0.22
+        qr = min(w - 2 * pad, h - 2 * pad - text_h)
+        draw_qr(p, mm(x + (w - qr) / 2, y + pad, qr, qr), payload)
+        _text(p, mm(x + pad, y + pad + qr + 1, w - 2 * pad, text_h * 0.55), location, max(14.0, text_h * 1.4), True,
+              color=QColor(theme.NAVY), flags=Qt.AlignHCenter | Qt.AlignVCenter, fit=True)
+        _text(p, mm(x + pad, y + pad + qr + 1 + text_h * 0.55, w - 2 * pad, text_h * 0.3), sub, max(7.0, text_h * 0.5),
+              color=MUTED, flags=Qt.AlignHCenter | Qt.AlignVCenter, fit=True)
+
+
+def write_location_labels_pdf(path: str | Path, labels: list[tuple[str, str, str]], per_page: int = 4) -> int:
+    """labels: (QR text, location, line under it). A4 portrait, 1 / 2 / 4 / 8 labels per page with cut lines."""
+    cols, rows = LOCATION_LAYOUTS.get(per_page, (2, 2))
+    writer = _writer(path, QPageSize.A4, False)
+    mm = _Mm(writer.resolution())
+    p = QPainter(writer)
+    try:
+        for i in range(0, len(labels), cols * rows):
+            if i:
+                writer.newPage()
+            _paint_location_labels(p, mm, labels[i:i + cols * rows], cols, rows)
+    finally:
+        p.end()
+    return len(labels)
+
+
+def location_labels_image(labels: list[tuple[str, str, str]], per_page: int = 4, dpi: int = 60) -> QImage:
+    """The first page of the location labels as a picture (preview / docs)."""
+    cols, rows = LOCATION_LAYOUTS.get(per_page, (2, 2))
+    mm = _Mm(dpi)
+    image = QImage(int(mm.v(210)), int(mm.v(297)), QImage.Format_RGB32)
+    image.fill(Qt.white)
+    p = QPainter(image)
+    try:
+        p.setRenderHint(QPainter.Antialiasing)
+        _paint_location_labels(p, mm, labels, cols, rows)
+    finally:
+        p.end()
+    return image
+
+
+def qr_image(text: str, px: int = 360) -> QImage:
+    """The QR as a picture (for the screen)."""
+    image = QImage(px, px, QImage.Format_RGB32)
+    image.fill(Qt.white)
+    p = QPainter(image)
+    try:
+        draw_qr(p, QRectF(0, 0, px, px), text)
+    finally:
+        p.end()
+    return image
+
+
 def _now_text() -> str:
     now = datetime.now()
     return f"{now.day:02d}/{now.month:02d}/{now.year + 543} {now:%H:%M}"

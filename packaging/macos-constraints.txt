@@ -3,3 +3,7 @@
 PySide6-Essentials==6.7.3
 shiboken6==6.7.3
 numpy==2.3.5
+# cryptography 49+ has no wheel for Intel Macs: pip compiled it against Homebrew's OpenSSL and the app
+# then quit at start (Symbol not found: _EVP_DigestSqueeze in the bundled libcrypto.3.dylib).
+# 48.0.1 is the last release with a universal2 wheel (OpenSSL linked in; macOS 10.9 Intel, 11.0 Apple chip).
+cryptography==48.0.1

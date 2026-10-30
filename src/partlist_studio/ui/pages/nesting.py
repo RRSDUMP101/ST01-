@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox, 
 
 from ...core import laser, nesting
 from ...core.nesting import Placement
-from ...core.stock import FOOT_MM, find_by_code, length_mm, material_family, sheet_size_mm
+from ...core.stock import FOOT_MM, feet_size, feet_text, find_by_code, length_mm, material_family, sheet_size_mm
 from .. import theme
 from ..state import AppState
 from ..widgets import (Card, FlowLayout, PageHeader, button, empty_hint, fill, fit_to_screen, labeled, selected_rows,
@@ -447,6 +447,7 @@ class SheetSizesDialog(QDialog):
         hint = QLabel("ขนาดแผ่นที่แผนตัดเลือกใช้ได้ นอกจากแผ่นเหล็กที่มีในสต็อก (เช่น ขนาดที่สั่งซื้อได้ หรือแผ่นที่ยังไม่มีรหัส) "
                       "· พิมพ์กว้าง / ยาวเป็น มม. หรือ ฟุต ได้ (1219, 1219 มม., 4 ฟุต, 4ft, 4', 4'6\", 48 นิ้ว "
                       "หรือ 4x8 ฟุต ในช่องเดียว) – ฟุตแปลงเป็น มม. ให้เอง (1 ฟุต = 304.8 มม. เท่ากับแผ่นในสต็อก) "
+                      "· แผนตัดเรียกแผ่นเป็นฟุตและ มม. เหมือนชื่อแผ่นในสต็อก เช่น เพิ่มเอง 3มม. 6.96x8.31ฟุต 2121x2533 "
                       "· หนา 0 = ใช้กับทุกความหนา · ใหญ่กว่าโต๊ะเครื่อง "
                       f"{bed[0]:.0f}x{bed[1]:.0f} มม. ขึ้นสีแดง (ตัดไม่ได้)")
         hint.setObjectName("Hint")
@@ -559,9 +560,8 @@ class SheetSizesDialog(QDialog):
                     item.setToolTip("ใหญ่กว่าโต๊ะเครื่อง – ตัดไม่ได้" if too_big else
                                     "อ่านขนาดไม่ได้ – พิมพ์ เช่น 1219, 1219 มม., 4 ฟุต, 4ft หรือ 4'" if bad else "")
             feet = self.table.item(r, 4)
-            if feet is not None:
-                feet.setText("" if bad else f"{self._number(r, 0) / FOOT_MM:.2f}".rstrip("0").rstrip(".") + " x "
-                             + f"{self._number(r, 1) / FOOT_MM:.2f}".rstrip("0").rstrip("."))
+            if feet is not None:  # the feet the plan names the sheet with ('เพิ่มเอง 3มม. 4x8ฟุต 1219x2438')
+                feet.setText("" if bad else f"{feet_text(self._number(r, 0))} x {feet_text(self._number(r, 1))}")
         self.table.blockSignals(False)
 
     def rows(self) -> list[tuple[float, float, float, str]]:
@@ -1145,13 +1145,16 @@ class NestingPage(QWidget):
         self.fill_plan_btn.setEnabled(bool(rows))
         self._show_sheet_choice(group)
 
-    def _sheet_label(self, option: tuple) -> str:
-        """'01-B00 -0003 เหล็กแผ่นดำ 2.5 มม.4x8ฟุต · 1219 x 2440 · คงเหลือ 6 แผ่น'."""
+    def _sheet_label(self, option: tuple, thickness: float = 0) -> str:
+        """'01-B00 -0003 เหล็กแผ่นดำ 2.5 มม.4x8ฟุต · 1219 x 2440 มม. · คงเหลือ 6 แผ่น' · a size added by hand or a
+        standard size, named with its feet and mm: 'เพิ่มเอง 3มม. 6.96x8.31ฟุต 2121x2533 · ไม่มีในสต็อก'."""
         w, h, code, name = option
+        if not code and nesting.sheet_kind(name):
+            return f"{nesting.sheet_title(name, code, w, h, thickness)} · ไม่มีในสต็อก"
         item = find_by_code(code, self.state.stock) if code else None
         where = (f"คงเหลือ {item.on_hand:g} {item.unit_name or 'แผ่น'}" if item is not None
-                 else "เพิ่มเอง" if name.startswith(nesting.CUSTOM) else "ขนาดมาตรฐาน (ไม่มีในสต็อก)")
-        label = " ".join(x for x in (code, name.split(": ", 1)[-1]) if x)
+                 else "ไม่มีในสต็อก" if code else "ไม่มีรหัสสต็อก")
+        label = " ".join(x for x in (code, name) if x)
         return f"{label} · {w:.0f} x {h:.0f} มม. · {where}"
 
     def _fill_sheet_box(self, box: QComboBox, group: nesting.NestGroup | None, in_table: bool = False) -> None:
@@ -1164,10 +1167,10 @@ class NestingPage(QWidget):
                 (o for o in group.options if nesting.same_size(o, (group.sheet_w, group.sheet_h))), None)
             auto = "อัตโนมัติ – ใช้เหล็กน้อยที่สุด"
             if in_table and not group.chosen and used is not None:
-                auto = f"{used[3].split(': ', 1)[-1]} (อัตโนมัติ)"
+                auto = f"{nesting.sheet_title(used[3], used[2], used[0], used[1], group.thickness)} (อัตโนมัติ)"
             box.addItem(auto, None)
             for option in group.options:
-                box.addItem(self._sheet_label(option), (option[0], option[1], option[2]))
+                box.addItem(self._sheet_label(option, group.thickness), (option[0], option[1], option[2]))
             if group.chosen and used is not None:
                 at = next((n for n in range(1, box.count()) if box.itemData(n)[2] == used[2]
                            and nesting.same_size(box.itemData(n), used)), 0)
@@ -1192,10 +1195,11 @@ class NestingPage(QWidget):
         picked = used is not None and any(o[2] == used[2] and nesting.same_size(o, used) for o in group.overflow)
         box.blockSignals(True)
         box.clear()
+        w, h = (float(v) for v in size.split("x"))
         box.addItem("อัตโนมัติ – แผ่นเล็กสุดที่ชิ้นใหญ่วางได้" if picked else
-                    f"{name.split(': ', 1)[-1]} (อัตโนมัติ – ชิ้นใหญ่เกินแผ่นหลัก)", None)
+                    f"{nesting.sheet_title(name, code, w, h, group.thickness)} (อัตโนมัติ – ชิ้นใหญ่เกินแผ่นหลัก)", None)
         for option in nesting.overflow_options(group, size, self._nest_params):
-            box.addItem(self._sheet_label(option), (option[0], option[1], option[2]))
+            box.addItem(self._sheet_label(option, group.thickness), (option[0], option[1], option[2]))
             if picked and option[2] == used[2] and nesting.same_size(option, used):
                 box.setCurrentIndex(box.count() - 1)
         box.setToolTip("ชิ้นงานที่ใหญ่เกินแผ่นหลักของความหนานี้ ตัดจากแผ่นนี้ – เลือกแผ่นอื่นที่ชิ้นเหล่านี้วางได้ "
@@ -1250,8 +1254,10 @@ class NestingPage(QWidget):
         self._lay_out(self.laser_params(), key)
         new = next((g for g in self.groups if g.key == key), None)
         if new is not None:
-            name = " ".join(x for x in (new.sheet_code, new.sheet_name.split(": ", 1)[-1]) if x)
-            self.state.notify(f"{new.family} หนา {new.thickness:g} มม.: ใช้ {name} ({new.sheet_w:.0f}x{new.sheet_h:.0f}) "
+            title = nesting.sheet_title(new.sheet_name, new.sheet_code, new.sheet_w, new.sheet_h, new.thickness)
+            name = (title if not new.sheet_code and nesting.sheet_kind(new.sheet_name) else
+                    " ".join(x for x in (new.sheet_code, title) if x) + f" ({new.sheet_w:.0f}x{new.sheet_h:.0f})")
+            self.state.notify(f"{new.family} หนา {new.thickness:g} มม.: ใช้ {name} "
                               f"{len(new.sheets)} แผ่น · ใช้เนื้อเหล็ก {new.utilization:.0%}"
                               + (" (เลือกเอง)" if new.chosen else " (อัตโนมัติ)"))
 
@@ -1340,7 +1346,9 @@ class NestingPage(QWidget):
         params = self.laser_params()
         nest = replace(params.nest_params(), gap=group.gap or params.nest_params().gap_for(group.thickness))
         sheets = [(f"แผ่นที่ {i + 1} จาก {len(group.sheets)} · {group.sheets[i].size}", group.sheets[i]) for i in indexes]
-        editor = SheetEditor(f"แผน {group.material} หนา {group.thickness:g} มม. · แผ่นเพิ่มเอง {group.sheets[indexes[0]].size}",
+        first = group.sheets[indexes[0]]
+        editor = SheetEditor(f"แผน {group.material} หนา {group.thickness:g} มม. · แผ่นเพิ่มเอง {first.size} "
+                             f"({feet_size(first.width, first.height)})",
                              sheets, group.parts, laser.flats_for(self.state.flats, group.family, group.thickness),
                              nest, params.align_parts, self)
         if editor.exec():
@@ -1408,7 +1416,8 @@ class NestingPage(QWidget):
         nest = replace(params.nest_params(), gap=params.nest_params().gap_for(prog.thickness))
         sheet, keys = laser.program_sheet(prog)
         parts = [prog.nest_part(k) for k in keys]
-        editor = SheetEditor(f"โปรแกรม {prog.no} · {prog.label} · แผ่นเพิ่มเอง {prog.sheet_size} × {prog.repeat} แผ่น",
+        editor = SheetEditor(f"โปรแกรม {prog.no} · {prog.label} · แผ่นเพิ่มเอง {prog.sheet_size} "
+                             f"({feet_size(prog.sheet_w, prog.sheet_h)}) × {prog.repeat} แผ่น",
                              [(f"{prog.no} · {prog.sheet_size}", sheet)], parts,
                              laser.flats_for(self.state.flats, prog.family, prog.thickness), nest, params.align_parts, self)
         if editor.exec():

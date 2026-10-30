@@ -21,10 +21,11 @@ from pathlib import Path
 from .cad_fix import convex_hull
 from .dwg_io import density_for, parse_thickness
 from .models import Part, PartList
-from .stock import StockList, _key, item_size_mm, material_family
+from .stock import StockList, _key, feet_size, item_size_mm, material_family, sheet_size_mm
 
 DEFAULT_SHEETS = [(1219.0, 2440.0, "", "4x8 ฟุต"), (1524.0, 3048.0, "", "5x10 ฟุต")]
 CUSTOM = "เพิ่มเอง"  # name of a sheet size added by hand
+STANDARD = "ขนาดมาตรฐาน"  # a size of DEFAULT_SHEETS (no plate of the thickness in stock)
 # plates that are another product of the same thickness: chosen by hand only, never by the plan itself
 SPECIAL_SHEET_WORDS = ("ตะแกรง", "ตีนไก่", "ตีนเป็ด", "เจาะรู", "ลูกฟูก", "กันลื่น")
 
@@ -441,6 +442,38 @@ def same_size(option: tuple, size: tuple) -> bool:
     return round(option[0] / 10) == round(w / 10) and round(option[1] / 10) == round(h / 10)
 
 
+def sheet_kind(name: str) -> str:
+    """CUSTOM for a size added by hand, STANDARD for a size of DEFAULT_SHEETS, "" for a plate of the stock."""
+    if (name or "").startswith(CUSTOM):
+        return CUSTOM
+    return STANDARD if any(name == n for *_size, n in DEFAULT_SHEETS) else ""
+
+
+def hand_note(name: str, width: float, length: float) -> str:
+    """The note of a size added by hand ('เพิ่มเอง: สั่งซื้อ' -> 'สั่งซื้อ'); "" when it only says the size again
+    ('เพิ่มเอง: 1500x3000', 'เพิ่มเอง: 4x8 ฟุต', the 'เพิ่มเอง 1250x2500' of a size typed for one plan)."""
+    if sheet_kind(name) != CUSTOM:
+        return ""
+    note = name[len(CUSTOM):].strip().lstrip(":").strip()
+    size = sheet_size_mm(note)
+    bare = not re.sub(r"[\d.\s()xX×*]|ฟุต|ft|มม\.?|mm", "", note)
+    return "" if size and bare and same_size(tuple(sorted(size)), (width, length)) else note
+
+
+def sheet_title(name: str, code: str, width: float, length: float, thickness: float = 0) -> str:
+    """The sheet as the plan shows it (แผ่นที่ใช้). A plate of the stock keeps its own name ('เหล็กแผ่นดำ 4มม.
+    5x10ฟุต(เฟรมบนยาว)1524x3050'); a size added by hand or a standard size gets one in that form, its size in feet
+    converted from the mm: 'เพิ่มเอง 3มม. 6.96x8.31ฟุต 2121x2533', 'เพิ่มเอง 3มม. 4.92x9.84ฟุต(สั่งซื้อ)1500x3000',
+    'ขนาดมาตรฐาน 2มม. 4x8ฟุต 1219x2440'."""
+    kind = sheet_kind(name)
+    if code or not kind:
+        return name or code
+    w, h = sorted((float(width), float(length)))
+    note = hand_note(name, w, h)
+    thick = f" {thickness:g}มม." if thickness else ""
+    return f"{kind}{thick} {feet_size(w, h)}" + (f"({note})" if note else " ") + f"{w:.0f}x{h:.0f}"
+
+
 def chosen_option(options: list[tuple], want: tuple) -> tuple | None:
     """The option a person picked: want = (width, length) or (width, length, code) - the item of that code,
     else the size."""
@@ -547,13 +580,16 @@ PLAN_HEADERS = ["วัสดุ", "ความหนา (มม.)", "แผ่
 
 
 def plan_rows(groups: list[NestGroup]) -> list[list]:
-    """One row per material/thickness and sheet size."""
+    """One row per material/thickness and sheet size (a size with no plate in stock named with its feet:
+    sheet_title)."""
     rows = []
     for g in groups:
         counts = g.sheet_counts() or [(f"{g.sheet_w:.0f}x{g.sheet_h:.0f}", g.sheet_code, g.sheet_name, 0)]
         for k, (size, code, name, n) in enumerate(counts):
             first = k == 0
-            rows.append([g.material, g.thickness, name, code, size.replace("x", " x "), n,
+            w, h = (float(v) for v in size.split("x"))
+            rows.append([g.material, g.thickness, sheet_title(name, code, w, h, g.thickness), code,
+                         size.replace("x", " x "), n,
                          round(g.by_weight, 2) if first else "", g.pieces if first else "",
                          round(g.utilization * 100, 1) if first else "", round(g.scrap_pct, 1) if first else "",
                          round(g.last_sheet_use * 100, 1) if first else "",

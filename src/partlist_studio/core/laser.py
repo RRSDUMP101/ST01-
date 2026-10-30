@@ -29,9 +29,9 @@ from .cad_fix import FIX_LABELS, FIX_OPEN_IN_PART
 from .dwg_io import outline_net_area
 from .models import PartList
 from .movements import DocLine, Ledger, StockDoc
-from .nesting import (NestGroup, NestParams, NestPart, Placement, SheetLayout, best_orientation, fill_sheet,
-                      nest_parts_from, place_point)
-from .stock import _key, material_family
+from .nesting import (CUSTOM, NestGroup, NestParams, NestPart, Placement, SheetLayout, best_orientation, fill_sheet,
+                      hand_note, nest_parts_from, place_point, sheet_kind)
+from .stock import _key, feet_size, material_family
 
 CUT_STEP = "ตัด"
 ST_WAIT = "รอตัด"
@@ -814,9 +814,14 @@ def apply_cut(prog: CutProgram, sheets: int, jobs, ledger: Ledger | None = None,
     prog.remnant = remnant or prog.remnant
     doc = None
     if ledger is not None:
-        name = f"แผ่น{prog.material} {prog.thickness:g}มม. {prog.sheet_size}"
-        if prog.sheet_name:  # a size with no stock code (added by hand / standard) keeps its size in the name
-            name = prog.sheet_name if prog.sheet_code else f"{name} ({prog.sheet_name})"
+        name = f"แผ่น{prog.material} {prog.thickness:g}มม. {feet_size(prog.sheet_w, prog.sheet_h)} {prog.sheet_size}"
+        if prog.sheet_name and prog.sheet_code:
+            name = prog.sheet_name
+        elif prog.sheet_name:  # a size with no stock code (added by hand / standard): its size in feet and mm
+            kind = sheet_kind(prog.sheet_name)
+            note = hand_note(prog.sheet_name, prog.sheet_w, prog.sheet_h)
+            origin = (f"{CUSTOM}: {note}" if note else CUSTOM) if kind == CUSTOM else kind or prog.sheet_name
+            name = f"{name} ({origin})"
         doc = ledger.new_doc("PD", [DocLine(prog.sheet_code, name, n, "แผ่น", remark=prog.no)],
                              job=", ".join(prog.jobs), remark=f"ตัดเลเซอร์ {prog.no}"
                              + ("" if prog.sheet_code else " (เลือกรหัสแผ่นก่อนบันทึก)"))

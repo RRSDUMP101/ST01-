@@ -776,6 +776,7 @@ def test_laser_sheet_size_choice_and_sizes_added_by_hand(window, app, monkeypatc
         dialog._preset(dialog.preset.currentIndex())
         dialog._add(9000, 1500, 0, "ใหญ่เกินโต๊ะ")
         assert dialog.table.item(1, 0).background().color() == page_mod.theme.ERROR_BG
+        assert dialog.table.item(0, 4).text() == "4.92 x 9.84"  # = ฟุต, the feet the plan names the sheet with
         return 1
 
     monkeypatch.setattr(page_mod.SheetSizesDialog, "exec", add_sizes)
@@ -790,6 +791,11 @@ def test_laser_sheet_size_choice_and_sizes_added_by_hand(window, app, monkeypatc
     group = page._group()
     assert group.thickness == 3 and group.chosen and {s.size for s in group.sheets} == {"1500x3000"}
     assert box.currentIndex() == at and page.sheet_chosen[group.key] == (1500, 3000, "")
+    # แผ่นที่ใช้: the size added by hand named like the plates of the stock, its feet converted from the mm
+    col, row = page_mod.nesting.PLAN_HEADERS.index("แผ่นที่ใช้"), page._row_group.index(group)
+    assert page.table.item(row, col).text() == "เพิ่มเอง 3มม. 4.92x9.84ฟุต 1500x3000"
+    assert page.table.cellWidget(row, col).currentText() == "เพิ่มเอง 3มม. 4.92x9.84ฟุต 1500x3000 · ไม่มีในสต็อก"
+    assert box.itemText(at) == page.table.cellWidget(row, col).currentText()
     others = [g for g in page.groups if g.key != group.key]
     assert all(not g.chosen for g in others)  # only the selected thickness changes
     page._sheet_chosen(0)  # automatic again

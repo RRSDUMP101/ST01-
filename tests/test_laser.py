@@ -345,7 +345,42 @@ def test_plan_sheet_size_chosen_or_added_by_hand():
     ledger = Ledger()
     _, doc = laser.apply_cut(prog, 1, [], ledger, "ช่าง")
     line = doc.lines[0]
-    assert line.name == "แผ่นSS400 3มม. 1500x3000 (เพิ่มเอง: สั่งซื้อ)" and "เลือกรหัสแผ่น" in doc.remark
+    assert line.name == "แผ่นSS400 3มม. 4.92x9.84ฟุต 1500x3000 (เพิ่มเอง: สั่งซื้อ)" and "เลือกรหัสแผ่น" in doc.remark
+
+
+def test_sheet_without_a_plate_in_stock_named_in_feet_and_mm():
+    """แผ่นที่ใช้: a size added by hand (or a standard size) is named like the plates of the stock ('เหล็กแผ่นดำ 4มม.
+    5x10ฟุต(เฟรมบนยาว)1524x3050') - its size in feet converted from the mm; within 6 mm of a whole or half foot
+    it is that foot (1219 x 2440 = 4x8ฟุต)."""
+    from partlist_studio.core.stock import feet_size, feet_text
+
+    assert [feet_text(mm) for mm in (1219.2, 1219, 1220, 2440, 1524, 3050, 2121, 2533, 1500, 3200, 2530)] == \
+        ["4", "4", "4", "8", "5", "10", "6.96", "8.31", "4.92", "10.5", "8.3"]
+    assert feet_size(2121, 2533) == "6.96x8.31ฟุต"
+    title = nesting.sheet_title
+    assert title(nesting.CUSTOM, "", 2533, 2121, 3) == "เพิ่มเอง 3มม. 6.96x8.31ฟุต 2121x2533"
+    assert title("เพิ่มเอง: สั่งซื้อ", "", 3000, 1500, 3) == "เพิ่มเอง 3มม. 4.92x9.84ฟุต(สั่งซื้อ)1500x3000"
+    assert title("เพิ่มเอง: 4x8 ฟุต", "", 1219.2, 2438.4, 5) == "เพิ่มเอง 5มม. 4x8ฟุต 1219x2438"  # note = the size
+    assert title("เพิ่มเอง: 1500x3000", "", 1500, 3000) == "เพิ่มเอง 4.92x9.84ฟุต 1500x3000"
+    assert title("เพิ่มเอง: 4x8 ฟุต", "", 1500, 3000, 3) == "เพิ่มเอง 3มม. 4.92x9.84ฟุต(4x8 ฟุต)1500x3000"  # another size
+    assert title("4x8 ฟุต", "", 1219, 2440, 2.5) == "ขนาดมาตรฐาน 2.5มม. 4x8ฟุต 1219x2440"
+    stock_name = "เหล็กแผ่นดำ 4มม. 5x10ฟุต(เฟรมบนยาว)1524x3050"
+    assert title(stock_name, "01-B00 -0015", 1524, 3050, 4) == stock_name  # a plate of the stock keeps its name
+    assert title("เหล็กแผ่นดำ 3มม. 4x2530(พื้นกระบะดั้มพ์)", "", 1219.2, 2530, 3) == "เหล็กแผ่นดำ 3มม. 4x2530(พื้นกระบะดั้มพ์)"
+
+    square = [(0.0, 0.0), (400.0, 0.0), (400.0, 300.0), (0.0, 300.0)]
+    part = nesting.NestPart("j", "RRS-T-019", "ฝาข้าง", "SS400", 3, 400, 300, 4, outline=[square])
+    custom = [(2121, 2533, 3, "")]
+    [auto] = nesting.plan([part], None, None, None, custom)
+    assert [r[2] for r in nesting.plan_rows([auto])] == ["ขนาดมาตรฐาน 3มม. 4x8ฟุต 1219x2440"]
+    [group] = nesting.plan([part], None, None, None, custom, {auto.key: (2121, 2533)})
+    [row] = nesting.plan_rows([group])
+    assert row[2] == "เพิ่มเอง 3มม. 6.96x8.31ฟุต 2121x2533" and row[3] == "" and row[4] == "2121 x 2533"
+    assert group.sheet_name == nesting.CUSTOM  # the name kept stays: a sheet added by hand is still found by it
+    [prog] = laser.make_programs([group], laser.CutQueue(), laser.LaserParams())
+    assert prog.sheet_name == nesting.CUSTOM
+    _, doc = laser.apply_cut(prog, 1, [], Ledger(), "ช่าง")
+    assert doc.lines[0].name == "แผ่นSS400 3มม. 6.96x8.31ฟุต 2121x2533 (เพิ่มเอง)"
 
 
 def test_plan_sheet_picked_for_parts_too_big_for_the_main_sheet():

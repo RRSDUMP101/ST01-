@@ -397,6 +397,22 @@ def sheet_size_mm(name: str) -> tuple[float, float] | None:
     return a, b
 
 
+def feet_text(mm: float) -> str:
+    """A length in feet the way the plate names write it: 1219.2 -> '4', 3200 -> '10.5', 2121 -> '6.96'. Within
+    6 mm of a whole or half foot it is that foot (1219 x 2440 is a 4x8ฟุต plate, 1524 x 3050 is 5x10ฟุต), else
+    2 decimals (1 ฟุต = 304.8 มม.)."""
+    ft = float(mm or 0) / FOOT_MM
+    half = round(ft * 2) / 2
+    if half and abs(ft - half) * FOOT_MM <= 6:
+        ft = half
+    return f"{ft:.2f}".rstrip("0").rstrip(".")
+
+
+def feet_size(width: float, length: float) -> str:
+    """'4x8ฟุต' (1219 x 2440 มม.), '6.96x8.31ฟุต' (2121 x 2533 มม.)."""
+    return f"{feet_text(width)}x{feet_text(length)}ฟุต"
+
+
 def item_size_mm(item: StockItem) -> tuple[float, float] | None:
     """Width x length of a plate: the register's กว้าง / ยาว (มม.) columns, else read from the name."""
     w, h = to_number(item.extra.get("width_mm", 0)), to_number(item.extra.get("length_mm", 0))

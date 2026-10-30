@@ -9,7 +9,8 @@ from dataclasses import replace
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QBrush, QColor, QKeySequence, QPainter, QPainterPath, QPen, QShortcut
-from PySide6.QtWidgets import (QAbstractItemView, QButtonGroup, QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox,
+from PySide6.QtWidgets import (QAbstractItemView, QButtonGroup, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
+                               QDoubleSpinBox,
                                QGraphicsItem, QGraphicsPathItem, QGraphicsScene, QGraphicsSimpleTextItem,
                                QGraphicsView, QHBoxLayout, QLabel, QLineEdit, QRadioButton, QSplitter,
                                QTableWidgetItem, QVBoxLayout, QWidget)
@@ -145,8 +146,22 @@ class SheetEditor(QDialog):
         self.search.setClearButtonEnabled(True)
         self.search.textChanged.connect(self._fill_flats)
         ll.addWidget(self.search)
+        ticks = QHBoxLayout()
+        self.check_all = QCheckBox("เลือกทั้งหมด")
+        self.check_all.setToolTip("ติ๊กทุกชิ้นที่แสดงในรายการ (ตามคำค้นหา) · กดอีกครั้ง = เอาติ๊กออกทั้งหมด "
+                                  "· คลิกหัวคอลัมน์ เพิ่ม ก็ได้")
+        self.check_all.clicked.connect(self._check_all_clicked)
+        ticks.addWidget(self.check_all)
+        ticks.addStretch(1)
+        self.tick_count = QLabel()
+        self.tick_count.setObjectName("Hint")
+        ticks.addWidget(self.tick_count)
+        ll.addLayout(ticks)
         self.flat_table = table(["เพิ่ม", "รหัส", "จำนวน", "ขนาด (มม.)", "ชิ้นส่วน"], [44, 115, 56, 84, 120], editable=True)
         self.flat_table.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self.flat_table.horizontalHeaderItem(0).setToolTip("คลิก = เลือกทั้งหมด / เอาออกทั้งหมด")
+        self.flat_table.horizontalHeader().sectionClicked.connect(self._header_clicked)
+        self.flat_table.itemChanged.connect(self._flat_edited)
         ll.addWidget(self.flat_table, 1)
         mode = QHBoxLayout()
         self.auto = QRadioButton("อัตโนมัติ – วางในที่ว่าง")
@@ -231,6 +246,9 @@ class SheetEditor(QDialog):
         QShortcut(QKeySequence.Undo, self, activated=self.undo_last)
 
         self._shown_flats: list = []
+        self._ticked: set[str] = set()  # codes ticked to add - kept while the list is searched
+        self._qty: dict[str, str] = {}  # pieces typed per code - kept the same way
+        self._filling = False
         self._fill_flats()
         self._show_sheet(0)
 
@@ -469,34 +487,85 @@ class SheetEditor(QDialog):
     def _fill_flats(self, *_args) -> None:
         text = self.search.text().strip().lower()
         self._shown_flats = [f for f in self.flats if not text or text in f"{f.code} {f.name}".lower()]
+        self._filling = True
         self.flat_table.setRowCount(len(self._shown_flats))
         for r, f in enumerate(self._shown_flats):
             tick = QTableWidgetItem()
             tick.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled)
-            tick.setCheckState(Qt.Unchecked)
+            tick.setCheckState(Qt.Checked if f.code in self._ticked else Qt.Unchecked)
             self.flat_table.setItem(r, 0, tick)
             for c, value in ((1, f.code), (3, "{:.0f} x {:.0f}".format(*f.size)), (4, f.name)):
                 cell = QTableWidgetItem(value)
                 cell.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
                 self.flat_table.setItem(r, c, cell)
-            qty = QTableWidgetItem("1")
+            qty = QTableWidgetItem(self._qty.get(f.code, "1"))
             qty.setToolTip("จำนวนต่อแผ่น (ดับเบิลคลิกเพื่อแก้) · วางอัตโนมัติ: 0 = เต็มที่ว่าง")
             self.flat_table.setItem(r, 2, qty)
+        self._filling = False
         self.add_btn.setEnabled(bool(self._shown_flats))
+        self._update_check_all()
+
+    # select / check all: every piece shown in the list (the search) is ticked, or none
+    def _rows_ticked(self) -> list[int]:
+        return [r for r in range(self.flat_table.rowCount()) if self.flat_table.item(r, 0).checkState() == Qt.Checked]
+
+    def tick_all(self, on: bool) -> None:
+        self._filling = True
+        for r, f in enumerate(self._shown_flats):
+            self.flat_table.item(r, 0).setCheckState(Qt.Checked if on else Qt.Unchecked)
+            (self._ticked.add if on else self._ticked.discard)(f.code)
+        self._filling = False
+        self._update_check_all()
+
+    def _check_all_clicked(self, *_args) -> None:
+        rows = self.flat_table.rowCount()
+        self.tick_all(not (rows and len(self._rows_ticked()) == rows))
+
+    def _header_clicked(self, section: int) -> None:
+        if section == 0:
+            self._check_all_clicked()
+
+    def _flat_edited(self, item: QTableWidgetItem) -> None:
+        """A row ticked or unticked: with several rows selected, all of them follow it."""
+        if self._filling or item.row() >= len(self._shown_flats):
+            return
+        if item.column() == 2:
+            self._qty[self._shown_flats[item.row()].code] = item.text()
+            return
+        if item.column() != 0:
+            return
+        on = item.checkState() == Qt.Checked
+        rows = {i.row() for i in self.flat_table.selectedIndexes()}
+        rows = rows if item.row() in rows and len(rows) > 1 else {item.row()}
+        self._filling = True
+        for r in rows:
+            self.flat_table.item(r, 0).setCheckState(Qt.Checked if on else Qt.Unchecked)
+            (self._ticked.add if on else self._ticked.discard)(self._shown_flats[r].code)
+        self._filling = False
+        self._update_check_all()
+
+    def _update_check_all(self) -> None:
+        rows, ticked = self.flat_table.rowCount(), len(self._rows_ticked())
+        self.check_all.setCheckState(Qt.Checked if rows and ticked == rows else
+                                     Qt.PartiallyChecked if ticked else Qt.Unchecked)
+        self.check_all.setEnabled(bool(rows))
+        hidden = len(self._ticked) - ticked
+        self.tick_count.setText(f"ติ๊ก {ticked} จาก {rows} ชิ้น" + (f" (+{hidden} ที่ซ่อนโดยคำค้น)" if hidden > 0 else ""))
 
     def checked(self) -> list[tuple[object, int]]:
-        """(flat pattern, pieces) ticked to add (the selected rows when none is ticked)."""
-        rows = [r for r in range(self.flat_table.rowCount())
-                if self.flat_table.item(r, 0).checkState() == Qt.Checked]
-        if not rows:
-            rows = sorted({i.row() for i in self.flat_table.selectedIndexes()})
+        """(flat pattern, pieces) ticked to add - also the ones a search hides now (the selected rows when none
+        is ticked)."""
+        picks = [f for f in self.flats if f.code in self._ticked]
+        if not picks:
+            picks = [self._shown_flats[r] for r in sorted({i.row() for i in self.flat_table.selectedIndexes()})
+                     if r < len(self._shown_flats)]
         out = []
-        for r in rows:
+        for f in picks:
             try:
-                n = int(float(self.flat_table.item(r, 2).text() or 0))
-            except (ValueError, AttributeError):
+                n = int(float(self._qty.get(f.code, "1") or 0))
+            except ValueError:
                 n = 1
-            out.append((self._shown_flats[r], max(0, n)))
+            out.append((f, max(0, n)))
         return out
 
     def part_index(self, flat) -> int:

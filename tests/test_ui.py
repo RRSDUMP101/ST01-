@@ -1109,6 +1109,20 @@ def test_laser_layout_by_hand_on_sheet_sizes_added_by_hand(window, app, monkeypa
 
     def lay_out(editor):
         assert editor.flat_table.rowCount() and editor.ok.isEnabled()
+        rows = editor.flat_table.rowCount()
+        editor.check_all.click()  # เลือกทั้งหมด
+        assert len(editor.checked()) == rows and editor.check_all.checkState() == Qt.Checked
+        editor.flat_table.item(rows - 1, 0).setCheckState(Qt.Unchecked)  # one taken out: partly (or none)
+        assert len(editor._rows_ticked()) == rows - 1
+        assert editor.check_all.checkState() == (Qt.PartiallyChecked if rows > 1 else Qt.Unchecked)
+        editor._header_clicked(0)  # the เพิ่ม header ticks all again
+        assert len(editor.checked()) == rows
+        code = editor._shown_flats[0].code
+        editor.search.setText(code)  # a search keeps the ticks
+        editor.search.setText("")
+        assert len(editor.checked()) == rows and f"ติ๊ก {rows} จาก {rows}" in editor.tick_count.text()
+        editor.check_all.click()  # none
+        assert editor.check_all.checkState() == Qt.Unchecked and not editor._ticked
         editor.flat_table.item(0, 0).setCheckState(Qt.Checked)
         editor.flat_table.item(0, 2).setText("2")
         editor.add_checked()  # automatically, in the free space

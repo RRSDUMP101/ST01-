@@ -615,7 +615,12 @@ class CutProgram:
         for it in (kw.get("items") or {}).values():
             it["outline"] = [[(float(x), float(y)) for x, y in loop] for loop in it.get("outline") or []]
             it["bends"] = [[(float(x), float(y)) for x, y in line] for line in it.get("bends") or []]
-        return cls(**kw)
+        prog = cls(**kw)
+        if prog.sheet_code and sheet_kind(prog.sheet_name):
+            # a size added by hand has no stock code: programs made before took the code of the main plate
+            # (a sheet for the parts too big for it) - the PD of the cut then took the wrong plate
+            prog.sheet_code = ""
+        return prog
 
 
 @dataclass
@@ -668,9 +673,13 @@ def make_programs(groups: list[NestGroup], queue: CutQueue, params: LaserParams,
             else:
                 runs.append((sig, sheet, 1))
         for _sig, sheet, repeat in runs:
+            # a sheet of the plan carries its own plate (the main one, or one of a size added by hand for the parts
+            # too big for it: no stock code) - only a bare sheet takes the plate of its material/thickness
+            own = bool(sheet.code or sheet.name)
             prog = CutProgram(no=queue.next_no(), material=g.material, family=g.family, thickness=g.thickness,
-                              sheet_w=sheet.width, sheet_h=sheet.height, sheet_code=sheet.code or g.sheet_code,
-                              sheet_name=sheet.name or g.sheet_name, repeat=repeat, source=source)
+                              sheet_w=sheet.width, sheet_h=sheet.height,
+                              sheet_code=sheet.code if own else g.sheet_code,
+                              sheet_name=sheet.name if own else g.sheet_name, repeat=repeat, source=source)
             for pl in sheet.placements:
                 p = g.parts[pl.part]
                 prog.items.setdefault(p.key, _program_item(p))
@@ -815,8 +824,8 @@ def apply_cut(prog: CutProgram, sheets: int, jobs, ledger: Ledger | None = None,
     doc = None
     if ledger is not None:
         name = f"แผ่น{prog.material} {prog.thickness:g}มม. {feet_size(prog.sheet_w, prog.sheet_h)} {prog.sheet_size}"
-        if prog.sheet_name and prog.sheet_code:
-            name = prog.sheet_name
+        if prog.sheet_code and not sheet_kind(prog.sheet_name):
+            name = prog.sheet_name or name
         elif prog.sheet_name:  # a size with no stock code (added by hand / standard): its size in feet and mm
             kind = sheet_kind(prog.sheet_name)
             note = hand_note(prog.sheet_name, prog.sheet_w, prog.sheet_h)

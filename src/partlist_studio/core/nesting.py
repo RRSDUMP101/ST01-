@@ -21,7 +21,7 @@ from pathlib import Path
 from .cad_fix import convex_hull
 from .dwg_io import density_for, parse_thickness
 from .models import Part, PartList
-from .stock import StockList, _key, feet_size, item_size_mm, material_family, sheet_size_mm
+from .stock import StockList, _key, feet_size, item_size_mm, length_mm, material_family, sheet_size_mm
 
 DEFAULT_SHEETS = [(1219.0, 2440.0, "", "4x8 ฟุต"), (1524.0, 3048.0, "", "5x10 ฟุต")]
 CUSTOM = "เพิ่มเอง"  # name of a sheet size added by hand
@@ -456,7 +456,10 @@ def hand_note(name: str, width: float, length: float) -> str:
         return ""
     note = name[len(CUSTOM):].strip().lstrip(":").strip()
     size = sheet_size_mm(note)
-    bare = not re.sub(r"[\d.\s()xX×*]|ฟุต|ft|มม\.?|mm", "", note)
+    sides = re.split(r"\s*[xX×*]\s*", note)
+    if len(sides) == 2 and all(length_mm(s) for s in sides):  # '1219.2x2438.4', '5ft x 10ft', "4'x8'"
+        size = tuple(length_mm(s) for s in sides)
+    bare = not re.sub(r"[\d.\s()xX×*'\"]|ฟุต|ft|มม\.?|mm", "", note)
     return "" if size and bare and same_size(tuple(sorted(size)), (width, length)) else note
 
 

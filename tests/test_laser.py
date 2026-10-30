@@ -381,6 +381,33 @@ def test_sheet_without_a_plate_in_stock_named_in_feet_and_mm():
     assert prog.sheet_name == nesting.CUSTOM
     _, doc = laser.apply_cut(prog, 1, [], Ledger(), "ช่าง")
     assert doc.lines[0].name == "แผ่นSS400 3มม. 6.96x8.31ฟุต 2121x2533 (เพิ่มเอง)"
+    # notes that only say the size again, in mm with decimals or in feet
+    assert title("เพิ่มเอง: 1219.2x2438.4", "", 1219.2, 2438.4, 3) == "เพิ่มเอง 3มม. 4x8ฟุต 1219x2438"
+    assert title("เพิ่มเอง: 5ft x 10ft", "", 1524, 3048, 3) == "เพิ่มเอง 3มม. 5x10ฟุต 1524x3048"
+
+
+def test_sheet_added_by_hand_for_parts_too_big_keeps_no_stock_code():
+    """The parts too big for the stock plate go on a size added by hand: its program has no stock code (it took
+    the code of the main plate, and the PD of the cut took a 4x8 plate off the stock) and is named in feet."""
+    from partlist_studio.core import steel
+    from partlist_studio.core.stock import StockItem, StockList
+
+    def piece(key, code, w, h, n):
+        return nesting.NestPart(key, code, code, "SS400", 3, w, h, n, outline=[[(0.0, 0.0), (w, 0.0), (w, h), (0.0, h)]])
+
+    stock = StockList(items=[StockItem(code="01-B00-0003", name="เหล็กแผ่นดำ 3 มม. 4x8 ฟุต", spec="3 มม.",
+                                       unit="แผ่น", on_hand=7)])
+    [group] = nesting.plan([piece("s", "RRS-T-019", 400, 300, 12), piece("b", "RRS-T-020", 1400, 2800, 1)], stock,
+                           None, None, [(1500, 3000, 0, "สั่งซื้อ")])
+    assert [(c, s) for s, c, _name, _n in group.sheet_counts()] == [("01-B00-0003", "1219x2438"), ("", "1500x3000")]
+    assert nesting.plan_rows([group])[1][2] == "เพิ่มเอง 3มม. 4.92x9.84ฟุต(สั่งซื้อ)1500x3000"
+    main, big = laser.make_programs([group], laser.CutQueue(), laser.LaserParams())
+    assert main.sheet_code == "01-B00-0003" and (big.sheet_code, big.sheet_size) == ("", "1500x3000")
+    assert steel.reserved_sheets([main, big]) == {"01B000003": 1}
+    _, doc = laser.apply_cut(big, 1, [], Ledger(), "ช่าง")
+    assert (doc.lines[0].code, doc.lines[0].name) == ("", "แผ่นSS400 3มม. 4.92x9.84ฟุต 1500x3000 (เพิ่มเอง: สั่งซื้อ)")
+    old = laser.CutProgram.from_dict({**big.to_dict(), "sheet_code": "01-B00-0003"})  # saved by the old version
+    assert old.sheet_code == "" and laser.CutProgram.from_dict(main.to_dict()).sheet_code == "01-B00-0003"
 
 
 def test_plan_sheet_picked_for_parts_too_big_for_the_main_sheet():

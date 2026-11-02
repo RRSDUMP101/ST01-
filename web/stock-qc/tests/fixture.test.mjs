@@ -94,6 +94,12 @@ test('everything is clearly sample data: company, DEMO codes, role users, no cus
   }
   assert.equal(rows(s, 'decisions', (d) => d.status === 'decided').length, 2, 'the other decisions stay open');
   for (const u of rows(s, 'uat')) assert.match(u.evidence + ' ' + u.note, /ตัวอย่าง/);
+  // sample UAT results never make a phase look accepted (every phase with records has one not passed)
+  for (const ph of new Set(rows(s, 'uat').map((u) => u.phase))) {
+    assert.ok(rows(s, 'uat', (u) => u.phase === ph).some((u) => u.status !== 'PASS'), `phase ${ph} looks fully passed`);
+  }
+  assert.equal(rows(s, 'uat_signoffs').length, 0, 'no sample sign-off – acceptance is never faked');
+  assert.equal(rows(s, 'rollouts').length, 0);
 });
 
 test('the content covers every phase (warehouses, BOM, purchasing, QC, jobs, transfer, Express, count, offcuts, UAT)', async () => {

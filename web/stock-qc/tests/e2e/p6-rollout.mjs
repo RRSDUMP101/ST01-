@@ -271,7 +271,7 @@ await step('QC: void a mistyped PASS from the inspection detail', async () => {
   await page.focus('#rel-qty');
   await page.keyboard.type('2e');
   await dlgSubmit();
-  await dlgError('ใส่เป็นตัวเลขเท่านั้น');
+  await dlgError('ช่อง "จำนวนที่ปล่อย (ชิ้น)" อ่านเป็นตัวเลขไม่ได้');
   await page.click('#dlg .dlg-f .btn-ghost');
   await dlgClosed();
   assert(await state((s, R, x) => s.tables.inspections[x].status === 'OPEN' && !s.tables.inspections[x].releasedQty, inspId), 'ปล่อยผ่านไปแล้วทั้งที่จำนวนอ่านไม่ได้');

@@ -185,20 +185,23 @@
 
   /** FormData -> object. 'a[]' -> array; 'lines[0][code]' -> lines[0].code; checkboxes -> true/false. */
   /**
-   * Number boxes the browser could not read (e.g. "1,5" or "12a"): their value is "" so the engine would see an
-   * empty box. Returns {ok:false, errors} naming each field, or null when every number box is readable.
+   * Number boxes the browser could not read (e.g. "5-", "1,5" or "1e"): their value is "" so the engine would see an
+   * empty box (a typed price or quantity silently dropped). Returns {ok:false, errors} with one Thai error per box –
+   * naming the field and the line/card it is on – or null when every number box is readable. The shell runs it before
+   * every page form and dialog is sent.
    */
   const badNumbers = (formEl) => {
     const errors = [];
-    for (const el of formEl.querySelectorAll('input[type=number]')) {
+    for (const el of formEl ? formEl.querySelectorAll('input[type="number"]') : []) {
       if (el.disabled || !el.validity || !el.validity.badInput) continue;
-      let label = el.getAttribute('aria-label') || '';
-      if (!label) {
-        const f = el.closest('.fld');
-        const l = f && f.querySelector('.fld-l');
-        label = (l && l.textContent) || el.name || 'ช่องตัวเลข';
-      }
-      errors.push({ code: 'BAD_NUMBER', field: el.name, message: `${util.trim(label).replace(/\s*\*$/, '')}: ใส่เป็นตัวเลขเท่านั้น (ทศนิยมใช้จุด ไม่ใช้จุลภาค)` });
+      const lab = el.closest('label.fld');
+      const l = lab && lab.querySelector('.fld-l');
+      const name = util.trim((l ? l.textContent : el.getAttribute('aria-label') || el.name || '').replace(/\*/g, ''));
+      const card = el.closest('.step');
+      const sn = card && card.querySelector('.step-n');
+      const tr = !card && el.closest('tbody tr');
+      const where = sn ? util.trim(sn.textContent.split('·')[0]) + ' ' : tr ? `บรรทัด ${Array.prototype.indexOf.call(tr.parentNode.children, tr) + 1} ` : '';
+      errors.push({ code: 'NOT_A_NUMBER', field: el.name, message: `${where}ช่อง "${name}" อ่านเป็นตัวเลขไม่ได้ – พิมพ์เฉพาะตัวเลข เช่น 12 หรือ 12.5 (ยังไม่ได้บันทึก)` });
     }
     return errors.length ? { ok: false, errors } : null;
   };

@@ -742,7 +742,7 @@
       if (app.busy) return;
       const bad = h.badNumbers(form);
       if (bad) {
-        toast(bad.errors.map((e) => e.message).join(' · '), 'warn');
+        toast(bad.errors.map((e) => e.message).join(' · '), 'bad');
         const first = form.querySelector('input[type=number]:invalid');
         if (first) first.focus();
         return;

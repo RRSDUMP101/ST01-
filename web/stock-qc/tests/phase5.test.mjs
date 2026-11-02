@@ -1161,6 +1161,9 @@ test('ยกเลิกผลตรวจที่บันทึกผิด �
   assert.equal(codeOf(await w.exec('QCLEAD', 'qc.void', { id, reason: 'ซ้ำ' })), 'BAD_STATE');
   // the stock can be inspected again in full
   const again = await w.ok('QC1', 'qc.inspect', { stage: 'INCOMING', code: 'TST-PLATE', wh: 'A', bin: 'A-01', lot: 'V1', qty: 4, planId: plan, results: plateOk, sourceDoc: rr });
+  // once part of a PASS is released it cannot be voided (the released pieces would lose their result)
+  await w.ok('QCLEAD', 'qc.release', { id: again.result.id, qty: 1 });
+  assert.equal(codeOf(await w.exec('QCLEAD', 'qc.void', { id: again.result.id, reason: 'ผิด' })), 'BAD_STATE');
   // a FAIL is handled through its NCR, not voided
   const rr2 = await receivePlate(w, 'V2', 1);
   const bad = await w.ok('QC1', 'qc.inspect', { stage: 'INCOMING', code: 'TST-PLATE', wh: 'A', bin: 'A-01', lot: 'V2', qty: 1, planId: plan, results: plateBad, sourceDoc: rr2, photos: PHOTO });
@@ -1196,4 +1199,24 @@ test('ผู้รับของเข้าคลังปล่อยผ่�
   assert.deepEqual(s.tables.inspections[i.result.id].receivedBy, ['DUAL']);
   assert.equal(codeOf(await w.exec('DUAL', 'qc.release', { id: i.result.id })), 'SAME_PERSON');
   await w.ok('QCLEAD', 'qc.release', { id: i.result.id });
+});
+
+test('ยกเลิกผลตรวจซ้ำไม่ได้เมื่อ NCR ปิดแล้ว (ของรอแก้ไขจะตรวจซ้ำต่อไม่ได้)', async () => {
+  const w = await world();
+  await w.ok('ADMIN', 'user.upsert', { id: 'QCLEAD2', name: 'QCLEAD2', roles: ['qc_lead'] });
+  await w.ok('ENG', 'item.upsert', { code: 'QC-VD', name: 'ชิ้นทดสอบยกเลิก', baseUnit: 'ชิ้น', type: 'PART', qcIncoming: true });
+  const plan = await approvedPlan(w, 'QC-VD', 'INCOMING', [{ name: 'ผิว', kind: 'check' }]);
+  await w.ok('LEAD', 'doc.post', { type: 'RR', lines: [{ code: 'QC-VD', qty: 4, wh: 'A', bin: 'A-01' }] });
+  const insp = (value, extra = {}) => w.exec('QC1', 'qc.inspect', { stage: 'INCOMING', code: 'QC-VD', wh: 'A', bin: 'A-01', qty: 4, planId: plan,
+    results: [{ char: 'ผิว', value }], photos: PHOTO, ...extra });
+  const f = await insp('ไม่ผ่าน');
+  const ncrNo = f.result.ncrNo;
+  await w.ok('QCLEAD', 'ncr.disposition', { ncrNo, disposition: 'REWORK', reason: 'ขัดผิวใหม่' });
+  const re = await insp('ผ่าน', { fromStatus: 'REWORK', reinspectionOf: ncrNo });
+  assert.equal(re.result.result, 'PASS');
+  await w.ok('QCLEAD', 'ncr.close', { ncrNo, note: 'ตรวจซ้ำผ่าน' });
+  assert.equal(codeOf(await w.exec('QCLEAD2', 'qc.void', { id: re.result.id, reason: 'ผิด' })), 'BAD_STATE');
+  await w.ok('QCLEAD', 'qc.release', { id: re.result.id });
+  const s = await w.state();
+  assert.equal(qty(s, { code: 'QC-VD', status: 'AVAILABLE' }), 4);
 });

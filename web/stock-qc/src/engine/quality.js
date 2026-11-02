@@ -963,11 +963,21 @@
       if (!insp) return tx.error('NOT_FOUND', `ไม่พบผลตรวจ ${p.id || ''}`, { field: 'id' });
       if (insp.result !== 'PASS') return tx.error('NOT_PASS', `${insp.id} ผลไม่ผ่าน – ผลไม่ผ่านแก้ด้วยการตัดสิน NCR ${insp.ncrNo || ''} ไม่ใช่ยกเลิก`, { field: 'id' });
       if (insp.status !== 'OPEN') return tx.error('BAD_STATE', `${insp.id} ${INSP_STATUS[insp.status] || insp.status} – ยกเลิกได้เฉพาะผลผ่านที่ยังรอปล่อย`, { field: 'id' });
+      // part of it already became usable: voiding would leave the released pieces without a valid result (and an NCR
+      // re-inspection count that can never close) – handle the released stock with a lot quarantine / NCR instead
+      if ((insp.releasedQty || 0) > 0) {
+        return tx.error('BAD_STATE', `${insp.id} ปล่อยผ่านไปแล้ว ${insp.releasedQty} – ยกเลิกผลไม่ได้ ถ้าของที่ปล่อยมีปัญหาให้กักกันล็อตหรือเปิด NCR`, { field: 'id' });
+      }
+      // a re-inspection of an NCR that is already closed: the stock could never be re-inspected again
+      const rn = insp.reinspectionNcr ? tx.get('ncrs', insp.reinspectionNcr) : null;
+      if (rn && rn.status === 'CLOSED') {
+        return tx.error('BAD_STATE', `${insp.id} เป็นผลตรวจซ้ำของ ${rn.ncrNo} ซึ่งปิดแล้ว – ยกเลิกไม่ได้ (ของจะตรวจซ้ำต่อไม่ได้)`, { field: 'id' });
+      }
       if (insp.wh && !tx.need('qc.release', insp.wh, { field: 'id' })) return;
       if (!notSame(tx, insp.inspector, 'ผู้ยกเลิกผลตรวจ ต้องเป็นคนละคนกับผู้ตรวจ (แยกหน้าที่)', { field: 'id' })) return;
       const reason = util.trim(p.reason).slice(0, 300);
       if (!reason) return tx.error('REQUIRED', 'ระบุเหตุผลที่ยกเลิกผลตรวจ', { field: 'reason' });
-      const left = round(insp.qty - (insp.releasedQty || 0));
+      const left = round(insp.qty);
       tx.put('inspections', insp.id, Object.assign(clone(insp), { status: 'VOID', voidedBy: tx.userId, voidedAt: tx.now, voidReason: reason }));
       const it = tx.item(insp.code) || { baseUnit: '' };
       if (STOCK_STAGES[insp.stage] && left > 0) {

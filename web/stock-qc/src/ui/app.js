@@ -663,7 +663,9 @@
     doc.addEventListener('click', async (ev) => {
       const el = ev.target.closest('[data-act],[data-go],[data-dlg-close],[data-mode-switch],[data-nav-toggle]');
       if (!el) return;
-      if (livePending && !(el.matches && el.matches('[data-live]'))) await flushLive();
+      // a filter typed just before: run it first. Form controls are left to their change event (a re-render here would
+      // detach a checkbox / radio before its change fires); that handler flushes too.
+      if (livePending && !(el.matches && el.matches('[data-live]')) && el.tagName !== 'INPUT' && el.tagName !== 'SELECT') await flushLive();
       if (el.hasAttribute('data-dlg-close')) {
         ev.preventDefault();
         return closeDialog(null);
@@ -708,6 +710,7 @@
       if (el.closest && el.closest('#main form, #dlg')) app.dirty = true;
       const act = el.dataset && el.dataset.act;
       if (!act || !(el.tagName === 'SELECT' || el.tagName === 'INPUT') || el.hasAttribute('data-live')) return;
+      if (livePending) await flushLive(); // the change has fired: the control's value / checked state is read from el
       const page = RRS.ui.pages[app.page];
       const fn = page && page.actions[act];
       if (fn) await fn(makeCtx(page.id), el, ev);
@@ -743,7 +746,7 @@
       const bad = h.badNumbers(form);
       if (bad) {
         toast(bad.errors.map((e) => e.message).join(' · '), 'bad');
-        const first = form.querySelector('input[type=number]:invalid');
+        const first = Array.from(form.querySelectorAll('input[type="number"]')).find((x) => !x.disabled && x.validity && x.validity.badInput);
         if (first) first.focus();
         return;
       }

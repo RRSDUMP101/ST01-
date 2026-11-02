@@ -292,7 +292,8 @@
       if (ctx.can('qc.release', i.wh || undefined)) {
         acts.push(h.btn('ปล่อยผ่าน', { act: 'release', arg: i.id, tone: 'primary', disabled: why.length > 0, id: 'ins-release-btn', title: why.length ? why[0].message : 'ให้ของใช้ได้' }));
         if (why.length) notes.push(h.note(t`ปล่อยผ่านไม่ได้ตอนนี้:${h.errors({ errors: why })}`, 'warn'));
-        if (i.inspector !== me) acts.push(h.btn('ยกเลิกผลตรวจ (บันทึกผิด)', { act: 'voidInsp', arg: i.id, tone: 'ghost', id: 'ins-void-btn', title: 'ทำให้ผลนี้เป็นโมฆะ – ของยังรอตรวจและต้องตรวจใหม่' }));
+        // the engine decides (permission, separation of duties when it is on, nothing released yet, NCR still open)
+        if (ctx.check('qc.void', { id: i.id, reason: '-' }).ok) acts.push(h.btn('ยกเลิกผลตรวจ (บันทึกผิด)', { act: 'voidInsp', arg: i.id, tone: 'ghost', id: 'ins-void-btn', title: 'ทำให้ผลนี้เป็นโมฆะ – ของยังรอตรวจและต้องตรวจใหม่' }));
       } else notes.push(h.note(`ผลผ่านแล้ว รอหัวหน้า QC ที่ไม่ใช่ผู้ตรวจ (${ctx.userName(i.inspector)}) กดปล่อยผ่าน – ระหว่างนี้ของยังเป็น "${STATUS_LABEL[i.fromStatus] || 'รอตรวจ'}" ใช้หรือส่งมอบไม่ได้`, 'info'));
     }
     if (i.result === 'FAIL' && ctx.can('qc.inspect', i.wh || undefined)) {
@@ -507,7 +508,7 @@
         const i = RRS.q.get(ctx.state, 'inspections', el.dataset.arg);
         if (!i) return;
         const unit = (ctx.item(i.code) || {}).baseUnit || '';
-        const left = util.round(i.qty - (i.releasedQty || 0));
+        const left = util.round(i.qty);
         await ctx.dialog({
           title: `ยกเลิกผลตรวจ ${i.id}`, submit: 'ยกเลิกผลตรวจนี้', danger: true,
           message: `ใช้เมื่อบันทึกผลผิด – ผลนี้จะเป็นโมฆะ ประวัติยังอยู่ ${STOCK_STAGES[i.stage] && left > 0 ? `ของ ${h.fmt.num(left)} ${unit} ยังเป็น "${STATUS_LABEL[i.fromStatus] || 'รอตรวจ'}" และต้องตรวจใหม่` : 'ต้องตรวจใหม่'}`,

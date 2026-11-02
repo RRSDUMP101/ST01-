@@ -29,6 +29,8 @@
     const s = RRS.q.get(state, 'settings', 'main') || {};
     return Object.assign({}, d, s, { pilot: Object.assign({}, d.pilot, s.pilot) });
   }
+  /** Separation of duties is on unless the owner turned it off (policies.sod = false) – the engine applies the same rule. */
+  const sodOn = (state) => (((RRS.q.get(state, 'settings', 'main') || {}).policies) || {}).sod !== false;
   const groupsOf = (state) => Array.from(new Set(RRS.q.rows(state, 'items', (i) => i.active !== false && U.trim(i.group)).map((i) => U.trim(i.group)))).sort();
   const scopeText = (r) => [].concat((r.groups || []).map((g) => 'กลุ่ม ' + g), (r.warehouses || []).map((w) => 'คลัง ' + w)).join(', ') || '–';
 
@@ -57,7 +59,7 @@
         { label: 'สถานะ', render: (x) => (x.status === 'OPEN' ? h.badge('เปิดอยู่', 'warn') : t`${h.badge('ปิดแล้ว', 'ok')}<br><small class="muted">${ctx.userName(x.resolvedBy)}</small>`) },
         { label: '', render: (x) => {
           if (x.status !== 'OPEN' || !can) return '';
-          if (x.severity === 'CRITICAL' && x.reportedBy === me(ctx)) return t`<small class="muted">ปัญหาร้ายแรง – ให้คนอื่นปิด</small>`;
+          if (x.severity === 'CRITICAL' && x.reportedBy === me(ctx) && sodOn(ctx.state)) return t`<small class="muted">ปัญหาร้ายแรง – ให้คนอื่นปิด</small>`;
           return h.btn('ปิดปัญหา', { act: 'resolve', arg: x.id, small: true });
         } },
       ] });
@@ -94,9 +96,11 @@
     const notes = [];
     if (r.status === 'PROPOSED') {
       if (ctx.can('rollout.approve')) {
-        const self = r.proposedBy === me(ctx);
-        acts.push(h.btn('อนุมัติขยายผล', { act: 'approve', tone: 'primary', disabled: self || !ready.ok, id: 'ro-approve',
-          title: self ? 'ผู้เสนออนุมัติเองไม่ได้' : ready.ok ? 'เพิ่มขอบเขตนี้เข้าการทดลอง' : 'ยังไม่ผ่านเงื่อนไขที่จำเป็น' }));
+        // the engine decides: readiness, and the proposer only when separation of duties is on
+        const chk = ctx.check('rollout.approve', { id: r.id });
+        const self = !chk.ok && chk.errors.some((e) => e.code === 'SAME_PERSON');
+        acts.push(h.btn('อนุมัติขยายผล', { act: 'approve', tone: 'primary', disabled: !chk.ok, id: 'ro-approve',
+          title: chk.ok ? 'เพิ่มขอบเขตนี้เข้าการทดลอง' : self ? 'ผู้เสนออนุมัติเองไม่ได้' : (chk.errors[0] || {}).message || 'ยังไม่ผ่านเงื่อนไขที่จำเป็น' }));
         acts.push(h.btn('ไม่อนุมัติ', { act: 'reject', tone: 'ghost', id: 'ro-reject' }));
         if (self) notes.push(h.note('คุณเป็นผู้เสนอแผนนี้ – ต้องให้ผู้จัดการคนอื่นอนุมัติ (แยกหน้าที่)', 'info'));
       } else notes.push(h.note('รอผู้จัดการ (ที่ไม่ใช่ผู้เสนอ) อนุมัติ', 'info'));
@@ -104,7 +108,14 @@
         : h.note(t`ยังขยายผลไม่ได้:${h.errors({ errors: ready.problems.map((p) => ({ message: p })) })}`, 'warn'));
     }
     if (r.status === 'APPROVED' && ctx.can('rollout.approve')) acts.push(h.btn('ย้อนกลับการขยายผล', { act: 'rollback', tone: 'danger', id: 'ro-rollback' }));
-    const checks = ready ? ready.checks : (r.readiness || []).map((c) => ({ label: c.id, ok: c.ok, okLabel: c.ok ? 'ผ่าน' : 'ไม่ผ่าน', detail: c.detail, required: true }));
+    // the snapshot kept at approval has ids only: labels and which checks are required come from the engine's list
+    const meta = {};
+    if (!ready) for (const c of readiness(ctx, r).checks) meta[c.id] = c;
+    const checks = ready ? ready.checks : (r.readiness || []).map((c) => {
+      const m = meta[c.id] || {};
+      const required = m.required !== false;
+      return { label: m.label || c.id, ok: c.ok, okLabel: c.ok ? 'ผ่าน' : required ? 'ไม่ผ่าน' : 'ควรแก้', detail: c.detail, required };
+    });
     const added = r.added ? [].concat((r.added.groups || []).map((g) => 'กลุ่ม ' + g), (r.added.warehouses || []).map((w) => 'คลัง ' + w)).join(', ') : '';
     return h.section(t`${h.code(r.id)} ${r.title}`, t`${notes}
       ${h.dl([
@@ -183,7 +194,7 @@
             team: vals.team || [], phases: (vals.phases || []).map(Number), rollbackPlan: vals.rollbackPlan },
           { quiet: true, done: (r) => `เสนอแผน ${r.result.id} แล้ว – รอผู้จัดการอนุมัติ` }),
         });
-        if (res && res.ok) ctx.set({ tab: 'plans', sel: res.result.id });
+        if (res && res.ok) ctx.set({ tab: 'plans', sel: (res.result && res.result.id) || null });
       },
       async approve(ctx) {
         const r = RRS.q.get(ctx.state, 'rollouts', ctx.view.sel);

@@ -241,9 +241,13 @@
     const canQuar = ctx.can('qc.quarantine');
     const canRel = ctx.can('qc.release');
     const ownQuar = sod && l.quarantinedBy && l.quarantinedBy === me;
+    // a quarantined lot can only be swept again when some of it is still ใช้ได้ / รอตรวจ (e.g. a bin that was being counted)
+    const sweep = util.round(util.sum(bals.filter((b) => b.wh !== TRANSIT && (b.status === 'AVAILABLE' || b.status === 'QC_HOLD')), (b) => b.qty));
     const qActs = [];
     if (l.status !== 'QUARANTINED' && canQuar) qActs.push(h.btn('กักกันทั้งล็อต', { act: 'quarantine', tone: 'danger', id: 'lot-quar-btn' }));
-    if (l.status === 'QUARANTINED' && canQuar) qActs.push(h.btn('สั่งกักกันซ้ำ (ของที่เพิ่งรับ/โอนเข้า)', { act: 'quarantine', tone: 'ghost' }));
+    if (l.status === 'QUARANTINED' && canQuar && sweep > 0) {
+      qActs.push(h.btn(`กักกันของที่ยังไม่ถูกกักกัน (${h.fmt.num(sweep)} ${unit})`, { act: 'quarantine', tone: 'danger', id: 'lot-requar-btn' }));
+    }
     if (l.status === 'QUARANTINED' && canRel) {
       qActs.push(h.btn('ปลดกักกัน (กลับไปรอตรวจ)', { act: 'release', tone: 'primary', disabled: ownQuar, id: 'lot-release-btn',
         title: ownQuar ? 'คุณเป็นผู้สั่งกักกัน – ผู้ปลดต้องเป็นคนละคน' : 'ของกลับไปรอตรวจ ต้องตรวจใหม่ก่อนใช้' }));
@@ -252,6 +256,7 @@
       - util.sum(RRS.q.rows(ctx.state, 'ncrs', (n) => n.status === 'OPEN' && n.stockHeld && n.code === l.code && n.lot === l.lot), (n) => n.qty));
     const qBox = t`${h.note(RULES, l.status === 'QUARANTINED' ? 'bad' : 'info')}
       ${l.status === 'QUARANTINED' && ownQuar && canRel ? h.note('คุณเป็นผู้สั่งกักกันล็อตนี้ – ผู้ปลดกักกันต้องเป็นคนละคน (แยกหน้าที่)', 'warn') : ''}
+      ${l.status === 'QUARANTINED' && sweep > 0 ? h.note(`ของล็อตนี้ ${h.fmt.num(sweep)} ${unit} ยังเป็น "ใช้ได้/รอตรวจ" (เช่น ช่องที่อยู่ระหว่างตรวจนับตอนสั่งกักกัน) – เบิกไม่ได้แล้ว แต่ควรสั่งกักกันให้ครบ`, 'warn') : ''}
       ${l.status === 'QUARANTINED' && quarFree > 0 ? t`<p class="hint">ของกักกันของล็อตนี้ ${h.fmt.num(quarFree)} ${unit} ยังไม่มี NCR – ถ้าจะคืนผู้ขายหรือตัดทิ้ง ${h.link('เปิด NCR ของที่กักกัน', 'ncrs', { tab: 'held' })}</p>` : ''}
       ${qActs.length ? t`<div class="form-actions">${qActs}</div>` : t`<p class="hint">กักกันโดย QC/หัวหน้าสโตร์ · ปลดกักกันโดยหัวหน้า QC (คนละคนกับผู้กักกัน)</p>`}`;
 
@@ -335,7 +340,7 @@
       ['ใบรับรอง', t`${certBadge(lot, it)}${lot.cert && lot.cert.no ? t` ${lot.cert.no}` : ''}`], ['สถานะล็อต', lotBadge(lot.status)],
     ]) : h.note('ไม่พบทะเบียนล็อตนี้ (รับเข้าก่อนเปิดใช้ระบบล็อต) – แสดงจากประวัติเอกสาร', 'info');
     const flow = h.kpis([
-      h.kpi('รับเข้า', h.fmt.num(inQty), `${live(tr.receipts).length} เอกสาร ${unit}`),
+      h.kpi('รับเข้า', h.fmt.num(inQty), `${unit ? unit + ' · ' : ''}${live(tr.receipts).length} เอกสาร`),
       h.kpi('จ่ายออก', h.fmt.num(outQty), `เบิกให้ ${tr.jobs.length} ใบงาน / คืน / ตัดทิ้ง`),
       h.kpi('ผลผลิตของงานเหล่านั้น', h.fmt.num(live(tr.outputs).length), 'ใบรับจากผลิต (FR)', 'info'),
       h.kpi('ส่งมอบลูกค้า', h.fmt.num(live(tr.deliveries).length), 'ใบส่งมอบ (DL)', 'info'),
@@ -418,7 +423,7 @@
       const tj = Q.traceJob(ctx.state, jn);
       const job = RRS.q.get(ctx.state, 'jobs', tj.jobNo);
       const jobFacts = job ? h.dl([['สินค้าที่ผลิต', t`${h.code(job.product)} ${(ctx.item(job.product) || {}).name || ''}`], ['SO', job.soNo], ['จำนวน', job.qty],
-        ['กำหนดเสร็จ', h.fmt.date(job.dueDate)], ['สถานะใบงาน', job.status]]) : '';
+        ['กำหนดเสร็จ', h.fmt.date(job.dueDate)], ['สถานะใบงาน', ((RRS.planning && RRS.planning.JOB_STATUS) || {})[job.status] || job.status]]) : '';
       const any = tj.lots.length + tj.outputs.length + tj.deliveries.length + tj.inspections.length + tj.ncrs.length;
       if (!any) {
         body = t`${jobFacts}${h.empty(`ไม่พบการใช้ล็อตในใบงาน ${tj.jobNo}`, job ? 'ใบงานนี้ยังไม่ได้เบิกของที่ติดตามล็อต/Heat และยังไม่มีผลผลิตหรือผลตรวจ' : 'ตรวจเลขที่ใบงาน – ต้องตรงกับช่อง งาน/SO ในใบเบิก (PD/OU)')}`;
@@ -538,7 +543,7 @@
             ${h.field({ name: 'file', label: 'ไฟล์ใบรับรอง (รูปถ่ายหรือ PDF)', type: 'file', accept: server ? 'image/*,application/pdf' : null, wide: true, id: 'cert-file',
               hint: server ? 'อัปโหลดเก็บบนเซิร์ฟเวอร์' : 'โหมดนี้เก็บเฉพาะชื่อไฟล์ รูปถ่ายย่อไว้ให้ดูในหน้าต่างนี้ (ไฟล์จริงเก็บได้เมื่อใช้เซิร์ฟเวอร์) – หรือใส่ลิงก์ไฟล์ที่เก็บไว้แล้วด้านล่าง' })}
             ${h.field({ name: 'link', label: 'หรือลิงก์ไฟล์ที่เก็บไว้แล้ว', value: oldLink, placeholder: 'https://…', wide: true, id: 'cert-link' })}
-            ${c.file ? t`<p class="hint wide">ไฟล์เดิม: ${fileLink(c.file)} – ไม่เลือกไฟล์ใหม่และไม่แก้ลิงก์ = ใช้ไฟล์เดิม</p>` : ''}
+            ${c.file ? t`<p class="hint wide">ไฟล์เดิม: ${fileLink(c.file)} – ไม่เลือกไฟล์ใหม่และไม่แก้ลิงก์ = ใช้ไฟล์เดิมกับเลขที่เดิม · ถ้าแก้เลขที่ใบรับรอง ระบบจะไม่ใช้ไฟล์เดิม (เป็นใบรับรองคนละใบ) ให้แนบไฟล์หรือลิงก์ของใบใหม่</p>` : ''}
             ${h.field({ name: 'note', label: 'หมายเหตุของล็อต', value: l.note, wide: true, id: 'cert-note' })}`,
           async onSubmit(vals, form) {
             const no = util.trim(vals.no);

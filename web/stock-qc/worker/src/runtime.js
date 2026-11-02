@@ -79,12 +79,20 @@ export function withHeaders(response, headers) {
   return r;
 }
 
+/**
+ * Text for the Worker log: long token-like runs (session tokens, HMAC ids, bcrypt hashes, bearer secrets, API keys –
+ * 24+ characters of letters/digits/._-+/=$) are replaced, so even a library error that quotes a bound value or a
+ * header cannot put a credential in the log.
+ */
+export function redactForLog(text, max) {
+  return String(text == null ? '' : text).replace(/[A-Za-z0-9._\-+/=$]{24,}/g, '[…]').slice(0, max || 300);
+}
+
 export function errorResponse(e) {
   if (e instanceof HttpError) {
     return json(Object.assign({ ok: false, error: e.message }, e.extra || {}), e.status);
   }
-  // Unexpected (D1/R2/engine): keep the detail out of the response. Our errors never carry tokens, passwords or
-  // secret values, so the short message is safe for the Worker log.
-  console.error('stock-qc: unexpected error', (e && e.name) || typeof e, String((e && e.message) || '').slice(0, 300));
+  // Unexpected (D1/R2/engine): keep the detail out of the response; the log gets the short, redacted message.
+  console.error('stock-qc: unexpected error', (e && e.name) || typeof e, redactForLog(e && e.message));
   return json({ ok: false, error: 'ระบบขัดข้องชั่วคราว กรุณาลองใหม่' }, 500);
 }

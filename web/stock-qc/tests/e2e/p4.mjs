@@ -558,7 +558,7 @@ await step('receive: heat number and certificate, incoming QC lands in รอต
   await page.fill('#rcv-qty-1', '5');
   await page.fill('#rcv-bin-1', 'P4-02');
   await page.click('form[data-form="recv"] button[type="submit"]');
-  await waitText('P4-PLATE ต้องระบุHeat no.', 4000, '#rcv-check');
+  await waitText('บรรทัด 1: ใส่ Heat no. ของ P4-PLATE', 4000, '#rcv-check');
   await page.fill('#rcv-lot-1', 'H-P4-77');
   await page.fill('#rcv-cert-1', 'MC-2026-001');
   await page.click('form[data-form="recv"] button[type="submit"]');

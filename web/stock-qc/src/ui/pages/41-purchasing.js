@@ -65,6 +65,44 @@
     if ((ctx.view[key] || '') === el.value) return;
     ctx.set(Object.assign({ [key]: el.value }, extra || {}));
   };
+  /**
+   * Number boxes the browser could not read (e.g. "5-" or "1e"): the form gets an empty value for them, so a typed price
+   * would fall back to the supplier price and a typed receipt quantity would skip the line. One Thai error per box, with
+   * the line it is on; the caller saves nothing.
+   */
+  function badNumbers(form) {
+    const out = [];
+    for (const el of form ? form.querySelectorAll('input[type="number"]') : []) {
+      if (!el.validity || !el.validity.badInput) continue;
+      const lab = el.closest('label.fld');
+      const l = lab && lab.querySelector('.fld-l');
+      const name = U.trim((l ? l.textContent : el.getAttribute('aria-label') || el.name).replace(/\*/g, ''));
+      const card = el.closest('.step');
+      const sn = card && card.querySelector('.step-n');
+      const tr = !card && el.closest('tbody tr');
+      const where = sn ? U.trim(sn.textContent.split('·')[0]) + ' ' : tr ? `บรรทัด ${Array.prototype.indexOf.call(tr.parentNode.children, tr) + 1} ` : '';
+      out.push({ code: 'NOT_A_NUMBER', message: `${where}ช่อง "${name}" อ่านเป็นตัวเลขไม่ได้ – พิมพ์เฉพาะตัวเลข เช่น 12 หรือ 12.5 (ยังไม่ได้บันทึก)` });
+    }
+    return out;
+  }
+  /**
+   * po.receive / po.return messages count the lines sent (1, 2, …) while the form labels each card with its PO line
+   * number: "บรรทัด 1" of a receipt of PO line 2 only is rewritten to "บรรทัด 2" (errors and warnings).
+   */
+  function toPoLines(r, sent) {
+    if (!r) return r;
+    const map = (msg) => String(msg).replace(/^บรรทัด ([\d, ]+):/, (m, list) => {
+      const nos = list.split(',').map((x) => sent[Number(x) - 1]).filter(Boolean).map((x) => x.line);
+      return nos.length ? `บรรทัด ${nos.join(', ')}:` : m;
+    });
+    return Object.assign({}, r, { errors: (r.errors || []).map((e) => Object.assign({}, e, { message: map(e.message) })), warnings: (r.warnings || []).map(map) });
+  }
+  /** Bad number boxes → toast (the typed text stays in the box to fix); true when the caller should stop. */
+  function stopOnBadNumbers(ctx, form) {
+    const bad = badNumbers(form);
+    if (bad.length) ctx.toast(bad.map((e) => e.message).join(' · '), 'bad');
+    return bad.length > 0;
+  }
   const lotRef = (code, lot) => (RRS.ui.pages.lots ? h.link(lot, 'lots', { tab: 'list', sel: code + '|' + lot, _scroll: true }) : lot);
 
   function settings(state) {
@@ -174,6 +212,23 @@
       ],
     });
   }
+  /**
+   * Estimated value of a PR line for the approver: the price set with the line's supplier (else the preferred one),
+   * rounded to whole buy units / MOQ / pack as the PO would be. null when no price is set – never guessed.
+   */
+  function prEstimate(ctx, l) {
+    const sup = l.supplier || (P().preferredSupplier(ctx.state, l.code) || {}).supplier;
+    const is = sup && RRS.q.get(ctx.state, 'item_suppliers', l.code + '|' + sup);
+    if (!is || is.active === false || !has(is.price) || !(is.factor > 0)) return null;
+    const q = P().roundBuy(l.qty, is.factor, is.moq || 0, is.pack || 0);
+    return { sup, qty: q, unit: is.buyUnit, amount: U.round(q * is.price, 2) };
+  }
+  function prTotal(ctx, pr) {
+    const est = (pr.lines || []).map((l) => prEstimate(ctx, l));
+    const known = est.filter(Boolean);
+    return { amount: U.round(known.reduce((a, e) => a + e.amount, 0), 2), missing: est.length - known.length, any: known.length > 0 };
+  }
+  const prTotalText = (tot) => (tot.any ? `≈ ${h.fmt.money(tot.amount)} บาท${tot.missing ? ` · ${tot.missing} บรรทัดยังไม่มีราคา` : ''}` : 'ยังไม่มีราคาที่ตั้งกับผู้ขาย');
   function prView(ctx, pr) {
     const me = ctx.user ? ctx.user.id : '';
     const o = P().prOpen(ctx.state, pr.prNo);
@@ -210,6 +265,10 @@
       { label: 'ผู้ขาย', render: (l) => (l.supplier ? h.code(l.supplier) : dash) },
       { label: 'ออก PO แล้ว', num: true, render: (l) => (l.ordered ? n(l.ordered) : dash) },
       { label: 'ค้างออก PO', num: true, render: (l) => (l.open ? t`<b>${n(l.open)}</b>` : dash) },
+      { label: 'มูลค่าประมาณ', num: true, render: (l) => {
+        const e = prEstimate(ctx, l);
+        return e ? t`${h.fmt.money(e.amount)}<br><small class="muted">${n(e.qty)} ${e.unit} · ${e.sup}</small>` : h.badge('ยังไม่มีราคา', 'warn');
+      } },
       { label: 'เหตุผล', render: (l) => l.reason || dash },
     ] });
     return t`${h.dl([
@@ -220,8 +279,9 @@
       pr.cancelledBy ? ['ยกเลิกโดย', `${ctx.userName(pr.cancelledBy)} · ${h.fmt.dt(pr.cancelledAt)} · ${pr.cancelReason}`] : null,
       pr.restCancelled ? ['ยกเลิกส่วนที่เหลือ', `${ctx.userName(pr.restCancelled.by)} · ${h.fmt.dt(pr.restCancelled.at)} · ${pr.restCancelled.reason}`] : null,
       (pr.poNos || []).length ? ['ใบสั่งซื้อ', t`${(pr.poNos || []).map((x) => t`${poLink(x)} `)}`] : null,
+      ['มูลค่าประมาณ', prTotalText(prTotal(ctx, pr))],
       pr.source ? ['ที่มา', pr.source] : null, pr.remark ? ['หมายเหตุ', pr.remark] : null,
-    ])}${notes}${acts.length ? t`<div class="form-actions">${acts}</div>` : ''}${tbl}${logTable(ctx, pr.log, PR_ACT)}`;
+    ])}${pr.status === 'SUBMITTED' ? t`<p class="hint">มูลค่าประมาณจากราคาที่ฝ่ายจัดซื้อตั้งกับผู้ขาย ปัดเป็นหน่วยซื้อ/MOQ/แพ็ก – ราคาจริงอยู่ในใบสั่งซื้อ</p>` : ''}${notes}${acts.length ? t`<div class="form-actions">${acts}</div>` : ''}${tbl}${logTable(ctx, pr.log, PR_ACT)}`;
   }
   function prTab(ctx) {
     const v = ctx.view;
@@ -329,6 +389,8 @@
       prNo: l.prNo || '', prLine: l.prLine || '', remark: l.remark }));
     const prNos = [];
     for (const l of lines) if (l.prNo && prNos.indexOf(l.prNo) < 0) prNos.push(l.prNo);
+    // "from PR" with PRs ticked but no lines pulled yet: the engine takes the open lines of those PRs itself
+    if (!lines.length && vals.mode !== 'hand') for (const k of vals.prNos || []) if (prNos.indexOf(k) < 0) prNos.push(k);
     return { supplier: vals.supplier, date: vals.date, remark: vals.remark, prNos, lines };
   }
   const poHead = (vals) => ({ supplier: vals.supplier, date: vals.date, remark: vals.remark });
@@ -373,7 +435,7 @@
     if (mode === 'pr') {
       body.push(prs.length ? t`<div class="wide">${h.field({ name: 'prNos', label: 'เลือกใบขอซื้อที่จะออกใบสั่งซื้อ', type: 'multiselect', value: v.poPrs || [],
         options: prs.map((pr) => [pr.prNo, `${pr.prNo} · ${pr.lines.filter((l) => l.open > 0).map((l) => l.code).join(', ')} · ${ctx.userName(pr.requestedBy)}`]) })}
-        <div class="form-actions">${h.btn('ดึงบรรทัดจากใบขอซื้อที่เลือก', { act: 'poPull', tone: 'ghost', small: true })}<small class="hint">ระบบปัดเป็นหน่วยซื้อเต็ม ขั้นต่ำ MOQ และทวีคูณแพ็กของผู้ขายนี้ แล้วแก้ได้ก่อนสร้าง</small></div></div>`
+        <div class="form-actions">${h.btn('ดึงบรรทัดจากใบขอซื้อที่เลือก', { act: 'poPull', tone: 'ghost', small: true })}<small class="hint">ระบบปัดเป็นหน่วยซื้อเต็ม ขั้นต่ำ MOQ และทวีคูณแพ็กของผู้ขายนี้ แล้วแก้ได้ก่อนสร้าง · ไม่ดึงก็กด สร้างร่างใบสั่งซื้อ ได้เลย (ใช้ทุกบรรทัดที่ค้างของผู้ขายนี้)</small></div></div>`
         : t`<div class="wide">${h.note('ยังไม่มีใบขอซื้อที่อนุมัติแล้วรอออกใบสั่งซื้อ – เลือก พิมพ์รายการเอง หรือรอใบขอซื้อที่อนุมัติ', 'info')}</div>`);
     }
     if (v.poNotes && v.poNotes.length) body.push(t`<div class="wide">${h.note(t`จากใบขอซื้อ:<ul>${v.poNotes.map((x) => t`<li>${x}</li>`)}</ul>`, 'warn')}</div>`);
@@ -394,6 +456,7 @@
       { label: 'ประเภท', get: (d) => (d.type === 'RR' ? 'รับของ' : 'คืนผู้ขาย') },
       { label: 'วันที่', get: (d) => h.fmt.date(d.date) },
       { label: 'รายการ', render: (d) => t`${d.lines.map((l) => t`${h.code(l.code)} ${n(Math.abs(l.base != null ? l.base : l.qty))}${l.status && l.status !== 'AVAILABLE' ? t` ${h.statusBadge(l.status)}` : ''}${l.lot ? t` <small class="muted">${l.lot}</small>` : ''}<br>`)}` },
+      { label: 'ใบส่งของ/ใบลดหนี้ผู้ขาย', render: (d) => d.supplierDoc || dash },
       { label: 'สถานะ', render: (d) => h.docStatus(d.status) },
       { label: 'ผู้บันทึก', get: (d) => ctx.userName(d.postedBy || d.createdBy) },
     ] });
@@ -427,8 +490,8 @@
       { label: '#', key: 'line' },
       { label: 'สินค้า', render: (l) => t`${h.code(l.code)} ${itemOf(ctx, l.code).name || l.name || ''}${l.remark ? t`<br><small class="muted">${l.remark}</small>` : ''}` },
       { label: 'สั่ง', num: true, render: (l) => t`${h.qty(l.qty, l.unit)}${l.factor !== 1 ? t`<br><small class="muted">= ${n(l.base)} ${l.baseUnit}</small>` : ''}` },
-      { label: 'ราคา/หน่วย', num: true, get: (l) => h.fmt.money(l.price) },
-      { label: 'มูลค่า', num: true, get: (l) => h.fmt.money(l.amount) },
+      { label: 'ราคา/หน่วย', num: true, render: (l) => h.fmt.money(l.price) },
+      { label: 'มูลค่า', num: true, render: (l) => h.fmt.money(l.amount) },
       { label: 'กำหนดเข้า', render: (l) => t`${h.fmt.date(l.dueDate)}${l.originalDue && l.originalDue !== l.dueDate ? t`<br><small class="muted">เดิม ${h.fmt.date(l.originalDue)}</small>` : ''} ${late(ctx, po, l)}` },
       { label: 'รับแล้ว', num: true, render: (l) => t`${n(l.received || 0)}${l.returned ? t`<br><small class="muted">คืน ${n(l.returned)}${l.replaced ? ` (ขอทดแทน ${n(l.replaced)})` : ''}</small>` : ''}${l.overAllowed ? t`<br><small class="muted">อนุมัติรับเกินได้อีก ${n(l.overAllowed)}</small>` : ''}` },
       { label: 'ยกเลิก', num: true, render: (l) => (l.cancelled ? n(l.cancelled) : dash) },
@@ -474,7 +537,7 @@
         { label: 'ผู้ขาย', render: (po) => t`${h.code(po.supplier)}<br><small class="muted">${po.supplierName || ''}</small>` },
         { label: 'วันที่', get: (po) => h.fmt.date(po.date) },
         { label: 'กำหนดเข้าถัดไป', render: (po) => (OPEN[po.status] || po.status === 'DRAFT' ? t`${h.fmt.date(nextDue(po))}${po.lines.some((l) => late(ctx, po, l)) ? t` ${h.badge('เลยกำหนด', 'bad')}` : ''}` : dash) },
-        { label: 'มูลค่า', num: true, get: (po) => h.fmt.money(po.total) },
+        { label: 'มูลค่า (บาท)', num: true, render: (po) => h.fmt.money(po.total) },
         { label: 'สถานะ', render: (po) => poBadge(po.status) },
       ],
     });
@@ -525,9 +588,11 @@
     const prev = v.rVals && v.rVals.poNo === po.poNo ? v.rVals : null;
     const lines = po.lines.filter((l) => out(l) > 0);
     const TRACK = RRS.master.TRACK;
+    // what was typed is kept per PO line (not per position: another receipt may have closed a line meanwhile)
+    const typed = (no) => ((prev && prev.lines) || []).find((x) => x && Number(x.line) === no) || {};
     const cards = lines.map((l, i) => {
       const it = itemOf(ctx, l.code);
-      const pv = (prev && prev.lines && prev.lines[i]) || {};
+      const pv = typed(l.line);
       const tracked = it.trackLot && it.trackLot !== 'none';
       const o = out(l);
       return t`<div class="step">
@@ -603,9 +668,10 @@
     const v = ctx.view;
     const prev = v.vVals && v.vVals.poNo === po.poNo ? v.vVals : null;
     const lines = po.lines.filter((l) => kept(l) > 0);
+    const typed = (no) => ((prev && prev.lines) || []).find((x) => x && Number(x.line) === no) || {};
     const cards = lines.map((l, i) => {
       const it = itemOf(ctx, l.code);
-      const pv = (prev && prev.lines && prev.lines[i]) || {};
+      const pv = typed(l.line);
       const locs = inv.locations(ctx.state, { code: l.code }).filter((b) => b.wh !== RRS.TRANSIT && b.qty > 0 && RV_STATUSES.indexOf(b.status) >= 0);
       const k = kept(l);
       const holdQty = inv.locations(ctx.state, { code: l.code, status: 'QC_HOLD' }).reduce((s, b) => s + b.qty, 0);
@@ -718,12 +784,14 @@
         set(ctx, { prLines: lines.length ? lines : [{ wh: defWh(ctx) }], prHead: vals, prChecked: null });
       },
       async prCheck(ctx) {
+        if (stopOnBadNumbers(ctx, formOf('prSave'))) return;
         const vals = h.parseForm(formOf('prSave'));
         const pr = curPr(ctx);
         const r = await ctx.check('pr.create', prPayload(vals, pr && pr.prNo, false));
         set(ctx, { prLines: vals.lines, prHead: vals, prChecked: r });
       },
       async prDraft(ctx) {
+        if (stopOnBadNumbers(ctx, formOf('prSave'))) return;
         const vals = h.parseForm(formOf('prSave'));
         const pr = curPr(ctx);
         const r = await ctx.exec('pr.create', prPayload(vals, pr && pr.prNo, true), { quiet: true, done: (x) => `บันทึกร่าง ${x.result.prNo} แล้ว – ยังไม่ได้ส่งขออนุมัติ` });
@@ -734,7 +802,7 @@
         const pr = curPr(ctx);
         if (!pr) return;
         await ctx.dialog({ title: `อนุมัติใบขอซื้อ ${pr.prNo}`, submit: 'อนุมัติ',
-          message: `ผู้ขอ ${ctx.userName(pr.requestedBy)} · ${pr.lines.length} บรรทัด – หลังอนุมัติ ฝ่ายจัดซื้อออกใบสั่งซื้อได้`,
+          message: `ผู้ขอ ${ctx.userName(pr.requestedBy)} · ${pr.lines.length} บรรทัด · มูลค่าประมาณ ${prTotalText(prTotal(ctx, pr))} – หลังอนุมัติ ฝ่ายจัดซื้อออกใบสั่งซื้อได้`,
           body: h.field({ name: 'remark', label: 'หมายเหตุการอนุมัติ (ถ้ามี)', wide: true }),
           onSubmit: (vv) => ctx.exec('pr.approve', { prNo: pr.prNo, remark: vv.remark }, { quiet: true, done: `อนุมัติ ${pr.prNo} แล้ว` }) });
       },
@@ -814,6 +882,7 @@
         set(ctx, { poHead: poHead(vals), poPrs: vals.prNos, poLines: p.lines.length ? p.lines : null, poNotes: p.notes, poPulled: true, poChecked: null });
       },
       async poCheck(ctx) {
+        if (stopOnBadNumbers(ctx, formOf('poSave'))) return;
         const vals = h.parseForm(formOf('poSave'));
         const r = await ctx.check('po.create', poPayload(vals));
         set(ctx, { poHead: poHead(vals), poLines: vals.lines, poPrs: vals.prNos, poChecked: r });
@@ -864,7 +933,10 @@
           message: `${l.code} ค้างรับ ${n(toBuy(out(l), l))} ${l.unit} – ยอดที่ยกเลิกจะไม่รอรับแล้ว และใบขอซื้อที่อ้างกลับมาออกใบสั่งซื้อใหม่ได้`,
           body: t`${h.field({ name: 'qty', label: `จำนวนที่ยกเลิก (${l.unit})`, type: 'number', hint: `ว่าง = ยกเลิกยอดค้างทั้งหมด ${n(toBuy(out(l), l))} ${l.unit}` })}
             ${h.field({ name: 'reason', label: 'เหตุผล', required: true })}`,
-          onSubmit: (vv) => ctx.exec('po.cancelLine', { poNo: po.poNo, line: l.line, qty: vv.qty, reason: vv.reason }, { quiet: true, done: 'ยกเลิกยอดค้างแล้ว' }) });
+          onSubmit: (vv, f) => {
+            const bad = badNumbers(f); // an unreadable qty would otherwise cancel everything outstanding
+            return bad.length ? { ok: false, errors: bad } : ctx.exec('po.cancelLine', { poNo: po.poNo, line: l.line, qty: vv.qty, reason: vv.reason }, { quiet: true, done: 'ยกเลิกยอดค้างแล้ว' });
+          } });
       },
       async poOver(ctx, el) {
         const po = curPo(ctx);
@@ -874,7 +946,10 @@
           message: `${l.code} ค้างรับ ${n(toBuy(out(l), l))} ${l.unit} – สโตร์รับเกินยอดค้างได้อีกตามจำนวนที่อนุมัติ (ใช้แล้วหมดไป) · ราคาและใบสั่งซื้อไม่เปลี่ยน`,
           body: t`${h.field({ name: 'qty', label: `รับเกินได้อีก (${l.unit})`, type: 'number', required: true })}
             ${h.field({ name: 'reason', label: 'เหตุผล', required: true, placeholder: 'เช่น ผู้ขายส่งเต็มมัด' })}`,
-          onSubmit: (vv) => ctx.exec('po.allowOverReceive', { poNo: po.poNo, line: l.line, qty: vv.qty, reason: vv.reason }, { quiet: true, done: 'อนุมัติรับเกินแล้ว' }) });
+          onSubmit: (vv, f) => {
+            const bad = badNumbers(f);
+            return bad.length ? { ok: false, errors: bad } : ctx.exec('po.allowOverReceive', { poNo: po.poNo, line: l.line, qty: vv.qty, reason: vv.reason }, { quiet: true, done: 'อนุมัติรับเกินแล้ว' });
+          } });
       },
       async poCsv(ctx) {
         const po = curPo(ctx);
@@ -895,9 +970,9 @@
         const vals = h.parseForm(formOf('recv'));
         const po = RRS.q.get(ctx.state, 'pos', vals.poNo);
         if (!po) return;
-        const open = po.lines.filter((l) => out(l) > 0);
-        (vals.lines || []).forEach((l, i) => {
-          if (open[i]) l.qty = String(toBuy(out(open[i]), open[i]));
+        (vals.lines || []).forEach((l) => {
+          const pl = lineOf(po, l && l.line);
+          if (pl && out(pl) > 0) l.qty = String(toBuy(out(pl), pl));
         });
         set(ctx, { rVals: Object.assign({ poNo: po.poNo }, vals), rChecked: null });
       },
@@ -907,27 +982,36 @@
       pickRv: (ctx, el) => set(ctx, { vpo: el.dataset.arg, vVals: null, vChecked: null, vDone: el.dataset.arg === ctx.view.vpo ? ctx.view.vDone : null, _scroll: true }),
     },
     forms: {
-      async prSave(ctx, vals) {
+      async prSave(ctx, vals, form) {
+        if (stopOnBadNumbers(ctx, form)) return;
         const pr = curPr(ctx);
         const r = await ctx.exec('pr.create', prPayload(vals, pr && pr.prNo, false), { quiet: true,
           done: (x) => `ส่ง ${x.result.prNo} ขออนุมัติแล้ว – รอ${whoCan('pr.approve')} (คนละคนกับผู้ขอ)` });
         if (!r.ok) return set(ctx, { prLines: vals.lines, prHead: vals, prChecked: r });
         set(ctx, { pr: r.result.prNo, prLines: null, prHead: null, prChecked: null });
       },
-      async poSave(ctx, vals) {
+      async poSave(ctx, vals, form) {
+        if (stopOnBadNumbers(ctx, form)) return;
         const r = await ctx.exec('po.create', poPayload(vals), { quiet: true, done: (x) => `สร้างร่าง ${x.result.poNo} แล้ว – ตรวจแล้วกด ออกใบสั่งซื้อ` });
         if (!r.ok) return set(ctx, { poHead: poHead(vals), poLines: vals.lines, poPrs: vals.prNos, poChecked: r });
         set(ctx, { po: r.result.poNo, poHead: null, poLines: null, poPrs: null, poNotes: null, poPulled: false, poChecked: null });
       },
       async recv(ctx, vals, form) {
         const po = RRS.q.get(ctx.state, 'pos', vals.poNo);
-        if (!po) return;
+        if (!po || stopOnBadNumbers(ctx, form)) return;
         const keep = Object.assign({ poNo: po.poNo }, vals);
         const picked = (vals.lines || []).map((l, i) => Object.assign({ i }, l)).filter((l) => U.trim(l.qty) !== '');
         if (!picked.length) return set(ctx, { rVals: keep, rChecked: Object.assign({ poNo: po.poNo }, fail('ยังไม่ได้ใส่จำนวน – ใส่จำนวนที่รับในบรรทัดที่ของมาถึง (บรรทัดที่ไม่ได้รับเว้นว่างไว้)')) });
         const payload = { poNo: po.poNo, date: vals.date, supplierDoc: vals.supplierDoc, remark: vals.remark,
           lines: picked.map((l) => ({ line: Number(l.line), qty: l.qty, wh: l.wh, bin: l.bin, lot: l.lot || '' })) };
-        const chk = await ctx.check('po.receive', payload);
+        // lot / heat / serial first, in the words of the card (the label on the goods), with the PO line number
+        const noLot = payload.lines.map((l) => ({ l, pl: lineOf(po, l.line) })).filter((x) => x.pl && !U.trim(x.l.lot)
+          && itemOf(ctx, x.pl.code).trackLot && itemOf(ctx, x.pl.code).trackLot !== 'none');
+        if (noLot.length) {
+          return set(ctx, { rVals: keep, rChecked: { poNo: po.poNo, ok: false, errors: noLot.map((x) => ({ code: 'LOT_REQUIRED',
+            message: `บรรทัด ${x.pl.line}: ใส่ ${RRS.master.TRACK[itemOf(ctx, x.pl.code).trackLot]} ของ ${x.pl.code} ตามป้าย/ใบรับรองที่มากับของ` })) } });
+        }
+        const chk = toPoLines(await ctx.check('po.receive', payload), payload.lines);
         if (!chk.ok) return set(ctx, { rVals: keep, rChecked: Object.assign({ poNo: po.poNo }, chk) });
         const rows = picked.map((l) => {
           const pl = lineOf(po, l.line);
@@ -949,7 +1033,7 @@
           ${(chk.warnings || []).length ? t`<div class="wide">${h.note(t`<ul>${chk.warnings.map((w) => t`<li>${w}</li>`)}</ul>`, 'warn')}</div>` : ''}` });
         if (!ok) return set(ctx, { rVals: keep, rChecked: null });
         const r = await ctx.exec('po.receive', payload, { quiet: true, done: (x) => `รับเข้าแล้ว ${x.result.docNo}` });
-        if (!r.ok) return set(ctx, { rVals: keep, rChecked: Object.assign({ poNo: po.poNo }, r) });
+        if (!r.ok) return set(ctx, { rVals: keep, rChecked: Object.assign({ poNo: po.poNo }, toPoLines(r, payload.lines)) });
         const docNo = r.result.docNo;
         const certs = [];
         for (const x of rows) {
@@ -973,9 +1057,9 @@
         }
         set(ctx, { rVals: null, rChecked: null, rDone: { kind: 'RR', docNo, poNo: po.poNo, certs, noCert: noCert.map((x) => `${x.code}${x.lot ? ' ' + x.lot : ''}`) } });
       },
-      async rv(ctx, vals) {
+      async rv(ctx, vals, form) {
         const po = RRS.q.get(ctx.state, 'pos', vals.poNo);
-        if (!po) return;
+        if (!po || stopOnBadNumbers(ctx, form)) return;
         const keep = Object.assign({ poNo: po.poNo }, vals);
         const bad = (msg) => set(ctx, { vVals: keep, vChecked: Object.assign({ poNo: po.poNo }, fail(msg)) });
         const picked = (vals.lines || []).filter((l) => l && U.trim(l.qty) !== '');
@@ -992,7 +1076,7 @@
         if (errs.length) return set(ctx, { vVals: keep, vChecked: { poNo: po.poNo, ok: false, errors: errs } });
         const payload = { poNo: po.poNo, reason: vals.reason, supplierDoc: vals.supplierDoc,
           lines: lines.map((l) => ({ line: l.line, qty: l.qty, wh: l.wh, bin: l.bin, lot: l.lot, status: l.status, replace: l.replace })) };
-        const chk = await ctx.check('po.return', payload);
+        const chk = toPoLines(await ctx.check('po.return', payload), payload.lines);
         if (!chk.ok) return set(ctx, { vVals: keep, vChecked: Object.assign({ poNo: po.poNo }, chk) });
         const ok = await ctx.confirm({ title: `คืนผู้ขาย ${po.supplierName || po.supplier}`, ok: 'บันทึกคืนผู้ขาย', danger: true,
           message: `ของออกจากคลังทันที (ใบคืนสินค้าผู้ขาย RV) · เหตุผล: ${U.trim(vals.reason)}`,
@@ -1005,7 +1089,7 @@
           ] })}</div>` });
         if (!ok) return set(ctx, { vVals: keep, vChecked: null });
         const r = await ctx.exec('po.return', payload, { quiet: true, done: (x) => `คืนผู้ขายแล้ว ${x.result.docNo}` });
-        if (!r.ok) return set(ctx, { vVals: keep, vChecked: Object.assign({ poNo: po.poNo }, r) });
+        if (!r.ok) return set(ctx, { vVals: keep, vChecked: Object.assign({ poNo: po.poNo }, toPoLines(r, payload.lines)) });
         set(ctx, { vVals: null, vChecked: null, vDone: { kind: 'RV', docNo: r.result.docNo, poNo: po.poNo } });
       },
     },

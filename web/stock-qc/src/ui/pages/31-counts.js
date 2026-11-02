@@ -48,11 +48,18 @@
     return out;
   }
   const lineCounters = (l) => Array.from(new Set([l.countedBy].concat((l.recounts || []).map((r) => r.by)).filter(Boolean)));
-  /** The system quantity is shown to approvers who did not count here, and to everyone once approved (blind counting). */
+  /**
+   * Blind counting: the system quantity (and other people's counts of a line still waiting for a recount) is shown to
+   * approvers who did not count here, and to everyone once approved. While a session is open – or was cancelled, which
+   * usually means it will be counted again – nobody who may still count in that warehouse sees it: a store lead holds both
+   * count.enter and count.approve and is often the one who recounts.
+   */
   function seesSystem(ctx, s) {
     if (s.status === 'APPROVED') return true;
     const me = ctx.user ? ctx.user.id : '';
-    return ctx.can('count.approve', s.wh) && countersOf(s).indexOf(me) < 0;
+    if (!ctx.can('count.approve', s.wh) || countersOf(s).indexOf(me) >= 0) return false;
+    if ((s.status === 'OPEN' || s.status === 'CANCELLED') && ctx.can('count.enter', s.wh)) return false;
+    return true;
   }
   const names = (ctx, ids) => ids.map((id) => ctx.userName(id)).join(', ');
   const place = (l) => t`${l.bin ? h.code(l.bin) : t`<span class="muted">ไม่ระบุช่อง</span>`}${l.lot ? t`<br><small>ล็อต ${l.lot}</small>` : ''}`;
@@ -110,7 +117,8 @@
       tracked || d.lot ? h.field({ name: 'lot', label: tracked ? `${RRS.master.TRACK[it.trackLot] || 'ล็อต'} (ตามป้าย)` : 'ล็อต / Heat', value: d.lot, required: tracked, id: 'ce-lot',
         hint: tracked ? 'แต่ละล็อตนับแยกบรรทัด' : 'สินค้านี้ไม่ติดตามล็อต – ลบออก' }) : '',
       h.field({ name: 'counted', label: `นับได้${it ? ` (${d.unit || it.baseUnit})` : ''}`, type: 'number', value: d.counted, required: true, id: 'ce-qty', hint: 'ไม่มีของเลย ใส่ 0' }),
-      units.length ? h.field({ name: 'unit', label: 'หน่วยที่นับ', type: 'select', value: d.unit || '', blank: `${it.baseUnit} (หน่วยหลัก)`, options: units.map((u) => [u.unit, `${u.unit} (= ${h.fmt.num(u.factor)} ${it.baseUnit})`]), id: 'ce-unit' }) : '',
+      // changing the unit re-renders (same handler as the code) so the label of the quantity names the unit counted in
+      units.length ? h.field({ name: 'unit', label: 'หน่วยที่นับ', type: 'select', value: d.unit || '', blank: `${it.baseUnit} (หน่วยหลัก)`, options: units.map((u) => [u.unit, `${u.unit} (= ${h.fmt.num(u.factor)} ${it.baseUnit})`]), act: 'ecode', id: 'ce-unit' }) : '',
     ];
     const last = v.lastEntry && v.lastEntry.id === s.id ? h.note(v.lastEntry.msg, v.lastEntry.tone) : '';
     return h.section('กรอกผลนับ', t`${last}<div class="count-entry">${h.form({ name: 'enter', submit: 'บันทึกบรรทัดนี้', body,
@@ -124,18 +132,26 @@
     if (!pend.length) return '';
     const me = ctx.user ? ctx.user.id : '';
     const canEnter = s.status === 'OPEN' && ctx.can('count.enter', s.wh);
-    const others = (l) => RRS.q.rows(ctx.state, 'users', (u) => u.active !== false && RRS.auth.can(u, 'count.enter', s.wh) && l.counters.indexOf(u.id) < 0).map((u) => u.name);
+    // examples of who may recount: store staff first (they are on the floor), then store leads, administrators last
+    const rank = (u) => (u.roles.indexOf('store') >= 0 ? 0 : u.roles.indexOf('store_lead') >= 0 ? 1 : 2);
+    const others = (l) => RRS.q.rows(ctx.state, 'users', (u) => u.active !== false && RRS.auth.can(u, 'count.enter', s.wh) && l.counters.indexOf(u.id) < 0)
+      .sort((a, b) => rank(a) - rank(b) || String(a.name).localeCompare(String(b.name), 'th')).map((u) => u.name);
+    // the recount button sits under the item (first column): on a phone it is in view without scrolling the table sideways
+    const btn = (l) => {
+      if (!canEnter) return '';
+      const mine = lineCounters(l).indexOf(me) >= 0;
+      return t`<br>${h.btn(mine ? 'คุณนับแล้ว' : 'นับซ้ำ', { act: 'recount', arg: l.key, small: true, tone: mine ? 'ghost' : '', disabled: mine,
+        title: mine ? 'คุณนับบรรทัดนี้แล้ว – การนับซ้ำต้องเป็นคนอื่น' : 'กรอกผลนับซ้ำของบรรทัดนี้' })}`;
+    };
     return h.section(`รอนับซ้ำ (${pend.length})`, h.table({ rows: pend, dense: true, scroll: true, id: 'ct-recount', cols: [
-      { label: 'สินค้า', render: (l) => t`${h.code(l.code)} <small>${l.name}</small>` },
+      { label: 'สินค้า', render: (l) => t`${h.code(l.code)} <small>${l.name}</small>${btn(l)}` },
       { label: 'ตำแหน่ง', render: place },
       { label: 'ทำไม', render: (l) => t`${flagBadges(l.flags.filter((f) => f === 'RECOUNT' || f === 'DUPLICATE'))}<br><small class="muted">${l.flags.indexOf('DUPLICATE') >= 0 ? rec.FLAG.DUPLICATE : rec.FLAG.RECOUNT}</small>` },
       { label: 'นับแล้วโดย', get: (l) => names(ctx, lineCounters(l)) },
-      { label: 'ต้องนับซ้ำโดย', render: (l) => {
+      { label: 'ต้องนับซ้ำโดย', w: '220px', render: (l) => {
         const o = others(l);
         return t`<b>คนอื่นที่ไม่ใช่ ${names(ctx, lineCounters(l))}</b>${o.length ? t`<br><small class="muted">เช่น ${o.slice(0, 4).join(', ')}${o.length > 4 ? ' …' : ''}</small>` : t`<br><small class="muted">ยังไม่มีผู้นับคนอื่นที่มีสิทธิ์คลัง ${s.wh}</small>`}`;
       } },
-      { label: '', render: (l) => (canEnter ? h.btn('นับซ้ำ', { act: 'recount', arg: l.key, small: true, disabled: lineCounters(l).indexOf(me) >= 0,
-        title: lineCounters(l).indexOf(me) >= 0 ? 'คุณนับบรรทัดนี้แล้ว – การนับซ้ำต้องเป็นคนอื่น' : 'กรอกผลนับซ้ำของบรรทัดนี้' }) : '') },
     ] }), { sub: 'ผลนับต่างจากระบบเกินเกณฑ์ หรือผู้นับสองคนได้ผลไม่ตรงกัน – ต้องให้คนที่ยังไม่ได้นับบรรทัดนั้นนับซ้ำก่อนส่งผลนับ' });
   }
 
@@ -209,10 +225,13 @@
       { label: 'ปรับยอด', num: true, render: (l) => (l.adjust ? t`<b>${signed(l.adjust)}</b> <span class="unit">${l.unit}</span>` : '0') },
       { label: 'ตอนนี้ในระบบ', num: true, render: (l) => t`${h.fmt.num(l.currentSystem)}${l.moved ? t`<br><small>หลังนับ ${signed(l.movedQty)}</small>` : ''}` },
       { label: 'ตรวจ', render: (l) => t`${l.flags.length ? flagBadges(l.flags) : ''}${l.moved ? t`<br><small class="muted">เคลื่อนไหวหลังนับ ${l.movedCount} รายการ – ไม่ถูกปรับทับ</small>` : ''}${l.held ? t`<br><small class="muted">ที่ตำแหน่งนี้มีของรอตรวจ/กักกัน ${h.fmt.num(l.heldQty)}</small>` : ''}<br><small class="muted">นับโดย ${names(ctx, lineCounters(l))}</small>` },
-      { label: 'เหตุผลของผลต่าง', w: '240px', render: (l) => (l.adjust
-        ? t`<input type="hidden" name="r[${l._i}][key]" value="${l.key}"><input name="r[${l._i}][reason]" id="ct-r-${l._i}" value="${reasons[l.key] || ''}" aria-label="เหตุผลผลต่าง ${l.code}" placeholder="เช่น เบิกแล้วไม่ได้บันทึก">`
-        : t`<span class="muted">ไม่ต้องใส่</span>`) },
-    ] });
+    ],
+    // the reason of a difference in a full-width row under its line: on a phone it is in view without scrolling the
+    // table sideways (the width limit keeps it inside the screen while the table itself is wider)
+    detail: (l) => (l.adjust
+      ? t`<div class="fld" style="max-width:min(100%, calc(100vw - 72px))"><label class="fld-l" for="ct-r-${l._i}">เหตุผลของผลต่าง ${l.code}${l.bin ? ' ช่อง ' + l.bin : ''}${l.lot ? ' ล็อต ' + l.lot : ''} (${signed(l.adjust)} ${l.unit}) <b class="req">*</b></label>
+        <input type="hidden" name="r[${l._i}][key]" value="${l.key}"><input name="r[${l._i}][reason]" id="ct-r-${l._i}" value="${reasons[l.key] || ''}" placeholder="เช่น เบิกแล้วไม่ได้บันทึก / ของเสียทิ้งแล้วไม่ได้ตัดยอด"></div>`
+      : null) });
     const ackParts = [];
     if (tot.moved) ackParts.push(`${tot.moved} บรรทัดมีรายการเคลื่อนไหวหลังนับ – ระบบปรับเฉพาะผลต่าง ณ เวลานับ ยอดที่เคลื่อนไหวหลังนับคงไว้`);
     if (tot.held) ackParts.push(`${tot.held} บรรทัดนับได้มากกว่าระบบ ขณะที่ตำแหน่งเดียวกันมีของรอตรวจ/กักกัน/รอแก้ไข – ตรวจแล้วว่าไม่ได้นับของเหล่านั้นรวม`);
@@ -268,11 +287,11 @@
     return t`${head}${h.section(`ผลนับ (${cv.lines.length})`, linesTable(ctx, s, cv, sees, 'ct-lines'))}`;
   }
 
-  function sessionList(ctx, list, tab) {
+  function sessionList(ctx, list, tab, total) {
     const v = ctx.view;
     return h.table({ rows: list, rowAct: 'pick', rowArg: (s) => s.id, rowCls: (s) => (s.id === v.sel ? 'sel' : s.status === 'CANCELLED' ? 'muted' : ''), scroll: true, id: 'ct-list',
-      empty: tab === 'open' ? 'ไม่มีรอบที่กำลังนับ' : tab === 'submitted' ? 'ไม่มีรอบรออนุมัติ' : 'ไม่มีรอบนับในกลุ่มนี้',
-      emptyText: tab === 'open' ? 'รอบที่เปิดแล้วจะขึ้นที่นี่ให้ผู้นับเลือก' : 'เลือกแท็บอื่นเพื่อดูรอบที่เหลือ',
+      empty: !total ? 'ยังไม่มีรอบตรวจนับ' : tab === 'open' ? 'ไม่มีรอบที่กำลังนับ' : tab === 'submitted' ? 'ไม่มีรอบรออนุมัติ' : 'ไม่มีรอบนับในกลุ่มนี้',
+      emptyText: !total ? 'รอบที่เปิดแล้วจะขึ้นที่นี่ให้ผู้นับเลือกและกรอกผลนับ' : tab === 'open' ? 'รอบที่เปิดแล้วจะขึ้นที่นี่ให้ผู้นับเลือก' : 'เลือกแท็บอื่นเพื่อดูรอบที่เหลือ',
       cols: [
         { label: 'รอบ', render: (s) => h.code(s.id) },
         { label: 'คลัง', render: (s) => t`${h.code(s.wh)} <small class="muted">${ctx.whName(s.wh)}</small>` },
@@ -316,16 +335,21 @@
         h.kpi('อนุมัติแล้ว', h.fmt.num(all.filter((s) => s.status === 'APPROVED').length), 'รอบ'),
       ]);
       const shown = by((TABS.find((x) => x[0] === tab) || TABS[3])[2]);
-      const list = h.section('รอบนับ', t`${h.tabs(TABS.map(([k, l]) => ({ id: k, label: l, count: counts[k] })), tab)}${sessionList(ctx, shown, tab)}`, {
+      const list = h.section('รอบนับ', t`${h.tabs(TABS.map(([k, l]) => ({ id: k, label: l, count: counts[k] })), tab)}${sessionList(ctx, shown, tab, all.length)}`, {
         sub: 'คลิกแถวเพื่อกรอกผลนับ ส่งผล หรืออนุมัติ', actions: canCreate && !v.newOpen ? h.btn('+ เปิดรอบนับ', { act: 'newOpen', tone: 'primary', small: true }) : '' });
       return t`${ro}${kp}${create}${sel ? detail(ctx, sel) : ''}${list}`;
     },
     after(ctx, root0) {
       const v = ctx.view;
       if (v._focus) {
-        const el = root0.querySelector('#' + v._focus);
+        const id = v._focus;
         v._focus = null;
-        if (el) el.focus({ preventScroll: true });
+        // after the shell has put the focus back where it was (it does that once this hook returns): a quantity
+        // entered with Enter on the phone keyboard must still move the cursor to the code for the next scan
+        setTimeout(() => {
+          const el = root0.querySelector('#' + id);
+          if (el && el.isConnected) el.focus({ preventScroll: true });
+        }, 0);
       }
       if (v._scrollTo) {
         const target = root0.querySelector('#' + v._scrollTo);
@@ -335,7 +359,12 @@
     },
     actions: {
       tab: (ctx, el) => ctx.set({ tab: el.dataset.arg }),
-      pick: (ctx, el) => ctx.set({ sel: el.dataset.arg, limit: STEP, lastEntry: null, apErr: null, ack: false, _scrollTo: 'ct-detail' }),
+      pick(ctx, el) {
+        // a counter on the phone goes straight to the entry form (the session facts are above it)
+        const s = RRS.q.get(ctx.state, 'count_sessions', el.dataset.arg);
+        const toEntry = s && s.status === 'OPEN' && ctx.can('count.enter', s.wh);
+        ctx.set({ sel: el.dataset.arg, limit: STEP, lastEntry: null, apErr: null, ack: false, _scrollTo: toEntry ? 'ct-entry' : 'ct-detail' });
+      },
       unpick: (ctx) => ctx.set({ sel: null }),
       more: (ctx) => ctx.set({ limit: (ctx.view.limit || STEP) + STEP }),
       newOpen: (ctx) => ctx.set({ newOpen: true, cdraft: null, _scrollTo: 'ct-new' }),
@@ -424,13 +453,23 @@
           ctx.set({ edraft: draft, _focus: 'ce-qty' });
           return ctx.toast('ใส่จำนวนที่นับได้เป็นตัวเลขตั้งแต่ 0 (ไม่มีของเลย ใส่ 0)', 'bad');
         }
+        const w = RRS.q.get(ctx.state, 'warehouses', s.wh) || {};
+        const hasBins = s.bins.length || RRS.q.rows(ctx.state, 'bins', (b) => b.wh === s.wh && b.active !== false).length;
+        if (!vals.bin && hasBins && (w.requireBin || s.bins.length)) {
+          ctx.set({ edraft: draft, _focus: 'ce-bin' });
+          return ctx.toast(`เลือกช่องเก็บที่นับ${s.bins.length ? ` (รอบนี้นับช่อง ${s.bins.join(', ')})` : ` – คลัง ${s.wh} ต้องระบุช่องเก็บ`}`, 'bad');
+        }
         const line = { code, bin: vals.bin || '', lot: util.trim(vals.lot), counted: n, unit: vals.unit || '' };
         const r = await ctx.exec('count.enter', { id: s.id, lines: [line] }, { quiet: true });
         const it = RRS.q.item(ctx.state, code);
         const where = `${line.bin ? ' ช่อง ' + line.bin : ''}${line.lot ? ' ล็อต ' + line.lot : ''}`;
         if (!r.ok) {
-          const msg = r.errors[0] ? r.errors[0].message.replace(/^บรรทัด 1: /, '') : 'บันทึกไม่สำเร็จ';
-          ctx.set({ edraft: draft, lastEntry: { id: s.id, tone: 'bad', msg: `บันทึกไม่ได้: ${msg}` }, _focus: 'ce-code' });
+          const e = r.errors[0] || {};
+          let msg = e.message ? e.message.replace(/^บรรทัด 1: /, '') : 'บันทึกไม่สำเร็จ';
+          if (e.code === 'SAME_PERSON') msg += ' – ถ้ากรอกผิด ให้คนอื่นนับบรรทัดนี้ซ้ำ ระบบใช้ผลที่สองคนนับได้ตรงกัน';
+          // put the cursor where the problem is (a scanned code with Enter may arrive before the lot field is shown)
+          const focus = { code: 'ce-code', bin: 'ce-bin', lot: 'ce-lot', counted: 'ce-qty', unit: 'ce-unit' }[e.field] || 'ce-code';
+          ctx.set({ edraft: draft, lastEntry: { id: s.id, tone: 'bad', msg: `บันทึกไม่ได้: ${msg}` }, _focus: focus });
           return ctx.toast(msg, 'bad');
         }
         const flags = (r.result && r.result.lines && r.result.lines[0] && r.result.lines[0].flags) || [];

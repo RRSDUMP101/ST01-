@@ -238,3 +238,14 @@ input[readonly] { background: var(--sunk); }
 .tag { display: inline-block; font: 600 .82rem var(--f-mono); border: 1.5px solid var(--fg); border-radius: 3px; padding: 2px 6px; letter-spacing: .04em; }
 .split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); gap: 16px; align-items: start; }
 @media (max-width: 980px) { .split { grid-template-columns: minmax(0, 1fr); } }
+
+/* ---- added from screen reviews -------------------------------------------------------------------------- */
+details { border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+details > summary { cursor: pointer; padding: 8px 12px; font-weight: 500; color: var(--fg-2); }
+details[open] > summary { border-bottom: 1px solid var(--line); }
+details > :not(summary) { padding: 10px 12px; }
+.step.is-bad, .step[data-err] { border-color: var(--bad); box-shadow: inset 3px 0 0 var(--bad); }
+.n-muted { background: var(--sunk); color: var(--fg-2); }
+.count-entry input, .count-entry select, .fld.big input, .fld.big select { font-size: 1.15rem; padding: 12px; }
+.count-entry .btn-primary { padding: 12px 20px; font-size: 1rem; }
+@media (max-width: 640px) { input, select, textarea { font-size: 16px; } }

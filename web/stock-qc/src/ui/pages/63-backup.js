@@ -68,6 +68,7 @@
       ${tables.length ? t`<details><summary>จำนวนแถวที่กู้ได้ต่อตาราง (${tables.length} ตาราง)</summary>${h.table({ dense: true, scroll: true, rows: tables,
         cols: [{ label: 'ตาราง', key: 'label' }, { label: 'ชื่อในระบบ', render: (x) => h.code(x.name) }, { label: 'แถว', num: true, key: 'n' }] })}</details>` : ''}
       <div class="form-actions">${other ? h.note('ไม่บันทึกผลทดสอบ เพราะไฟล์นี้ไม่ใช่ข้อมูลของระบบนี้', 'warn')
+        : c.recorded ? h.note(t`บันทึกผลการตรวจครั้งนี้แล้ว (${h.code(c.recorded)}) – ตรวจไฟล์ใหม่เพื่อบันทึกอีกครั้ง`, 'ok')
         : canRecord ? h.btn(ok ? 'บันทึกผลทดสอบกู้คืน (ผ่าน)' : 'บันทึกผลทดสอบกู้คืน (ไม่ผ่าน)', { act: 'recordTest', tone: ok ? 'primary' : 'danger', id: 'bk-record' })
           : t`<span class="hint">บันทึกผลทดสอบได้เฉพาะ ${whoCan()}</span>`}</div>`;
   }
@@ -202,9 +203,9 @@
       },
       async recordTest(ctx) {
         const c = ctx.view.check;
-        if (!c) return;
+        if (!c || c.recorded) return;
         const ok = c.ok;
-        await ctx.dialog({
+        const res = await ctx.dialog({
           title: ok ? 'บันทึกผลทดสอบกู้คืน: ผ่าน' : 'บันทึกผลทดสอบกู้คืน: ไม่ผ่าน', submit: 'บันทึกผล', danger: !ok,
           body: t`<div class="wide">${h.dl([['ไฟล์', c.name], ['รายการในไฟล์', h.fmt.num(c.commits)], ['ลายนิ้วมือสุดท้าย', h.code(short(c.head))],
             ['ผล', h.badge(ok ? 'ผ่าน' : 'ไม่ผ่าน', ok ? 'ok' : 'bad')]])}</div>
@@ -214,6 +215,8 @@
           onSubmit: (vals) => ctx.exec('backup.recordTest', { commits: c.commits, head: c.head, result: ok ? 'OK' : 'FAIL', fingerprint: c.fingerprint || '',
             problems: ok ? [] : c.problems, note: vals.note }, { quiet: true, done: (r) => `บันทึกผลทดสอบกู้คืน ${r.result.id} แล้ว` }),
         });
+        // one check = one record: the same verification is not recorded twice
+        if (res && res.ok && res.result && res.result.id && ctx.view.check === c) ctx.set({ check: Object.assign({}, c, { recorded: res.result.id }) });
       },
       driveRefresh(ctx) {
         ctx.set({ drive: null });

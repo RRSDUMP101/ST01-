@@ -184,6 +184,7 @@
         if (!admins.length) return tx.error('LAST_ADMIN', 'ต้องมีผู้ดูแลระบบที่ใช้งานอย่างน้อย 1 คน');
       }
       const accountId = util.trim(p.accountId);
+      if (accountId && util.badKey(accountId)) return tx.error('BAD_KEY', `ชื่อบัญชี "${accountId}" ใช้ไม่ได้`, { field: 'accountId' });
       if (accountId) {
         const other = tx.all('users', (u) => u.accountId === accountId && u.id !== id)[0];
         if (other) return tx.error('DUPLICATE', `บัญชีนี้ผูกกับผู้ใช้ ${other.name} แล้ว`, { field: 'accountId' });

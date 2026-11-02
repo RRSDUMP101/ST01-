@@ -65,14 +65,33 @@ export async function applyMigrations(d1) {
   for (const s of migrationStatements()) await d1.prepare(s).run();
 }
 
-export async function makeSecrets() {
+/** opts.ownerCost: bcrypt cost of ADMIN_PASSWORD_HASH (default 12, the cost scripts/hash-password.mjs uses). */
+export async function makeSecrets(opts = {}) {
   const ownerPassword = randomBytes(18).toString('base64url');
   return {
     ownerUsername: 'owner-' + randomBytes(3).toString('hex'),
     ownerPassword,
-    ownerHash: await bcrypt.hash(ownerPassword, 12),
+    ownerHash: await bcrypt.hash(ownerPassword, opts.ownerCost || 12),
     sessionSecret: randomBytes(32).toString('hex'),
   };
+}
+
+/**
+ * The asset router as Cloudflare runs it for this wrangler.toml: [assets] run_worker_first (true → every request runs
+ * the Worker first; a list → only those paths, everything else straight from the asset store), with Cloudflare's
+ * default html_handling 'auto-trailing-slash' (/x serves x.html). Converted the way wrangler 4 converts it.
+ */
+export function wranglerAssetRouting() {
+  const toml = fs.readFileSync(path.join(workerDir, 'wrangler.toml'), 'utf8');
+  const m = /^\s*run_worker_first\s*=\s*(true|false|\[[^\]]*\])/m.exec(toml);
+  const routerConfig = { has_user_worker: true };
+  if (m && (m[1] === 'true' || m[1] === 'false')) routerConfig.invoke_user_worker_ahead_of_assets = m[1] === 'true';
+  else if (m) {
+    const rules = JSON.parse(m[1]);
+    routerConfig.static_routing = { user_worker: rules.filter((r) => !r.startsWith('!')), asset_worker: rules.filter((r) => r.startsWith('!')).map((r) => r.slice(1)) };
+  }
+  const html = /^\s*html_handling\s*=\s*"([^"]+)"/m.exec(toml);
+  return { routerConfig, assetConfig: { html_handling: html ? html[1] : 'auto-trailing-slash', not_found_handling: 'none' } };
 }
 export const tempPassword = () => 'T' + randomBytes(12).toString('base64url');
 export const tempDir = (name) => fs.mkdtempSync(path.join(os.tmpdir(), `sq-${name}-`));
@@ -115,7 +134,9 @@ export async function startServer(opts = {}) {
     const w = { name, modules: true, script, compatibilityDate: COMPAT_DATE, compatibilityFlags: ['nodejs_compat'],
       d1Databases: { DB: 'stockqc-test-db' }, r2Buckets: { BUCKET: 'stockqc-test-files' }, bindings, outboundService: outbound.fn };
     if (opts.assetsDir && i === 0) {
-      w.assets = { directory: opts.assetsDir, binding: 'ASSETS', routerConfig: { has_user_worker: true, invoke_user_worker_ahead_of_assets: true } };
+      // opts.assetRouting = wranglerAssetRouting(): the routing of the real deployment; default: every request runs the Worker
+      const routing = opts.assetRouting || { routerConfig: { has_user_worker: true, invoke_user_worker_ahead_of_assets: true } };
+      w.assets = Object.assign({ directory: opts.assetsDir, binding: 'ASSETS' }, routing);
     }
     return w;
   });

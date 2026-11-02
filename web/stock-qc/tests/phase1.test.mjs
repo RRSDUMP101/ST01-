@@ -260,3 +260,15 @@ test('Phase 1: a user limited to warehouse A cannot save a draft for B; serial A
   const pipe = await w.exec('LEAD', 'doc.post', { type: 'AJ', lines: [{ code: 'TST-PLATE', qty: 1, wh: 'A', bin: 'A-01', lot: 'H|1' }] });
   assert.equal(pipe.errors[0].code, 'BAD_LOT');
 });
+
+test('engine: Object.prototype names are never rows, commands or request ids', async () => {
+  const w = await world();
+  const s = await w.state();
+  assert.equal(RRS.q.get(s, 'users', 'constructor'), null);
+  assert.equal(RRS.q.item(s, 'constructor'), null);
+  assert.equal((await w.exec('ADMIN', 'constructor', {})).errors[0].code, 'UNKNOWN_COMMAND');
+  assert.equal((await w.exec('ADMIN', 'settings.update', { patch: {} }, '__proto__')).errors[0].code, 'BAD_REQUEST_ID');
+  const r = await w.exec('LEAD', 'doc.post', { type: 'PD', lines: [{ code: 'toString', qty: 1, wh: 'A', bin: 'A-01' }] });
+  assert.equal(r.ok, false);
+  assert.equal(Object.getPrototypeOf(s.tables.users), Object.prototype);
+});

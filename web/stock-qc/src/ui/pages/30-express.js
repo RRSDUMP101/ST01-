@@ -181,7 +181,13 @@
     if (live) blockers.push(`ไฟล์นี้นำเข้าแล้วเป็นรอบ ${live.id} (${rec.BATCH_STATUS[live.status]}) เมื่อ ${h.fmt.dt(live.importedAt)} – ไม่นำเข้าซ้ำ เปิดรอบเดิมที่แท็บ รอบนำเข้า`);
     for (const f of missing) blockers.push(`เลือกคอลัมน์ของ ${f.label} ในตารางจับคู่ด้านบน`);
     if (!missing.length && !parsed.rows.length) blockers.push('ไม่พบแถวที่มีรหัสสินค้าใต้แถวหัวตาราง – ตรวจว่าเลือกแถวหัวตารางและคอลัมน์รหัสสินค้าถูก');
-    for (const b of parsed.bad.slice(0, 8)) blockers.push(`แถว ${b.row} (${b.code}): ยอดคงเหลือ "${b.qty}" ไม่ใช่ตัวเลข – แก้ในไฟล์ หรือเลือกคอลัมน์ยอดคงเหลือให้ถูก`);
+    for (const b of parsed.bad.slice(0, 8)) {
+      blockers.push(b.qty === ''
+        ? `แถว ${b.row} (${b.code}): ไม่มียอดคงเหลือ – ใส่จำนวนในไฟล์ (ไม่มีของใส่ 0) หรือเลือกคอลัมน์ยอดคงเหลือให้ถูก`
+        : /^\(\s*[\d,.]+\s*\)$/.test(b.qty)
+          ? `แถว ${b.row} (${b.code}): ยอดคงเหลือ "${b.qty}" เขียนแบบวงเล็บ – ถ้าเป็นยอดติดลบ แก้ในไฟล์เป็น -${b.qty.replace(/[()\s]/g, '')} แล้วเลือกไฟล์ใหม่ (ระบบไม่เดาเครื่องหมาย)`
+          : `แถว ${b.row} (${b.code}): ยอดคงเหลือ "${b.qty}" ไม่ใช่ตัวเลข – แก้ในไฟล์ หรือเลือกคอลัมน์ยอดคงเหลือให้ถูก`);
+    }
     if (parsed.bad.length > 8) blockers.push(`… และอีก ${parsed.bad.length - 8} แถวที่ยอดไม่ใช่ตัวเลข`);
     for (const e of dryErrs.slice(0, 8)) blockers.push(e.message);
 
@@ -285,14 +291,18 @@
 
   function resolutionCell(ctx, rc, r) {
     const res = r.resolution;
-    const canAct = rc.batch.status === 'REVIEW' && ctx.can('express.reconcile', r.wh || undefined);
     if (res) {
       return t`${h.badge(res.action === 'adjust' ? 'ปรับยอดตาม Express' : 'อธิบายแล้ว', res.action === 'adjust' ? 'accent' : 'ok')}${res.docNo ? t` ${docLink(res.docNo)}` : ''}${res.confirmOld ? t` ${h.badge('ยืนยันใช้ไฟล์เก่า', 'warn')}` : ''}
-        <br><small>${res.reason}</small><br><small class="muted">${ctx.userName(res.by)} · ${h.fmt.dt(res.at)}</small>
-        ${canAct && res.action === 'explain' ? t`<br>${h.btn('ตัดสินใหม่', { act: 'resolve', arg: r.key, tone: 'quiet', small: true })}` : ''}`;
+        <br><small>${res.reason}</small><br><small class="muted">${ctx.userName(res.by)} · ${h.fmt.dt(res.at)}</small>`;
     }
-    if (r.status === 'MATCH') return t`<span class="muted">ไม่ต้องทำ</span>`;
-    return canAct ? h.btn('ตัดสิน', { act: 'resolve', arg: r.key, small: true }) : t`<span class="muted">ยังไม่ตัดสิน</span>`;
+    return r.status === 'MATCH' ? t`<span class="muted">ไม่ต้องทำ</span>` : t`<span class="muted">ยังไม่ตัดสิน</span>`;
+  }
+  /** The decide button sits under the item (first columns): on a phone it is in view without scrolling the table sideways. */
+  function resolveBtn(ctx, rc, r) {
+    if (rc.batch.status !== 'REVIEW' || !ctx.can('express.reconcile', r.wh || undefined)) return '';
+    const res = r.resolution;
+    if (res) return res.action === 'explain' ? t`<br>${h.btn('ตัดสินใหม่', { act: 'resolve', arg: r.key, tone: 'ghost', small: true })}` : '';
+    return r.status === 'MATCH' ? '' : t`<br>${h.btn('ตัดสิน', { act: 'resolve', arg: r.key, small: true })}`;
   }
 
   function batchReview(ctx, id) {
@@ -323,10 +333,13 @@
 
     const notes = [];
     if (live) notes.push(h.note(t`นำเข้าแล้ว <b>ยอดคงเหลือยังไม่เปลี่ยน</b> – ผลต่าง = Express − RRS ณ เวลาของไฟล์ (${h.fmt.dt(b.snapshotAt)}) เอกสารที่บันทึกหลังเวลานั้นอยู่ในคอลัมน์ RRS ตอนนี้ และไม่ถูกนับเป็นผลต่าง`, 'info'));
-    notes.push(owns
-      ? h.note(t`<b>ข้อตกลง ค-1: ยอดจำนวนยึด Express</b> – ปรับยอดตามไฟล์ได้ (ใบปรับยอด AJ ของผลต่าง ณ เวลาไฟล์ เอกสารหลังเวลานั้นยังอยู่ครบ) หรืออธิบายผลต่าง`, 'warn')
-      : h.note(t`<b>ข้อตกลง ค-1: ยอดจำนวนเป็นของระบบ RRS</b> – ไฟล์ Express ใช้กระทบยอดเท่านั้น ปรับยอดจากไฟล์ไม่ได้ ทุกผลต่างให้อธิบายเหตุผล (เช่น เอกสารยังไม่คีย์ Express) ถ้าของจริงไม่ตรงให้ ${h.link('เปิดรอบตรวจนับ', 'counts')}`, 'info'));
-    if (rc.olderThanLatest) notes.push(h.note('ไฟล์นี้เก่ากว่ารอบที่ปิดล่าสุด – การปรับยอดจากไฟล์นี้ต้องติ๊กยืนยันใช้ไฟล์เก่าทีละครั้ง และรายการที่ถูกนับ/ปรับหลังเวลาไฟล์ปรับจากไฟล์นี้ไม่ได้', 'warn'));
+    // how differences may be decided matters only while the batch is still being reviewed
+    if (live) {
+      notes.push(owns
+        ? h.note(t`<b>ข้อตกลง ค-1: ยอดจำนวนยึด Express</b> – ปรับยอดตามไฟล์ได้ (ใบปรับยอด AJ ของผลต่าง ณ เวลาไฟล์ เอกสารหลังเวลานั้นยังอยู่ครบ) หรืออธิบายผลต่าง`, 'warn')
+        : h.note(t`<b>ข้อตกลง ค-1: ยอดจำนวนเป็นของระบบ RRS</b> – ไฟล์ Express ใช้กระทบยอดเท่านั้น ปรับยอดจากไฟล์ไม่ได้ ทุกผลต่างให้อธิบายเหตุผล (เช่น เอกสารยังไม่คีย์ Express) ถ้าของจริงไม่ตรงให้ ${h.link('เปิดรอบตรวจนับ', 'counts')}`, 'info'));
+    }
+    if (live && rc.olderThanLatest) notes.push(h.note('ไฟล์นี้เก่ากว่ารอบที่ปิดล่าสุด – การปรับยอดจากไฟล์นี้ต้องติ๊กยืนยันใช้ไฟล์เก่าทีละครั้ง และรายการที่ถูกนับ/ปรับหลังเวลาไฟล์ปรับจากไฟล์นี้ไม่ได้', 'warn'));
     if (b.status === 'CLOSED') notes.push(h.note(`ปิดรอบแล้วโดย ${ctx.userName(b.closedBy)} เมื่อ ${h.fmt.dt(b.closedAt)} – แก้การตัดสินไม่ได้`, 'ok'));
     if (b.status === 'DISCARDED') notes.push(h.note(`ยกเลิกรอบโดย ${ctx.userName(b.discardedBy)} เมื่อ ${h.fmt.dt(b.discardedAt)}: ${b.discardReason} – รอบนี้ไม่ได้เปลี่ยนยอด ไฟล์เดิมนำเข้าใหม่ได้`, 'info'));
 
@@ -334,7 +347,8 @@
       h.kpi('ตรงกัน', h.fmt.num(tot.MATCH), 'รายการ', 'ok'),
       h.kpi('ยอดต่าง', h.fmt.num(tot.DIFF + tot.ONLY_EXPRESS + tot.ONLY_RRS), `มีเฉพาะ Express ${tot.ONLY_EXPRESS} · เฉพาะ RRS ${tot.ONLY_RRS}`, tot.DIFF + tot.ONLY_EXPRESS + tot.ONLY_RRS ? 'warn' : 'ok'),
       h.kpi('ไม่รู้จักรหัส', h.fmt.num(tot.UNKNOWN_CODE), 'แถวในไฟล์', tot.UNKNOWN_CODE ? 'bad' : ''),
-      h.kpi('ยังไม่ตัดสิน', h.fmt.num(tot.unresolved), tot.unresolved ? 'ต้องครบก่อนปิดรอบ' : 'ปิดรอบได้', tot.unresolved ? 'warn' : 'ok'),
+      live ? h.kpi('ยังไม่ตัดสิน', h.fmt.num(tot.unresolved), tot.unresolved ? 'ต้องครบก่อนปิดรอบ' : 'ปิดรอบได้', tot.unresolved ? 'warn' : 'ok')
+        : h.kpi('ยังไม่ตัดสิน', h.fmt.num(tot.unresolved), b.status === 'DISCARDED' ? 'รอบนี้ยกเลิกแล้ว ไม่ต้องตัดสิน' : 'ปิดรอบแล้ว'),
       h.kpi('เอกสารยังไม่คีย์ ณ เวลาไฟล์', h.fmt.num(tot.pendingDocs), 'อาจเป็นที่มาของผลต่าง', tot.pendingDocs ? 'info' : ''),
     ]);
     const bulk = live && canRec ? t`<div class="form-actions">
@@ -347,9 +361,9 @@
         ? t`<input type="checkbox" data-act="tick" data-arg="${r.key}" aria-label="เลือก ${r.code || 'แถว ' + r.rows[0]}"${h.safe(picked[r.key] ? ' checked' : '')}>` : '') });
     }
     cols.push(
-      { label: 'สินค้า', render: (r) => (r.status === 'UNKNOWN_CODE'
+      { label: 'สินค้า', render: (r) => t`${r.status === 'UNKNOWN_CODE'
         ? t`${h.code(r.rawCodes[0] || '(ว่าง)')}<br><small class="muted">แถว ${r.rows.join(', ')} · ไม่รู้จักรหัส ระบบไม่จับคู่จากชื่อ</small>`
-        : t`${h.code(r.code)} ${r.name ? t`<small>${r.name}</small>` : ''}${r.rawCodes.some((c) => util.ckey(c) !== util.ckey(r.code)) ? t`<br><small class="muted">ในไฟล์: ${r.rawCodes.join(', ')}</small>` : ''}`) },
+        : t`${h.code(r.code)} ${r.name ? t`<small>${r.name}</small>` : ''}${r.rawCodes.some((c) => util.ckey(c) !== util.ckey(r.code)) ? t`<br><small class="muted">ในไฟล์: ${r.rawCodes.join(', ')}</small>` : ''}`}${resolveBtn(ctx, rc, r)}` },
       { label: 'คลัง', render: (r) => (r.wh ? h.code(r.wh) : dash) },
       { label: 'Express', num: true, render: (r) => (r.status === 'ONLY_RRS' ? dash : h.fmt.num(r.express)) },
       { label: 'RRS ณ เวลาไฟล์', num: true, render: (r) => (r.rrsAtSnapshot == null ? dash : h.fmt.num(r.rrsAtSnapshot)) },
@@ -447,12 +461,16 @@
       else {
         const sel = v.sel && RRS.q.get(ctx.state, 'express_batches', v.sel) ? v.sel : null;
         body = t`${sel ? batchReview(ctx, sel) : ''}${h.section('รอบนำเข้า', batchList(ctx), {
-          sub: 'หนึ่งไฟล์ = หนึ่งรอบ · คลิกแถวเพื่อดูผลต่างรายสินค้า', actions: canImp ? h.btn('+ นำเข้าไฟล์ใหม่', { act: 'tab', arg: 'import', tone: 'primary', small: true }) : '' })}`;
+          // with no batch yet the empty state carries the one "import the first file" button
+          sub: 'หนึ่งไฟล์ = หนึ่งรอบ · คลิกแถวเพื่อดูผลต่างรายสินค้า', actions: canImp && batches.length ? h.btn('+ นำเข้าไฟล์ใหม่', { act: 'tab', arg: 'import', tone: 'primary', small: true }) : '' })}`;
       }
       return t`${kp}${ro}${h.tabs(tabs, tab)}${body}`;
     },
     after(ctx, root0) {
       const v = ctx.view;
+      // the picker offers no time after now (Thai time; the field has no max option in the kit)
+      const snapEl = root0.querySelector('#ex-snap');
+      if (snapEl) snapEl.max = new Date(Date.now() + 7 * 3600e3).toISOString().slice(0, 16);
       const box = root0.querySelector('#ex-rec');
       if (box) {
         // the review table scrolls inside its own box: keep its place across re-renders (ticking, resolving)
@@ -544,14 +562,19 @@
           return;
         }
         if (Date.parse(snap) > Date.now() + 60000) {
-          const msg = `เวลาของข้อมูล ${h.fmt.dt(snap)} อยู่หลังเวลาปัจจุบัน – ตรวจวันเวลาในหัวรายงาน Express`;
+          // the picker counts years in ค.ศ.; a Buddhist-era year (2569) lands about 543 years ahead
+          const year = Number(snap.slice(0, 4));
+          const msg = year > 2400
+            ? `ปีที่ใส่ (${year}) เป็นปี พ.ศ. – ช่องนี้ใช้ปี ค.ศ. (เช่น ${year - 543}) ไม่ใช่ปี พ.ศ.`
+            : `เวลาของข้อมูล ${h.fmt.dt(snap)} อยู่หลังเวลาปัจจุบัน – ตรวจวันเวลาในหัวรายงาน Express`;
           ctx.set({ impErr: [{ message: msg }] });
           return ctx.toast(msg, 'bad');
         }
         const parsed = parseSrc(src);
         const payload = payloadOf(src, parsed, snap);
+        const ageDays = Math.floor((Date.now() - Date.parse(snap)) / 86400e3);
         const ok = await ctx.confirm({ title: 'นำเข้าไฟล์ Express', ok: 'นำเข้า',
-          message: `นำเข้า ${parsed.rows.length} แถวจาก ${src.name} เป็นข้อมูล ณ ${h.fmt.dt(snap)} – ยอดคงเหลือไม่เปลี่ยน ใช้เทียบผลต่างเท่านั้น` });
+          message: `นำเข้า ${parsed.rows.length} แถวจาก ${src.name} เป็นข้อมูล ณ ${h.fmt.dt(snap)} – ยอดคงเหลือไม่เปลี่ยน ใช้เทียบผลต่างเท่านั้น${ageDays >= 3 ? ` · ข้อมูลนี้เก่า ${ageDays} วัน ตรวจวันที่ในหัวรายงานให้ตรงก่อนนำเข้า` : ''}` });
         if (!ok) return;
         const r = await ctx.exec('express.import', payload, { quiet: true });
         if (!r.ok) {

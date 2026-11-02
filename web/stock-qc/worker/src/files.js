@@ -103,6 +103,11 @@ export async function upload(env, req, session) {
   return json({ ok: true, id, name: clean, type, size: bytes.length, uploadedAt: at, url: `/api/files/${id}`, existing: false }, 201);
 }
 
+/** RFC 8187 ext-value: encodeURIComponent leaves ' ( ) * ! as they are; ' ( ) * are not attr-chars, so they are encoded too. */
+export function rfc8187(name) {
+  return encodeURIComponent(String(name)).replace(/['()*]/g, (c) => '%' + c.charCodeAt(0).toString(16).toUpperCase());
+}
+
 export async function download(env, id) {
   if (!ID_RE.test(id)) throw new HttpError(404, 'ไม่พบไฟล์');
   const row = await db(env).prepare('SELECT id,r2_key,name,type,size FROM sq_files WHERE id=?').bind(id).first();
@@ -111,7 +116,7 @@ export async function download(env, id) {
   if (!obj) throw new HttpError(404, 'ไม่พบไฟล์');
   const def = FILE_TYPES[row.type];
   const ascii = cleanName(row.name, row.type).replace(/[^\x20-\x7e]/g, '_').replace(/["\\]/g, '_');
-  const disposition = `${def.inline ? 'inline' : 'attachment'}; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(row.name)}`;
+  const disposition = `${def.inline ? 'inline' : 'attachment'}; filename="${ascii}"; filename*=UTF-8''${rfc8187(cleanName(row.name, row.type))}`;
   return new Response(obj.body, {
     status: 200,
     headers: Object.assign({}, API_HEADERS, {

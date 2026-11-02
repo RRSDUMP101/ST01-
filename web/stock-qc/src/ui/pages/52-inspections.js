@@ -77,10 +77,23 @@
       (i) => i.qty - (i.releasedQty || 0)));
   }
 
+  /** Quantity of an NCR (decided REWORK) still waiting for its re-inspection (void results do not count). */
+  function ncrLeft(ctx, n) {
+    if (!n) return 0;
+    const done = util.sum(RRS.q.rows(ctx.state, 'inspections', (x) => x.reinspectionNcr === n.ncrNo && x.status !== 'VOID'), (x) => x.qty);
+    return Math.max(0, util.round(n.qty - done));
+  }
+
   // ---- the inspection form ------------------------------------------------------------------------------------
   function formValues() {
     const form = root.document.querySelector('form[data-form="ins"]');
     return form ? h.parseForm(form) : {};
+  }
+  /** The approved plan the form's item + stage uses ('' when none) – results are kept only while it stays the same. */
+  function planKey(ctx, e) {
+    const it = util.trim(e.code) ? ctx.item(e.code) : null;
+    const p = it ? Q.planFor(ctx.state, it.id, e.stage || 'INCOMING') : null;
+    return p ? p.id : '';
   }
   function mergeIns(ctx, vals, patch) {
     const cur = ctx.view.ins || {};
@@ -171,10 +184,7 @@
       id: 'ins-form', sub: 'ใช้แผนตรวจที่อนุมัติของสินค้าและขั้นตอนนี้ · ผู้ตรวจต้องไม่ใช่ผู้บันทึกเอกสารรับเข้า · ผลผ่านต้องให้หัวหน้า QC อีกคนปล่อยผ่าน',
     });
   }
-  function thumb(src, name, extra) {
-    const s = K.imgSrc(src);
-    return t`<div class="step">${s ? t`<a href="${s}" target="_blank" rel="noopener noreferrer"><img src="${s}" alt="${name || 'รูปหลักฐาน'}" width="112" loading="lazy"></a>` : ''}<small class="muted">${name || ''}</small>${extra || ''}</div>`;
-  }
+  const thumb = K.thumb;
 
   // ---- queue -------------------------------------------------------------------------------------------------
   function queueView(ctx, qq) {
@@ -205,7 +215,8 @@
             return b.toInspect > 0 ? h.btn('ตรวจ', { act: 'startIns', arg: key, small: true, tone: 'primary' }) : t`<small class="muted">ตรวจครบแล้ว รอปล่อยผ่าน</small>`;
           }
           if (b.status === 'REWORK') return canIns(b.wh) && b.toInspect > 0 ? h.btn('ตรวจซ้ำหลังแก้ไข', { act: 'startRe', arg: key, small: true, tone: 'primary' }) : t`<small class="muted">รอแก้ไขแล้วตรวจซ้ำ</small>`;
-          return b.ncrs.length ? t`<small class="muted">รอตัดสิน NCR</small>` : h.link('เปิด NCR', 'ncrs', { tab: 'held' });
+          if (b.ncrs.length) return t`<small class="muted">รอตัดสิน NCR</small>`;
+          return canIns(b.wh) ? h.link('เปิด NCR', 'ncrs', { tab: 'held' }) : t`<small class="muted">ยังไม่มี NCR – QC เป็นผู้เปิด</small>`;
         } },
       ] });
     const filtered = v.st || v.q;
@@ -284,12 +295,17 @@
       } else notes.push(h.note(`ผลผ่านแล้ว รอหัวหน้า QC ที่ไม่ใช่ผู้ตรวจ (${ctx.userName(i.inspector)}) กดปล่อยผ่าน – ระหว่างนี้ของยังเป็น "${STATUS_LABEL[i.fromStatus] || 'รอตรวจ'}" ใช้หรือส่งมอบไม่ได้`, 'info'));
     }
     if (i.result === 'FAIL' && ctx.can('qc.inspect', i.wh || undefined)) {
+      // a re-inspection needs the NCR decided REWORK, pieces of it not yet re-inspected and (for stock) รอแก้ไข stock there
+      const rw = !!ncr && ncr.status === 'DISPOSITIONED' && ncr.disposition === 'REWORK';
+      const left = rw ? ncrLeft(ctx, ncr) : 0;
+      const rework = stock ? RRS.q.qty(ctx.state, { code: i.code, wh: i.wh, bin: i.bin || '', lot: i.lot || '', status: 'REWORK' }) : left;
       if (ncr && ncr.status === 'CLOSED') notes.push(h.note(`NCR ${ncr.ncrNo} ปิดแล้ว – ไม่ต้องตรวจซ้ำ`, 'info'));
-      else if (!stock) acts.push(h.btn('ตรวจซ้ำหลังแก้ไข', { act: 'reFrom', arg: i.id, tone: 'ghost', id: 'ins-re-btn' }));
-      else {
-        const rework = RRS.q.qty(ctx.state, { code: i.code, wh: i.wh, bin: i.bin || '', lot: i.lot || '', status: 'REWORK' });
-        if (rework > 0 && ncr && ncr.disposition === 'REWORK') acts.push(h.btn('ตรวจซ้ำหลังแก้ไข', { act: 'reFrom', arg: i.id, tone: 'primary', id: 'ins-re-btn' }));
-        else if (ncr && ncr.status === 'OPEN') notes.push(h.note(t`ของ ${h.fmt.num(i.qty)} ${unit} กักกันอยู่ รอหัวหน้า QC ตัดสิน ${K.ncrLink(ncr.ncrNo)} – ถ้าตัดสินให้แก้ไขงาน จะตรวจซ้ำได้หลังแก้`, 'warn'));
+      else if (rw && left > 0 && rework > 0) acts.push(h.btn(`ตรวจซ้ำหลังแก้ไข (เหลือ ${h.fmt.num(left)} ${unit})`, { act: 'reFrom', arg: i.id, tone: 'primary', id: 'ins-re-btn' }));
+      else if (rw && !left) notes.push(h.note(t`ตรวจซ้ำครบจำนวนของ ${K.ncrLink(ncr.ncrNo)} แล้ว – ปิด NCR ได้ที่หน้า NCR`, 'info'));
+      else if (rw) notes.push(h.note(`ไม่มีของ "รอแก้ไข" ของ ${i.code} ที่ ${K.loc(i)} ให้ตรวจซ้ำ – ตรวจสอบว่าของถูกย้ายหรือตัดยอดไปแล้วหรือไม่`, 'warn'));
+      else if (ncr && ncr.status === 'DISPOSITIONED') notes.push(h.note(t`${K.ncrLink(ncr.ncrNo)} ตัดสินเป็น "${Q.DISPOSITIONS[ncr.disposition] || ncr.disposition}" แล้ว – ไม่ต้องตรวจซ้ำ`, 'info'));
+      else if (ncr && ncr.status === 'OPEN') {
+        notes.push(h.note(t`${stock ? `ของ ${h.fmt.num(i.qty)} ${unit} กักกันอยู่ ` : ''}รอหัวหน้า QC/วิศวกรรมตัดสิน ${K.ncrLink(ncr.ncrNo)} – ถ้าตัดสินให้แก้ไขงาน จะตรวจซ้ำได้หลังแก้`, 'warn'));
       }
     }
     if (i.status === 'VOID') {
@@ -344,15 +360,18 @@
     const n = (s) => qq.balances.filter((b) => b.status === s).length;
     return h.kpis([
       h.kpi('รอตรวจ', h.fmt.num(hold.length), 'ตำแหน่ง – ใช้/เบิกไม่ได้จนกว่าจะผ่าน QC', hold.length ? 'warn' : 'ok'),
-      h.kpi('ผลิตเสร็จรอตรวจ', h.fmt.num(util.round(util.sum(fgHold, (b) => b.qty))), 'หน่วย – ยังส่งมอบลูกค้าไม่ได้', fgHold.length ? 'bad' : ''),
+      h.kpi('ผลิตเสร็จรอตรวจ', h.fmt.num(util.round(util.sum(fgHold, (b) => b.qty))), 'จำนวนรวม – ยังส่งมอบลูกค้าไม่ได้', fgHold.length ? 'bad' : ''),
       h.kpi('ผ่านแล้วรอปล่อย', h.fmt.num(qq.inspections.length), 'ผลตรวจรอหัวหน้า QC อนุมัติ', qq.inspections.length ? 'warn' : ''),
       h.kpi('กักกัน', h.fmt.num(n('QUARANTINE')), 'ตำแหน่ง – ดำเนินการตาม NCR', n('QUARANTINE') ? 'bad' : ''),
       h.kpi('รอแก้ไข', h.fmt.num(n('REWORK')), 'ตำแหน่ง – แก้แล้วตรวจซ้ำ', n('REWORK') ? 'info' : ''),
     ]);
   }
 
-  function startFrom(ctx, patch) {
-    ctx.set({ ins: Object.assign({ stage: 'INCOMING', fromStatus: 'QC_HOLD', res: {}, photos: [] }, patch), insErr: null, _scroll: true });
+  /** Open the inspection form. From the queue the open result closes (keep = true when started from that result). */
+  function startFrom(ctx, patch, keep) {
+    const p = { ins: Object.assign({ stage: 'INCOMING', fromStatus: 'QC_HOLD', res: {}, photos: [] }, patch), insErr: null, _scroll: true };
+    if (!keep) p.sel = null;
+    ctx.set(p);
   }
 
   RRS.ui.page({
@@ -413,20 +432,25 @@
         if (!i) return;
         const stock = !!STOCK_STAGES[i.stage];
         const rework = stock ? RRS.q.qty(ctx.state, { code: i.code, wh: i.wh, bin: i.bin || '', lot: i.lot || '', status: 'REWORK' }) : i.qty;
-        startFrom(ctx, { stage: i.stage, code: i.code, wh: i.wh, bin: i.bin, lot: i.lot, qty: Math.min(i.qty, rework) || i.qty, fromStatus: stock ? 'REWORK' : '',
-          reinspectionOf: i.id, jobNo: i.jobNo, sourceDoc: '' });
+        // no more than the NCR still waits to re-inspect
+        const left = i.ncrNo ? ncrLeft(ctx, RRS.q.get(ctx.state, 'ncrs', i.ncrNo)) : i.qty;
+        startFrom(ctx, { stage: i.stage, code: i.code, wh: i.wh, bin: i.bin, lot: i.lot, qty: Math.min(left, rework) || left || i.qty, fromStatus: stock ? 'REWORK' : '',
+          reinspectionOf: i.id, jobNo: i.jobNo, sourceDoc: '' }, true);
       },
       redo(ctx, el) {
         const i = RRS.q.get(ctx.state, 'inspections', el.dataset.arg);
         if (!i) return;
         startFrom(ctx, { stage: i.stage, code: i.code, wh: i.wh, bin: i.bin, lot: i.lot, qty: i.qty, fromStatus: i.fromStatus || 'QC_HOLD', sourceDoc: i.sourceDoc,
-          jobNo: i.jobNo, reinspectionOf: i.reinspectionOf });
+          jobNo: i.jobNo, reinspectionOf: i.reinspectionOf }, true);
       },
       insClose: (ctx) => ctx.set({ ins: null, insErr: null }),
       insField(ctx) {
         const vals = formValues();
+        const prev = ctx.view.ins || {};
         const next = mergeIns(ctx, vals);
-        // a REWORK inspection is always a re-inspection; going back to รอตรวจ drops nothing the person typed
+        // results belong to the characteristics of one plan: another item or stage (another plan) starts them empty,
+        // so a measurement of the previous item is never saved against this one
+        if (planKey(ctx, prev) !== planKey(ctx, next)) next.res = {};
         ctx.set({ ins: next });
       },
       async insPhoto(ctx, el) {
@@ -470,8 +494,12 @@
             ${stock ? h.field({ name: 'qty', label: `จำนวนที่ปล่อย (${unit})`, type: 'number', value: left, required: true, wide: true, id: 'rel-qty',
               hint: `ปล่อยได้ไม่เกิน ${h.fmt.num(left)} – ปล่อยบางส่วนได้ ที่เหลือยังรอปล่อย` }) : ''}
             <p class="hint wide">${stock ? `ของจะเปลี่ยนจาก "${STATUS_LABEL[i.fromStatus] || 'รอตรวจ'}" เป็น "ใช้ได้" ทันที (บันทึกเป็นเอกสารเปลี่ยนสถานะ QS) แล้วเบิกหรือส่งมอบได้` : 'ผลตรวจระหว่างผลิตไม่มีของในคลัง – บันทึกการอนุมัติอย่างเดียว'}</p>`,
-          onSubmit: (vals) => ctx.exec('qc.release', stock ? { id: i.id, qty: vals.qty } : { id: i.id }, { quiet: true,
-            done: (r) => `ปล่อยผ่าน ${i.id} แล้ว${stock ? ` – ${h.fmt.num(r.result.qty)} ${unit} ใช้ได้${r.result.docNo ? ' (' + r.result.docNo + ')' : ''}` : ''}` }),
+          onSubmit(vals) {
+            // an empty box would let the engine release everything that is left – the person must say how much
+            if (stock && !util.trim(vals.qty)) return { ok: false, errors: [{ message: `ใส่จำนวนที่ปล่อย (ไม่เกิน ${h.fmt.num(left)} ${unit})` }] };
+            return ctx.exec('qc.release', stock ? { id: i.id, qty: vals.qty } : { id: i.id }, { quiet: true,
+              done: (r) => `ปล่อยผ่าน ${i.id} แล้ว${stock ? ` – ${h.fmt.num(r.result.qty)} ${unit} ใช้ได้${r.result.docNo ? ' (' + r.result.docNo + ')' : ''}${r.result.done ? '' : ' · ที่เหลือยังรอปล่อย'}` : ''}` });
+          },
         });
       },
       async csv(ctx) {

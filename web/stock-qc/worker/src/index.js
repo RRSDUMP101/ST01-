@@ -4,6 +4,8 @@
 //   GET  /api/auth/session                                            → {username, owner, mustChange, user, bootstrapped}
 //   POST /api/auth/password       {current, next}                    → every session of the account ends
 //   POST /api/admin/credentials   {username, password?, active?}     (owner, or engine permission users.manage)
+//   POST /api/admin/records       {repair?: boolean}                 (owner, or engine perm backup.restore) → sq_records
+//                                                                      checked against a verified replay of sq_commits
 //   POST /api/command             {kind, payload, requestId}         → the engine's result (one hash-chained commit)
 //   GET  /api/commits?after=N                                        → {commits, more}
 //   POST /api/files               (≤ 10 MB) / GET /api/files/<sha256>
@@ -14,7 +16,8 @@
 //   GET  /api/sales/status        (owner or an active engine user)   → connector mode, last contact, counts, issues
 // Cron (wrangler.toml [triggers]): BACKUP_CRON → Drive backup, SYNC_CRON → Sales Office sync; each does nothing unless
 // its own flag is on (SQ_DRIVE_BACKUP_ENABLED=true / SQ_SALES_BRIDGE=pull|pull_push) and it is fully configured.
-// Everything else is the static page (../dist) through the ASSETS binding.
+// Everything else is the static page (../dist) through the ASSETS binding – every request runs this Worker first
+// (wrangler.toml run_worker_first = true), so each static file gets the headers below and only "/" serves HTML.
 // Every POST must come from the same origin; every /api response carries no-store/nosniff/no-referrer/no-framing.
 import { ENGINE_FILES } from './engine-imports.js';
 import { HttpError, json, jsonText, errorResponse, withHeaders, flag, str, bridgeMode, PAGE_HEADERS, HTML_CSP } from './runtime.js';
@@ -56,7 +59,7 @@ async function command(env, req) {
     const message = SERVER_ONLY[input.kind];
     throw new HttpError(403, message, { code: 'BRIDGE_ONLY', errors: [{ code: 'BRIDGE_ONLY', message }] });
   }
-  const r = await ledger.execute(env, input, session);
+  const r = await ledger.execute(env, input, session, { req });
   return json(r, r.ok ? 200 : 422);
 }
 
@@ -115,6 +118,20 @@ async function optionalJson(req) {
   }
   if (!v || typeof v !== 'object' || Array.isArray(v)) throw new HttpError(400, 'ข้อมูลที่ส่งมาต้องเป็น JSON object');
   return v;
+}
+
+/** POST /api/admin/records {repair?}: check sq_records against a verified replay of sq_commits, optionally repair. */
+async function records(env, req) {
+  const session = await auth.requireSession(env, req);
+  if (session.mustChange) throw mustChangeError();
+  requirePerm(await ledger.catchUp(env), session, 'backup.restore', 'เฉพาะเจ้าของระบบหรือผู้มีสิทธิ์กู้คืนข้อมูล (backup.restore) ตรวจ/ซ่อมตารางอ่านเร็วได้');
+  const input = await optionalJson(req);
+  const unknown = Object.keys(input).filter((k) => k !== 'repair');
+  if (unknown.length) throw new HttpError(400, `ไม่รู้จักข้อมูล: ${unknown.join(', ')}`);
+  if (input.repair !== undefined && typeof input.repair !== 'boolean') throw new HttpError(400, 'repair ต้องเป็น true หรือ false');
+  await apiRateLimit(env, req, 'records', session.username, 10, 60 * 60 * 1000);
+  const r = await ledger.checkRecords(env, { repair: input.repair === true });
+  return json(r, r.code === 'CHANGED' ? 409 : 200);
 }
 
 const BACKUP_HTTP = { DISABLED: 409, BUSY: 409, ALREADY_DONE: 409, CONFIGURATION_MISSING: 503, LEDGER_INTEGRITY: 500 };
@@ -191,6 +208,7 @@ async function api(req, env, url) {
     case '/api/auth/session': return only('GET', () => sessionInfo(env, req));
     case '/api/auth/password': return only('POST', () => auth.changePassword(env, req));
     case '/api/admin/credentials': return only('POST', () => credentials(env, req));
+    case '/api/admin/records': return only('POST', () => records(env, req));
     case '/api/command': return only('POST', () => command(env, req));
     case '/api/commits': return only('GET', () => commits(env, req, url));
     case '/api/files': return only('POST', () => uploadFile(env, req));
@@ -206,13 +224,23 @@ async function api(req, env, url) {
   }
 }
 
+/** Paths that may answer with HTML: the page itself. */
+const PAGE_PATHS = ['/', '/index.html'];
+const notFound = (text) => withHeaders(new Response(text, { status: 404, headers: { 'Content-Type': 'text/plain; charset=utf-8' } }), PAGE_HEADERS);
 async function page(req, env, url) {
-  // dist/artifact.html is the claude.ai artifact build (browser-only data): not part of the server deployment.
-  if (url.pathname === '/artifact.html') return withHeaders(new Response('ไม่พบหน้านี้', { status: 404, headers: { 'Content-Type': 'text/plain; charset=utf-8' } }), PAGE_HEADERS);
-  if (!env.ASSETS) return withHeaders(new Response('ยังไม่ได้ติดตั้งหน้าเว็บ', { status: 404, headers: { 'Content-Type': 'text/plain; charset=utf-8' } }), PAGE_HEADERS);
+  // dist/artifact.html is the claude.ai artifact build (browser storage, demo data): not part of the server deployment.
+  // Cloudflare's html_handling also serves it at /artifact, /artifact/ … – so besides this early answer, any HTML the
+  // asset store returns for a path other than the page itself is refused below.
+  if (/^\/artifact(\.html)?\/?$/i.test(url.pathname)) return notFound('ไม่พบหน้านี้');
+  if (!env.ASSETS) return notFound('ยังไม่ได้ติดตั้งหน้าเว็บ');
   const res = await env.ASSETS.fetch(req);
+  const html = /text\/html/i.test(res.headers.get('content-type') || '');
+  if (html && res.status < 300 && PAGE_PATHS.indexOf(url.pathname) < 0) {
+    if (res.body) await res.body.cancel().catch(() => {});
+    return notFound('ไม่พบหน้านี้');
+  }
   const headers = Object.assign({}, PAGE_HEADERS);
-  if (/text\/html/i.test(res.headers.get('content-type') || '')) headers['Content-Security-Policy'] = HTML_CSP;
+  if (html) headers['Content-Security-Policy'] = HTML_CSP;
   return withHeaders(res, headers);
 }
 

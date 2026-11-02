@@ -60,6 +60,22 @@
     if ((ctx.view[key] || '') === el.value) return;
     ctx.set(Object.assign({ [key]: el.value }, extra || {}));
   };
+  /**
+   * Number boxes the browser could not read (e.g. "5-" or "1e"): the form gets an empty value for them, which would be
+   * saved as "not set" (a price or lead time silently cleared). Returns one Thai error per box; nothing is saved.
+   */
+  function badNumbers(form) {
+    const out = [];
+    for (const el of form ? form.querySelectorAll('input[type="number"]') : []) {
+      if (!el.validity || !el.validity.badInput) continue;
+      const lab = el.closest('label.fld');
+      const l = lab && lab.querySelector('.fld-l');
+      const name = U.trim((l ? l.textContent : el.getAttribute('aria-label') || el.name).replace(/\*/g, ''));
+      out.push({ code: 'NOT_A_NUMBER', message: `ช่อง "${name}" อ่านเป็นตัวเลขไม่ได้ – พิมพ์เฉพาะตัวเลข เช่น 12 หรือ 12.5 (ยังไม่ได้บันทึก)` });
+    }
+    return out;
+  }
+  const badToast = (ctx, errs) => ctx.toast(errs.map((e) => e.message).join(' · '), 'bad');
 
   // ---- ผู้ขาย ---------------------------------------------------------------------------------------------------
   function supForm(ctx, s) {
@@ -131,7 +147,7 @@
           { label: 'เลขที่', render: (p) => poLink(p.poNo) },
           { label: 'วันที่', get: (p) => h.fmt.date(p.date) },
           { label: 'สถานะ', render: (p) => h.badge((P().PO_STATUS || {})[p.status] || p.status, PO_TONE[p.status]) },
-          { label: 'มูลค่า', num: true, get: (p) => h.fmt.money(p.total) },
+          { label: 'มูลค่า (บาท)', num: true, render: (p) => h.fmt.money(p.total) },
         ],
       });
       detail = t`${h.section(t`${h.code(sel.id)} ${sel.name}`, canEdit ? supForm(ctx, sel) : h.dl([
@@ -342,9 +358,21 @@
         ${h.field({ name: 'coverDays', label: 'Max ครอบคลุมเหนือ Min (วัน)', type: 'number', value: r.coverDays, hint: `ใช้เมื่อคิด Max จากสถิติ · ว่าง = ${P().DEFAULT_COVER}` })}
         ${h.field({ name: 'usageDays', label: 'ช่วงสถิติยอดใช้ (วัน)', type: 'number', value: r.usageDays, hint: `ว่าง = ${P().DEFAULT_USAGE_DAYS}` })}
         ${h.field({ name: 'active', label: 'เปิดการแนะนำสั่งซื้อ', type: 'checkbox', value: r.active !== false, hint: 'ปิด = แผนเติมสต็อกไม่แนะนำให้สั่งรายการนี้ (เช่น เลิกใช้/สั่งเฉพาะงาน)', wide: true, id: 'rule-active' })}`,
-      onSubmit: (vals) => ctx.exec('reorder.set', { code: vals.code, wh: vals.wh || '', min: vals.min, max: vals.max, leadDays: vals.leadDays,
-        supplier: vals.supplier || '', coverDays: vals.coverDays, usageDays: vals.usageDays, active: !!vals.active },
-      { quiet: true, done: 'บันทึกเงื่อนไขเติมสต็อกแล้ว' }),
+      onSubmit: (vals, form) => {
+        const bad = badNumbers(form);
+        if (bad.length) return { ok: false, errors: bad };
+        if (!rule) {
+          // "new" on an item/warehouse that already has a rule would overwrite it (empty boxes clear its values)
+          const ci = ctx.item(vals.code);
+          const ex = ci && RRS.q.get(ctx.state, 'reorder_rules', ci.id + '|' + U.normCode(vals.wh || ''));
+          if (ex) {
+            return { ok: false, errors: [{ code: 'DUPLICATE', message: `${ci.id} มีเงื่อนไข${ex.wh ? 'ของคลัง ' + ex.wh : 'ทุกคลัง'}อยู่แล้ว – กด ยกเลิก แล้วคลิกแถวนั้นในตารางเพื่อแก้ (ยังไม่ได้บันทึก)` }] };
+          }
+        }
+        return ctx.exec('reorder.set', { code: vals.code, wh: vals.wh || '', min: vals.min, max: vals.max, leadDays: vals.leadDays,
+          supplier: vals.supplier || '', coverDays: vals.coverDays, usageDays: vals.usageDays, active: !!vals.active },
+        { quiet: true, done: 'บันทึกเงื่อนไขเติมสต็อกแล้ว' });
+      },
     });
   }
 
@@ -391,7 +419,11 @@
         const done = await ctx.dialog({
           title: `ตั้งราคาสินค้าของ ${sup.id} ${sup.name}`, submit: 'บันทึกราคาและหน่วยซื้อ', wide: true,
           body: t`${termFields(ctx, null, null, { code: true })}<p class="hint wide">หน่วยซื้อและตัวคูณต้องตรงกับที่ผู้ขายขายจริง เช่น กล่อง (1 กล่อง = 100 ตัว)</p>`,
-          onSubmit: (vals) => ctx.exec('itemSupplier.upsert', termPayload(vals.code, sup.id, vals), { quiet: true, done: 'บันทึกราคาและหน่วยซื้อแล้ว' }),
+          onSubmit: (vals, form) => {
+            const bad = badNumbers(form);
+            if (bad.length) return { ok: false, errors: bad };
+            return ctx.exec('itemSupplier.upsert', termPayload(vals.code, sup.id, vals), { quiet: true, done: 'บันทึกราคาและหน่วยซื้อแล้ว' });
+          },
         });
         if (done && done.ok) set(ctx, {});
       },
@@ -402,7 +434,11 @@
         await ctx.dialog({
           title: `${it.id} กับผู้ขาย ${l.supplier} ${supName(ctx.state, l.supplier)}`, submit: 'บันทึกการแก้ไข', wide: true,
           body: t`${unitList(ctx, it)}${termFields(ctx, it, l, {})}`,
-          onSubmit: (vals) => ctx.exec('itemSupplier.upsert', termPayload(it.id, l.supplier, vals, true), { quiet: true, done: 'บันทึกราคาและหน่วยซื้อแล้ว' }),
+          onSubmit: (vals, form) => {
+            const bad = badNumbers(form);
+            if (bad.length) return { ok: false, errors: bad };
+            return ctx.exec('itemSupplier.upsert', termPayload(it.id, l.supplier, vals, true), { quiet: true, done: 'บันทึกราคาและหน่วยซื้อแล้ว' });
+          },
         });
       },
       async prefTerm(ctx, el) {
@@ -417,20 +453,26 @@
       },
     },
     forms: {
-      async saveSup(ctx, vals) {
+      async saveSup(ctx, vals, form) {
         const id = U.normCode(vals.id);
+        const isNew = ctx.view.sup === '__new';
         const prev = id && RRS.q.get(ctx.state, 'suppliers', id);
-        if (ctx.view.sup === '__new' && prev) {
+        if (isNew && prev) {
           return ctx.toast(`ผู้ขาย ${id} มีอยู่แล้ว (${prev.name}) – เลือกจากรายการเพื่อแก้ไข หรือใช้รหัสอื่น ยังไม่ได้บันทึก`, 'bad');
         }
+        const bad = badNumbers(form);
+        if (bad.length) return badToast(ctx, bad);
+        // create: the engine also refuses a code someone else added in the meantime (instead of overwriting it)
         const r = await ctx.exec('supplier.upsert', { id: vals.id, name: vals.name, taxId: vals.taxId, contact: vals.contact, phone: vals.phone,
-          leadDays: vals.leadDays, active: !!vals.active }, { done: prev ? 'บันทึกการแก้ไขผู้ขายแล้ว' : `เพิ่มผู้ขาย ${id} แล้ว` });
+          leadDays: vals.leadDays, active: !!vals.active, create: isNew }, { done: prev ? 'บันทึกการแก้ไขผู้ขายแล้ว' : `เพิ่มผู้ขาย ${id} แล้ว` });
         if (r.ok) set(ctx, { sup: r.result.id || id });
       },
       async addTerm(ctx, vals, form) {
         const it = ctx.item(ctx.view.item);
         if (!it) return;
         if (!vals.supplier) return ctx.toast('เลือกผู้ขายก่อนกด บันทึก', 'bad');
+        const bad = badNumbers(form);
+        if (bad.length) return badToast(ctx, bad);
         const r = await ctx.exec('itemSupplier.upsert', termPayload(it.id, vals.supplier, vals), { done: `ตั้ง ${it.id} กับผู้ขาย ${vals.supplier} แล้ว` });
         if (r.ok && form) form.reset();
       },

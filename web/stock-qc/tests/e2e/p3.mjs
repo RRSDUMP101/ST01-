@@ -29,6 +29,8 @@ function assert(cond, msg) {
 
 const browser = await chromium.launch();
 const page = await browser.newPage({ viewport: { width: 1366, height: 900 } });
+// these steps expect a blank system: start the demo without the sample data (app.js pref 'demoEmpty')
+await page.addInitScript(() => { try { localStorage.setItem('rrs-sq:demoEmpty', 'true'); } catch (e) { /* ignore */ } });
 page.on('console', (m) => { if (m.type() === 'error' && !/fonts\.g|cdnjs|ERR_|net::/.test(m.text())) problems.push(`console (${current}): ${m.text()}`); });
 page.on('pageerror', (e) => problems.push(`pageerror (${current}): ${e.message}`));
 // an alert/confirm/prompt means user text ran as code (or a page used a browser dialog instead of ctx.dialog)
@@ -260,6 +262,14 @@ await step('express: pick file, mapping, snapshot required, import changes no st
   await page.click('#ex-import');
   await waitText('ใส่วันเวลาของข้อมูลในไฟล์ก่อน');
   assert(!(await batchOf('express-stock-P3.csv')), 'ยังไม่ใส่เวลาต้องไม่นำเข้า');
+  // the picker offers no future time
+  const max = await page.evaluate(() => document.querySelector('#ex-snap').max);
+  assert(max && Math.abs(Date.parse(max + 'Z') - Date.parse(thaiNow() + 'Z')) < 5 * 60e3, `ช่องเวลาควรมีค่าสูงสุดเป็นเวลาปัจจุบัน ได้ ${max}`);
+  // a Buddhist-era year typed by habit is explained
+  await page.fill('#ex-snap', String(Number(S1.slice(0, 4)) + 543) + S1.slice(4));
+  await page.click('#ex-import');
+  await waitText('ไม่ใช่ปี พ.ศ.');
+  assert(!(await batchOf('express-stock-P3.csv')), 'ปี พ.ศ. ต้องไม่นำเข้า');
   await page.fill('#ex-snap', S1);
   await page.click('#ex-import');
   await confirmBox('ยอดคงเหลือไม่เปลี่ยน');
@@ -316,6 +326,20 @@ await step('express: the same file again is refused', async () => {
   assert(!again.ok && again.errors[0].code === 'DUPLICATE_FILE', 'เครื่องมือต้องปฏิเสธไฟล์ซ้ำ');
   await page.click('#main button[data-act="dropFile"]');
   await page.waitForSelector('#ex-map', { state: 'detached' });
+});
+
+await step('express: problems in the file are explained before import, file name shown as text', async () => {
+  await pickFile(csvFile(EVIL + '.csv', ['รหัสสินค้า,คลัง,ยอดคงเหลือ', 'P3-001,P3X,', 'P3-002,P3X,(5.00)', 'P3-LOT,P3X,"1,234.50"']));
+  await waitText(EVIL + '.csv');
+  await waitText('ไม่มียอดคงเหลือ');
+  await waitText('เขียนแบบวงเล็บ');
+  await waitText('-5.00');
+  assert(await page.isDisabled('#ex-import'), 'ไฟล์ที่ยอดว่าง/วงเล็บต้องนำเข้าไม่ได้');
+  const prev = await rowCells('#ex-preview tbody tr', 'P3-LOT');
+  assert(prev && prev.join(' ').indexOf('1,234.5') >= 0, `ยอดที่มีจุลภาคหลักพันควรอ่านเป็น 1,234.5 ได้ ${prev}`);
+  await page.click('#main button[data-act="dropFile"]');
+  await page.waitForSelector('#ex-map', { state: 'detached' });
+  assert(!(await batchOf(EVIL + '.csv')), 'ไฟล์ที่มีปัญหาต้องไม่ถูกนำเข้า');
 });
 
 await step('express: explain one difference (quantity owned by RRS), bulk explain, close', async () => {
@@ -430,6 +454,9 @@ await step('express: discard a batch, then the same file can be imported again',
   await dlgClosed();
   await waitText('ยกเลิกรอบโดย');
   assert((await state((s, R, id) => s.tables.express_batches[id].status, b4)) === 'DISCARDED', 'รอบควรถูกยกเลิก');
+  await waitText('รอบนี้ยกเลิกแล้ว ไม่ต้องตัดสิน');
+  const rv = await page.locator('#ex-review').innerText();
+  assert(rv.indexOf('ทุกผลต่างให้อธิบายเหตุผล') < 0 && rv.indexOf('ต้องครบก่อนปิดรอบ') < 0, 'รอบที่ยกเลิกแล้วไม่ควรบอกให้ตัดสินผลต่าง');
   await pickFile(f4);
   await waitText('แล้วยกเลิกรอบ – นำเข้าใหม่ได้');
   await page.fill('#ex-snap', thaiNow());
@@ -502,7 +529,23 @@ await step('counts: blind phone entry, recount flag says who must recount', asyn
   await waitToast('บันทึก P3-EVIL');
   await waitText('รอนับซ้ำ (1)');
   await waitText('คนอื่นที่ไม่ใช่ สโตร์หนึ่ง');
-  await waitText('สโตร์สอง');
+  // examples of who may recount name store staff first (not the administrator)
+  const ex = await page.locator('#ct-recount tbody tr:has-text("P3-002") td:nth-child(5) small').innerText();
+  const admAt = ex.indexOf('ผู้ดูแลระบบ');
+  assert(ex.indexOf('สโตร์สอง') >= 0 && ex.indexOf('สโตร์หนึ่ง') < 0 && (admAt < 0 || admAt > ex.indexOf('สโตร์สอง')), `ตัวอย่างผู้นับซ้ำควรเริ่มจากสโตร์คนอื่น ได้ ${ex}`);
+  assert((await page.locator('#ct-recount button[data-act="recount"]').innerText()).indexOf('คุณนับแล้ว') >= 0, 'ปุ่มนับซ้ำของผู้นับเดิมควรบอกว่า คุณนับแล้ว');
+  // a bin must be chosen when the session counts bins
+  await page.fill('#ce-code', 'P3-001');
+  await page.waitForFunction(() => {
+    const el = document.querySelector('#ce-code');
+    return el && el.closest('.fld').querySelector('.hint').innerText.indexOf('ฝาข้าง') >= 0;
+  });
+  await page.selectOption('#ce-bin', '');
+  await page.fill('#ce-qty', '1');
+  await page.click('form[data-form="enter"] button[type="submit"]');
+  await waitToast('เลือกช่องเก็บที่นับ');
+  assert((await state((s, R, id) => s.tables.count_sessions[id].lines.length, ct)) === 4, 'ไม่เลือกช่องเก็บต้องไม่บันทึก');
+  await page.click('#main button[data-act="eclear"]');
   const t = await mainText();
   assert(t.indexOf('ระบบ ณ เวลานับ') < 0, 'ผู้นับต้องไม่เห็นยอดในระบบ');
   assert(await page.isDisabled('#ct-recount button[data-act="recount"]'), 'ผู้นับคนเดิมกดนับซ้ำไม่ได้');
@@ -515,6 +558,21 @@ await step('counts: blind phone entry, recount flag says who must recount', asyn
   await page.click('form[data-form="enter"] button[type="submit"]');
   await waitText('บันทึกไม่ได้');
   assert((await state((s, R, id) => s.tables.count_sessions[id].lines.length, ct)) === 4, 'รหัสผิดต้องไม่บันทึก');
+  // scanner / phone keyboard: code and quantity, Enter at once – a lot item asks for its lot and puts the cursor there,
+  // the saved line puts the cursor back on the code for the next scan
+  await page.fill('#ce-code', 'P3-LOT');
+  await page.selectOption('#ce-bin', 'A-02');
+  await page.fill('#ce-qty', '0');
+  await page.press('#ce-qty', 'Enter');
+  await waitText('ต้องระบุ');
+  await page.waitForFunction(() => document.activeElement && document.activeElement.id === 'ce-lot', null, { timeout: 4000 })
+    .catch(async () => { throw new Error('เคอร์เซอร์ควรไปที่ช่องล็อต อยู่ที่ ' + await page.evaluate(() => document.activeElement && document.activeElement.id)); });
+  await page.fill('#ce-lot', 'L-88');
+  await page.press('#ce-lot', 'Enter');
+  await waitToast('ล็อต L-88');
+  await page.waitForFunction(() => document.activeElement && document.activeElement.id === 'ce-code', null, { timeout: 4000 })
+    .catch(async () => { throw new Error('บันทึกแล้วเคอร์เซอร์ควรกลับไปช่องรหัส อยู่ที่ ' + await page.evaluate(() => document.activeElement && document.activeElement.id)); });
+  assert((await state((s, R, id) => s.tables.count_sessions[id].lines.length, ct)) === 5, 'ล็อต L-88 ควรบันทึกเป็นบรรทัดใหม่');
 });
 
 await step('counts: recount by another person (disagree, then agree)', async () => {
@@ -529,8 +587,18 @@ await step('counts: recount by another person (disagree, then agree)', async () 
   // the same person cannot count the same line twice
   await countLine('P3-002', 'A-02', 8);
   await waitText('ต้องเป็นคนละคน');
+  await waitText('ให้คนอื่นนับบรรทัดนี้ซ้ำ');
+  // an approver who cannot count (accounting) may see the system quantity while counting goes on
+  await asUser('P3ACC');
+  await openSession(ct);
+  await waitText('ระบบ ณ เวลานับ');
+  // the store lead can count and approve: before recounting, the count must stay blind (no system qty, no earlier counts)
   await asUser('P3LEAD');
   await openSession(ct);
+  const blind = await mainText();
+  assert(blind.indexOf('ระบบ ณ เวลานับ') < 0, 'หัวหน้าสโตร์ที่ยังนับได้ต้องไม่เห็นยอดในระบบระหว่างนับ');
+  const pend = await rowCells('#ct-lines tbody tr', 'P3-002');
+  assert(pend && pend.join(' ').indexOf('รอนับซ้ำ') >= 0 && !/\b9\b/.test(pend[2]), `บรรทัดรอนับซ้ำต้องไม่แสดงผลนับของคนก่อน ได้ ${pend}`);
   await page.click('#ct-recount tbody tr:has-text("P3-002") button[data-act="recount"]');
   await page.waitForFunction(() => document.querySelector('#ce-code').value === 'P3-002');
   await page.fill('#ce-qty', '8');
@@ -556,8 +624,16 @@ await step('counts: movement after counting, submit, approval needs reasons and 
   await waitText('อนุมัติเองไม่ได้');
   assert(await page.locator('form[data-form="approve"]').count() === 0, 'ผู้นับต้องไม่เห็นฟอร์มอนุมัติ');
   await asUser('P3ACC');
+  await page.setViewportSize({ width: 390, height: 844 });
   await openSession(ct);
   await page.waitForSelector('form[data-form="approve"]');
+  await sleep(300);
+  await noOverflow('counts อนุมัติ (มือถือ)');
+  // the reason field of a difference is in view on the phone without scrolling the table sideways
+  const rb = await page.locator('#ct-r-0').boundingBox();
+  assert(rb && rb.x >= 0 && rb.x + rb.width <= 390, `ช่องเหตุผลควรอยู่ในจอมือถือ ได้ ${JSON.stringify(rb)}`);
+  await shot('counts-phone-approve');
+  await page.setViewportSize({ width: 1366, height: 900 });
   assert(await kpi('ต้องปรับยอด') === '1', `ต้องปรับยอด ควรเป็น 1 ได้ ${await kpi('ต้องปรับยอด')}`);
   assert(await kpi('เคลื่อนไหวหลังนับ') === '1', 'เคลื่อนไหวหลังนับ ควรเป็น 1');
   const row = await rowCells('#ct-approve tbody tr', 'P3-002');
@@ -606,10 +682,11 @@ await step('counts: freeze mode stops documents, cancel with a reason', async ()
   await dlgOpen();
   await dlgSubmit();
   await dlgError('ใส่เหตุผล');
-  await page.fill('#ct-cancel-reason', 'เปิดรอบผิดวัน');
+  await page.fill('#ct-cancel-reason', 'เปิดรอบผิดวัน ' + EVIL);
   await dlgSubmit();
   await dlgClosed();
   await waitText('ยกเลิกโดย หัวหน้าสโตร์ P3');
+  await waitText('เปิดรอบผิดวัน ' + EVIL);
   assert((await state((s, R, id) => s.tables.count_sessions[id].status, fz.id)) === 'CANCELLED', 'รอบควรถูกยกเลิก');
   const after = await exec('doc.post', { type: 'RR', lines: [{ code: 'P3-001', qty: 1, wh: 'P3B', bin: 'B-01' }] });
   assert(after.ok, 'ยกเลิกรอบแล้วต้องบันทึกได้อีก');
@@ -648,6 +725,10 @@ await step('lots of rows: tables scroll in their own box, phone width', async ()
   await page.waitForFunction(() => document.querySelectorAll('#ex-rec tbody tr').length > 300);
   await page.setViewportSize({ width: 390, height: 844 });
   await noOverflow('express รอบใหญ่ (มือถือ)');
+  // the decide button is in view on the phone without scrolling the table sideways
+  await page.evaluate(() => { document.querySelector('#ex-rec').scrollLeft = 0; });
+  const bb = await page.locator('#ex-rec button[data-act="resolve"]').first().boundingBox();
+  assert(bb && bb.x >= 0 && bb.x + bb.width <= 390, `ปุ่มตัดสินควรอยู่ในจอมือถือ ได้ ${JSON.stringify(bb)}`);
   await page.click('#main .tabs button[data-arg="pending"]');
   await page.waitForSelector('#ex-pending');
   await noOverflow('express รอคีย์ (มือถือ)');

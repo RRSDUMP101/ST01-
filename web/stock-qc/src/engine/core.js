@@ -73,6 +73,11 @@
       .map((k) => JSON.stringify(k) + ':' + stable(v[k])).join(',') + '}';
   };
   util.pad = (n, w) => String(n).padStart(w, '0');
+  const own = Object.prototype.hasOwnProperty;
+  /** obj[k] only when it is the object's own key (never Object.prototype members such as 'constructor'). */
+  util.own = (obj, k) => (obj && own.call(obj, k) ? obj[k] : undefined);
+  /** Keys that would change an object's prototype or shadow its members. */
+  util.badKey = (k) => k === '__proto__' || k === 'prototype' || k === 'constructor' || (typeof k === 'string' && own.call(Object.prototype, k));
   util.sum = (arr, f) => arr.reduce((s, x) => s + (f ? f(x) : x), 0);
 
   // SHA-256 (synchronous, UTF-8) – commit hash chain and file fingerprints.
@@ -294,12 +299,13 @@
     if (commit.prev !== state.head) throw new Error(`commit ${commit.seq} was made on another history`);
     for (const e of commit.effects) {
       const tbl = tableOf(state, e.t);
+      if (util.badKey(e.k) || util.badKey(e.t)) throw new Error(`commit ${commit.seq} has a forbidden key ${e.t}/${e.k}`);
       if (e.v === null) delete tbl[e.k];
       else tbl[e.k] = e.v;
     }
     state.seq = commit.seq;
     state.head = commit.hash;
-    if (commit.id) state.requests[commit.id] = { seq: commit.seq, payloadHash: commit.payloadHash };
+    if (commit.id && !util.badKey(commit.id)) state.requests[commit.id] = { seq: commit.seq, payloadHash: commit.payloadHash };
     return state;
   }
   function verifyCommit(c) {
@@ -361,7 +367,7 @@
       const p = this.pending[t];
       if (p && Object.prototype.hasOwnProperty.call(p, k)) return p[k];
       const tbl = this.state.tables[t];
-      return tbl ? tbl[k] || null : null;
+      return (tbl && util.own(tbl, k)) || null;
     }
     /** Rows of a table with this command's writes applied (filter optional). */
     all(t, filter) {
@@ -373,6 +379,10 @@
       return filter ? out.filter(filter) : out;
     }
     put(t, k, v) {
+      if (util.badKey(k) || util.badKey(t)) {
+        this.error('BAD_KEY', `รหัส "${k}" ใช้เป็นรหัสข้อมูลไม่ได้`);
+        return null;
+      }
       const p = this.pending[t] || (this.pending[t] = {});
       if (!Object.prototype.hasOwnProperty.call(p, k)) this.order.push([t, k]);
       p[k] = v === null ? null : util.clone(v);
@@ -480,12 +490,13 @@
    * ctx: {now: ISO time, user: user id, via?: account id, mode?: 'sandbox'|'shared'|'local'}
    */
   function prepare(state, command, ctx) {
-    const def = commands[command && command.kind];
+    const def = command && util.own(commands, command.kind);
     if (!def) return { ok: false, errors: [err('UNKNOWN_COMMAND', `ไม่รู้จักคำสั่ง ${command && command.kind}`)] };
     const payload = command.payload || {};
     const payloadHash = util.sha256(util.stable({ kind: command.kind, payload }));
     if (command.requestId) {
-      const seen = state.requests[command.requestId];
+      if (util.badKey(command.requestId)) return { ok: false, errors: [err('BAD_REQUEST_ID', 'รหัสคำขอนี้ใช้ไม่ได้')] };
+      const seen = util.own(state.requests, command.requestId);
       if (seen) {
         if (seen.payloadHash === payloadHash) return { ok: true, duplicate: true, seq: seen.seq };
         return { ok: false, errors: [err('REQUEST_REUSED', 'รหัสคำขอนี้เคยใช้กับข้อมูลอื่นแล้ว – สร้างคำขอใหม่')] };
@@ -525,13 +536,13 @@
     const out = Object.values(state.tables[t] || {});
     return filter ? out.filter(filter) : out;
   };
-  q.get = (state, t, k) => (state.tables[t] || {})[k] || null;
+  q.get = (state, t, k) => util.own(state.tables[t] || {}, k) || null;
   /** Item by its code, Express code or stock-count code. */
   q.item = function item(state, code) {
     const k = util.ckey(code);
     if (!k) return null;
     const items = state.tables.items || {};
-    const direct = items[util.normCode(code)];
+    const direct = util.own(items, util.normCode(code));
     if (direct) return direct;
     for (const id in items) {
       const it = items[id];

@@ -182,7 +182,9 @@
     },
 
     nonMoving: {
-      opts: (ctx, f) => ({ days: f.days === '' || f.days == null ? undefined : f.days, wh: f.wh || '', group: f.group || '', today: ctx.today }),
+      // a negative count would list everything as "idle -5 days" – it falls back to the policy's number of days (see warn)
+      opts: (ctx, f) => ({ days: f.days === '' || f.days == null || !(Number(f.days) >= 0) ? undefined : f.days, wh: f.wh || '', group: f.group || '', today: ctx.today }),
+      warn: (ctx, f, r) => (f.days !== '' && f.days != null && !(Number(f.days) >= 0) ? `จำนวนวันต้องเป็น 0 ขึ้นไป – แสดงตามค่าตั้งต้น ${h.fmt.num(r.days)} วัน` : ''),
       filters: (ctx, tab, f, r) => [h.field({ name: 'days', label: 'ไม่เคลื่อนไหวอย่างน้อย (วัน)', type: 'number', value: f.days, placeholder: String(r.days || 90),
         id: fid(tab, 'days'), act: 'filter', live: true })].concat(fields(ctx, tab, f, ['wh', 'group'])),
       body(ctx, r, f, rows) {
@@ -316,6 +318,7 @@
 
     repeatIssues: {
       opts: (ctx, f) => ({ from: f.from || '', to: f.to || '', minCount: Number(f.minCount) >= 2 ? Number(f.minCount) : 2 }),
+      warn: (ctx, f) => (f.minCount !== '' && f.minCount != null && !(Number(f.minCount) >= 2) ? 'นับว่าเป็นปัญหาซ้ำได้ตั้งแต่ 2 ครั้งขึ้นไป – แสดงตาม 2 ครั้ง' : ''),
       filters: (ctx, tab, f) => fields(ctx, tab, f, ['from', 'to']).concat([
         h.field({ name: 'minCount', label: 'นับว่าซ้ำเมื่อพบ (ครั้ง)', type: 'number', value: f.minCount, placeholder: '2', id: fid(tab, 'minCount'), act: 'filter', live: true }),
         h.field({ name: 'onlyRepeat', label: 'เฉพาะปัญหาซ้ำ', type: 'checkbox', value: f.onlyRepeat, id: fid(tab, 'onlyRepeat'), act: 'filter' })]),
@@ -357,7 +360,7 @@
         const can = ctx.can('uat.record');
         const fail = r.checks.filter((c) => !c.ok);
         const summary = r.ok
-          ? h.note(t`<b>ผ่านทุกหัวข้อ</b> – ยอดคงเหลือตรงกับประวัติ ไม่มียอดติดลบที่ไม่ได้อนุมัติ ไม่มีของกักกัน/รอตรวจหลุดออกนอกขั้นตอน QC ไม่มีเอกสารตัดยอดซ้ำ (ข้อมูลถึงลำดับ ${h.fmt.num(r.seq)})`, 'ok')
+          ? h.note(t`<b>ผ่านทุกหัวข้อ</b> – ยอดคงเหลือตรงกับประวัติ ไม่มียอดติดลบที่ไม่ได้อนุมัติ ไม่มีของกักกัน/รอตรวจหลุดออกนอกขั้นตอน QC ทุกการเปลี่ยนยอดมีเอกสารรองรับ ไม่มีเอกสารตัดยอดซ้ำ (ข้อมูลถึงลำดับ ${h.fmt.num(r.seq)})`, 'ok')
           : h.note(t`<b>พบปัญหา ${h.fmt.num(r.problems.length)} ข้อ ใน ${h.fmt.num(fail.length)} หัวข้อ</b> – แจ้งหัวหน้าสโตร์และบัญชี แก้ด้วยเอกสารแก้ไข (ไม่ลบประวัติ) แล้วตรวจใหม่ · บันทึกเป็นปัญหาร้ายแรงของการทดลอง${h.errors({ errors: r.problems.slice(0, 20).map((p) => ({ message: p })) })}${r.problems.length > 20 ? t`<p>… และอีก ${h.fmt.num(r.problems.length - 20)} ข้อ (ดาวน์โหลด CSV)</p>` : ''}`, 'bad');
         const checks = h.table({ dense: true, rows: r.checks, rowCls: (c) => (c.ok ? '' : 'row-bad'), cols: [
           { label: 'หัวข้อตรวจ', key: 'label' }, { label: 'ผล', render: (c) => h.badge(c.okLabel, c.ok ? 'ok' : 'bad') }, { label: 'จำนวนที่พบ', num: true, key: 'count' }] });
@@ -372,6 +375,21 @@
           cols: [{ label: 'เวลา', get: (x) => h.fmt.dt(x.at) }, { label: 'เอกสาร', render: (x) => docLink(ctx, x.docNo) }, { label: 'รหัส', render: codeCell },
             { label: 'ตำแหน่ง', get: (x) => `${x.wh}${x.bin ? '/' + x.bin : ''}` }, { label: 'สถานะ', render: (x) => h.statusBadge(x.status) }, { label: 'ล็อต', get: (x) => x.lot },
             { label: 'จำนวน', num: true, key: 'qty' }, { label: 'ผู้ทำ', get: (x) => ctx.userName(x.by) }] })));
+        const lotLink = (x) => (RRS.ui.pages.lots ? h.link(x.lot, 'lots', { tab: 'list', sel: x.code + '|' + x.lot, _scroll: true }) : x.lot);
+        const leaks = r.lotQuarantineLeaks || [];
+        const waiting = r.lotQuarantineWaiting || [];
+        const orphans = r.orphanMoves || [];
+        if (leaks.length) parts.push(h.section('ล็อตที่ถูกกักกันแต่ยังมีของสถานะอื่น', h.table({ dense: true, scroll: true, rows: leaks.slice(0, STEP), rowCls: () => 'row-bad',
+          cols: [{ label: 'รหัส', render: codeCell }, { label: 'ล็อต/Heat', render: lotLink }, { label: 'ตำแหน่ง', get: (x) => `${x.wh}${x.bin ? '/' + x.bin : ''}` },
+            { label: 'สถานะ', render: (x) => h.statusBadge(x.status) }, { label: 'จำนวน', num: true, key: 'qty' }] }),
+        { sub: 'ของล็อตที่กักกันต้องอยู่ในสถานะกักกันทั้งหมด – ให้ QC สั่งกักกันซ้ำที่หน้าล็อต' }));
+        if (waiting.length) parts.push(h.section('ล็อตกักกันที่รอเข้าสถานะกักกัน (ไม่นับเป็นปัญหา)', h.table({ dense: true, scroll: true, rows: waiting.slice(0, STEP),
+          cols: [{ label: 'รหัส', render: codeCell }, { label: 'ล็อต/Heat', render: lotLink }, { label: 'ตำแหน่ง', render: whCell }, { label: 'ช่อง/ใบโอน', get: (x) => x.bin },
+            { label: 'จำนวน', num: true, key: 'qty' }, { label: 'เหตุผล', key: 'why' }] })));
+        if (orphans.length) parts.push(h.section('การเปลี่ยนยอดที่ไม่มีเอกสารบันทึกแล้วรองรับ', h.table({ dense: true, scroll: true, rows: orphans.slice(0, STEP), rowCls: () => 'row-bad',
+          cols: [{ label: 'รายการ', render: (x) => h.code(x.id) }, { label: 'เอกสาร', render: (x) => (x.docNo ? docLink(ctx, x.docNo) : dash) }, { label: 'ประเภท', get: (x) => x.docType || '' },
+            { label: 'รหัส', render: codeCell }, { label: 'ตำแหน่ง', get: (x) => `${x.wh}${x.bin ? '/' + x.bin : ''}` }, { label: 'จำนวน', num: true, key: 'qty' },
+            { label: 'ผู้ทำ', get: (x) => ctx.userName(x.by) }, { label: 'ปัญหา', key: 'why' }] })));
         if (r.doublePosted.length) parts.push(h.section('เอกสารที่ตัดยอดซ้ำ', h.table({ dense: true, rows: r.doublePosted,
           cols: [{ label: 'เอกสาร', render: (x) => docLink(ctx, x.docNo) }, { label: 'ประเภท', key: 'docType' }, { label: 'รายละเอียด', key: 'detail' }] })));
         if (r.cancelNotReversed.length) parts.push(h.section('เอกสารยกเลิกแล้วแต่ยังไม่กลับยอด', h.table({ dense: true, rows: r.cancelNotReversed,
@@ -417,11 +435,9 @@
       const right = [filtered ? h.btn('ล้างตัวกรอง', { act: 'clear', tone: 'ghost' }) : '', !def.ownCsv && rows.length ? h.btn('ดาวน์โหลด CSV', { act: 'csv', arg: 'main', tone: 'ghost' }) : ''];
       const tabs = h.tabs(list.map((x) => ({ id: x.id, label: x.label })), tab);
       const body = r.error ? h.note(`คำนวณรายงานไม่สำเร็จ: ${r.error} – โหลดหน้าใหม่ ถ้ายังพบให้แจ้งผู้ดูแลระบบ`, 'bad') : def.body(ctx, r, f, rows);
-      return t`${tabs}${filters.length || right.some(Boolean) ? h.toolbar(filters, right) : ''}${body}`;
-    },
-    after(ctx, root0) {
-      const box = root0.querySelector('#rp-list.scroll');
-      if (box) box.style.maxHeight = '70vh';
+      const warns = [f.from && f.to && f.from > f.to ? `วันที่ "ตั้งแต่" (${h.fmt.date(f.from)}) อยู่หลังวันที่ "ถึง" (${h.fmt.date(f.to)}) – ช่วงนี้จึงไม่มีรายการ แก้วันที่ให้ถูก` : '',
+        def.warn && !r.error ? def.warn(ctx, f, r) : ''].filter(Boolean);
+      return t`${tabs}${filters.length || right.some(Boolean) ? h.toolbar(filters, right) : ''}${warns.map((w) => h.note(w, 'warn'))}${body}`;
     },
     actions: {
       tab: (ctx, el) => ctx.set({ tab: el.dataset.arg, limit: STEP }),

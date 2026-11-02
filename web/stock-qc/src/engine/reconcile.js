@@ -769,7 +769,7 @@
         }
         const lot = util.trim(raw.lot);
         if (it.trackLot && it.trackLot !== 'none') {
-          if (!lot) return tx.error('LOT_REQUIRED', `บรรทัด ${n}: ${it.id} ต้องระบุ${RRS.master.TRACK[it.trackLot]}`, Object.assign({ field: 'lot' }, where));
+          if (!lot) return tx.error('LOT_REQUIRED', `บรรทัด ${n}: ${it.id} ต้องระบุ ${RRS.master.TRACK[it.trackLot]}`, Object.assign({ field: 'lot' }, where));
         } else if (lot) {
           return tx.error('LOT_NOT_TRACKED', `บรรทัด ${n}: ${it.id} ไม่ได้ติดตามล็อต – ลบล็อตออก`, Object.assign({ field: 'lot' }, where));
         }

@@ -91,9 +91,9 @@
         app.ledger = new RRS.Ledger(app.store, { holder });
         await app.ledger.catchUp();
         if (app.ledger.state.seq === 0) {
-          app.loadNote = 'กำลังสร้างข้อมูลตัวอย่าง…';
+          app.loadNote = pref.get('demoEmpty', false) ? 'กำลังเริ่มระบบว่าง…' : 'กำลังสร้างข้อมูลตัวอย่าง…';
           render();
-          if (RRS.fixture && RRS.fixture.load) await RRS.fixture.load(app.ledger);
+          if (RRS.fixture && RRS.fixture.load && !pref.get('demoEmpty', false)) await RRS.fixture.load(app.ledger);
           else await app.ledger.execute({ kind: 'system.bootstrap', payload: { name: 'ผู้ดูแลระบบ (ตัวอย่าง)', company: 'ข้อมูลตัวอย่าง' } }, {});
         }
         app.unsub = app.store.subscribe(() => app.ledger.catchUp().catch(onSyncError));
@@ -131,6 +131,14 @@
         app.needLogin = false;
         app.account = app.session.username;
         app.ledger = new RRS.stores.RemoteLedger(app.api, { headers: cfg.headers });
+        // signed in but not a user of the stock system yet: the server refuses to show its data, so only offer the
+        // access request (user.requestAccess runs on the server for accounts without an engine user)
+        app.noAccess = !app.session.user && !app.session.owner;
+        if (app.noAccess) {
+          app.loading = false;
+          render();
+          return;
+        }
         app.loadNote = 'กำลังโหลดข้อมูลจากเซิร์ฟเวอร์…';
         render();
         await app.ledger.catchUp();
@@ -290,12 +298,13 @@
     if (!s) return;
     const values = h.parseForm(form);
     if (!s.o.onSubmit) return closeDialog(values);
+    const outerRid = app.rid; // a page form may be waiting on this dialog: keep its request id
     app.rid = s.rid;
     let r;
     try {
       r = await s.o.onSubmit(values, form);
     } finally {
-      app.rid = null;
+      app.rid = outerRid;
     }
     if (r === true || (r && r.ok)) return closeDialog(r);
     const errBox = $('#dlg-err');
@@ -465,7 +474,7 @@
     nav.classList.toggle('open', app.navOpen);
     const banner = $('#banner');
     const notes = [];
-    if (app.mode === 'demo') notes.push(t`<div class="bar bar-warn">ข้อมูลตัวอย่างในเบราว์เซอร์นี้ (รหัส DEMO-…) ไม่ใช่ยอดจริง · ${h.btn('เริ่มข้อมูลตัวอย่างใหม่', { act: '_resetDemo', tone: 'quiet', small: true })}${app.caps.db ? h.btn('ไปใช้ข้อมูลทีม', { act: '_toTeam', tone: 'quiet', small: true }) : ''}</div>`);
+    if (app.mode === 'demo') notes.push(t`<div class="bar bar-warn">${pref.get('demoEmpty', false) ? 'ข้อมูลทดลองในเบราว์เซอร์นี้ (เริ่มจากระบบว่าง) ไม่ใช่ยอดจริง' : 'ข้อมูลตัวอย่างในเบราว์เซอร์นี้ (รหัส DEMO-…) ไม่ใช่ยอดจริง'} · ${h.btn('เริ่มข้อมูลตัวอย่างใหม่', { act: '_resetDemo', tone: 'quiet', small: true })}${app.caps.db ? h.btn('ไปใช้ข้อมูลทีม', { act: '_toTeam', tone: 'quiet', small: true }) : ''}</div>`);
     if (app.stale) notes.push(t`<div class="bar bar-info">มีข้อมูลใหม่จากผู้อื่น ${h.btn('แสดงข้อมูลล่าสุด', { act: '_refresh', tone: 'quiet', small: true })}</div>`);
     if (app.error) notes.push(t`<div class="bar bar-bad">${app.error}</div>`);
     banner.innerHTML = String(t`${notes}`);
@@ -479,6 +488,7 @@
       return;
     }
     if (app.mode === 'server' && app.needLogin) return renderLogin(main);
+    if (app.mode === 'server' && app.noAccess) return renderAccess(main);
     if (!app.ledger) {
       main.innerHTML = String(h.empty('เปิดข้อมูลไม่ได้', app.error || 'ลองโหลดหน้าใหม่'));
       return;
@@ -502,6 +512,7 @@
     const keep = focus && focus.id && main.contains(focus) && /INPUT|TEXTAREA|SELECT/.test(focus.tagName)
       ? { id: focus.id, start: focus.selectionStart, end: focus.selectionEnd } : null;
     main.innerHTML = String(t`<div class="page" data-page="${page.id}"><header class="page-h"><div><p class="eyebrow">${(PHASES.find((p) => p.n === page.phase) || {}).label || ''}</p><h1>${page.title}</h1>${page.sub ? t`<p class="page-s">${page.sub}</p>` : ''}</div></header>${html}</div>${h.lists.items(ctx.state)}${h.lists.warehouses(ctx.state)}${h.lists.bins(ctx.state)}`);
+    const before = root.document.activeElement;
     if (page.after) {
       try {
         page.after(ctx, main);
@@ -509,7 +520,8 @@
         if (root.console) root.console.error(e);
       }
     }
-    if (keep) {
+    const moved = root.document.activeElement !== before && root.document.activeElement !== root.document.body;
+    if (keep && !moved) {
       const el = root.document.getElementById(keep.id);
       if (el && el !== root.document.activeElement) {
         el.focus({ preventScroll: true });
@@ -536,9 +548,12 @@
   }
   function renderAccess(main) {
     if (app.mode === 'server') {
+      const ready = app.session && app.session.bootstrapped !== false;
       main.innerHTML = String(t`<div class="page narrow"><header class="page-h"><div><p class="eyebrow">เซิร์ฟเวอร์</p><h1>บัญชี ${app.account || ''} ยังไม่มีสิทธิ์ในระบบสต็อก</h1>
-        <p class="page-s">ให้ผู้ดูแลระบบเพิ่มผู้ใช้ในหน้า ผู้ใช้และสิทธิ์ โดยใส่ชื่อบัญชีนี้ในช่อง "บัญชีเข้าระบบที่ผูกไว้" แล้วกำหนดบทบาท</p></div></header>
-        ${h.btn('ออกจากระบบ', { act: '_logout', tone: 'ghost' })}</div>`);
+        <p class="page-s">${ready ? 'ส่งคำขอ แล้วให้ผู้ดูแลระบบเพิ่มผู้ใช้ในหน้า ผู้ใช้และสิทธิ์ โดยผูกกับบัญชีนี้และกำหนดบทบาท' : 'ระบบยังไม่ได้เริ่ม – รอเจ้าของระบบเข้าสู่ระบบและเริ่มระบบก่อน'}</p></div></header>
+        ${app.accessSent ? h.note('ส่งคำขอแล้ว – รอผู้ดูแลระบบเพิ่มสิทธิ์ แล้วโหลดหน้านี้ใหม่', 'ok') : ''}
+        ${ready ? h.form({ name: '_access', submit: app.accessSent ? 'ส่งคำขออีกครั้ง' : 'ส่งคำขอใช้งาน', body: [h.field({ name: 'name', label: 'ชื่อ-นามสกุล', required: true }), h.field({ name: 'note', label: 'ตำแหน่ง/หน้าที่' })] }) : ''}
+        <div class="form-actions">${h.btn('ออกจากระบบ', { act: '_logout', tone: 'ghost' })}</div></div>`);
       return;
     }
     const req = app.account ? RRS.q.get(app.ledger.state, 'access_requests', app.account) : null;
@@ -568,8 +583,12 @@
         } });
     },
     async _resetDemo() {
-      const ok = await confirmBox({ title: 'เริ่มข้อมูลตัวอย่างใหม่', message: 'ล้างข้อมูลตัวอย่างในเบราว์เซอร์นี้ แล้วสร้างชุดตัวอย่างใหม่ (ไม่กระทบข้อมูลทีม)', ok: 'ล้างและสร้างใหม่', danger: true });
-      if (!ok) return;
+      const v = await dialog({ title: 'เริ่มข้อมูลตัวอย่างใหม่', submit: 'ล้างและเริ่มใหม่', danger: true,
+        message: 'ล้างข้อมูลตัวอย่างในเบราว์เซอร์นี้แล้วเริ่มใหม่ (ไม่กระทบข้อมูลทีมหรือเซิร์ฟเวอร์) – เลือกเริ่มด้วยข้อมูลตัวอย่าง หรือระบบว่างเพื่อฝึกตั้งค่าเอง',
+        body: h.field({ name: 'start', label: 'เริ่มด้วย', type: 'radio', value: 'sample', wide: true,
+          options: [['sample', 'ข้อมูลตัวอย่างครบทุกเฟส (รหัส DEMO-…)'], ['empty', 'ระบบว่าง – มีแค่ผู้ดูแลระบบ (ฝึกตั้งค่าเอง)']] }) });
+      if (!v) return;
+      pref.set('demoEmpty', v.start === 'empty');
       new RRS.stores.LocalStore(DEMO_KEY).clear();
       await startMode('demo');
     },
@@ -605,7 +624,11 @@
     },
     async _access(values) {
       const r = await makeCtx('home').exec('user.requestAccess', { name: values.name, note: values.note }, { public: true });
-      if (r.ok) toast('ส่งคำขอแล้ว', 'ok');
+      if (r.ok) {
+        app.accessSent = true;
+        toast('ส่งคำขอแล้ว', 'ok');
+        render();
+      }
     },
   };
 
@@ -689,6 +712,7 @@
     });
     doc.addEventListener('submit', async (ev) => {
       const form = ev.target;
+      clearTimeout(liveTimer); // a filter typed just before saving must not re-render over the result
       if (form.hasAttribute('data-dlg-form')) {
         ev.preventDefault();
         return submitDialog(form);

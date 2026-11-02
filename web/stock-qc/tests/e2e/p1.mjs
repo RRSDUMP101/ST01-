@@ -34,6 +34,8 @@ function assert(cond, msg) {
 
 const browser = await chromium.launch();
 const page = await browser.newPage({ viewport: { width: 1366, height: 900 } });
+// these steps expect a blank system: start the demo without the sample data (app.js pref 'demoEmpty')
+await page.addInitScript(() => { try { localStorage.setItem('rrs-sq:demoEmpty', 'true'); } catch (e) { /* ignore */ } });
 page.on('console', (m) => { if (m.type() === 'error' && !/fonts\.g|cdnjs|ERR_|net::/.test(m.text())) problems.push(`console (${current}): ${m.text()}`); });
 page.on('pageerror', (e) => problems.push(`pageerror (${current}): ${e.message}`));
 // an alert/confirm/prompt means user text ran as code (or a page used a browser dialog instead of ctx.dialog)

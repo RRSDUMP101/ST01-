@@ -18,8 +18,10 @@ command = "node scripts/sync-engine.mjs"
 [assets]
 directory = "../dist"
 binding = "ASSETS"
-# /api/* always runs the Worker; the page itself also goes through it so it gets the no-framing headers.
-run_worker_first = ["/api/*", "/", "/index.html", "/artifact.html"]
+# Every request runs the Worker first: /api/*, the page (no-framing headers) and every static file. A path list is not
+# enough – Cloudflare's html_handling serves dist/artifact.html (the browser-only build) at /artifact as well, straight
+# from the asset store without the Worker. The Worker answers HTML only for "/" (src/index.js page()).
+run_worker_first = true
 
 [[d1_databases]]
 binding = "DB"

@@ -19,7 +19,20 @@
   const n = (v) => h.fmt.num(v);
   const n0 = (v) => (v ? n(v) : dash);
   const STATUS = { ORDER: ['ต้องสั่ง', 'bad'], COVERED: ['ขอซื้อไว้แล้ว', 'info'], OK: ['พอ', 'ok'], OFF: ['ปิดการแนะนำ', 'muted'] };
-  const statusBadge = (s) => h.badge((STATUS[s] || [s])[0], (STATUS[s] || [])[1] || 'muted');
+  /** COVERED by stock waiting for QC only (nothing requested) is not "ขอซื้อไว้แล้ว". */
+  const statusLabel = (r) => (r.status === 'COVERED' && !(r.pendingPr + r.draftPo > 0) ? 'รอผล QC' : (STATUS[r.status] || [r.status])[0]);
+  const statusBadge = (r) => h.badge(statusLabel(r), (STATUS[r.status] || [])[1] || 'muted');
+  /**
+   * Number boxes the browser could not read (e.g. "5-"): the form gets an empty value for them. One Thai error per box.
+   */
+  function badNumbers(form) {
+    const out = [];
+    for (const el of form ? form.querySelectorAll('input[type="number"]') : []) {
+      if (!el.validity || !el.validity.badInput) continue;
+      out.push({ code: 'NOT_A_NUMBER', message: `ช่อง "${el.getAttribute('aria-label') || el.name}" อ่านเป็นตัวเลขไม่ได้ – พิมพ์เฉพาะตัวเลข เช่น 12 หรือ 12.5 (ยังไม่ได้บันทึก)` });
+    }
+    return out;
+  }
   const whoCan = (perm) => RRS.auth.rolesFor(perm).filter((r) => r !== 'admin').map((r) => RRS.auth.ROLES[r] || r).join(' / ');
   /**
    * ctx.set that also keeps a search typed less than 250 ms ago: its live update has not run yet, and without this the
@@ -94,7 +107,7 @@
       h.kpi('ต้องสั่ง', n(order.length), order.length ? `มูลค่าประมาณ ${h.fmt.money(money)} บาท${noPrice ? ` · ${noPrice} รายการยังไม่มีราคา` : ''}` : 'ยังไม่มีรายการต่ำกว่า Min', order.length ? 'bad' : 'ok'),
       h.kpi('ใกล้ Min', n(near), 'ยังไม่ต้องสั่ง หรือขอซื้อไว้แล้ว', near ? 'warn' : ''),
       h.kpi('มีของรอตรวจ', n(hold), 'ไม่นับเป็นของพร้อมใช้จนกว่า QC ปล่อย', hold ? 'info' : ''),
-      h.kpi('PO เลยกำหนด', n(late.filter((l) => l.late).length), hit ? `กระทบใบงาน ${n(hit)} รายการ` : 'บรรทัดที่ยังรับไม่ครบ', late.length ? 'bad' : 'ok'),
+      h.kpi('PO เลยกำหนด', n(late.length), hit ? `กระทบใบงาน ${n(hit)} รายการ` : late.length ? 'บรรทัดที่ยังรับไม่ครบ – ไม่มีใบงานขาดของ' : 'ไม่มีบรรทัดที่เลยกำหนด', late.length ? 'bad' : 'ok'),
     ]);
   }
 
@@ -117,7 +130,7 @@
     cols.push(
       { label: 'สินค้า', render: (r) => t`${h.code(r.code)} ${r.name}<br><small class="muted">หน่วย ${r.baseUnit} · ${r.supplier ? `ผู้ขาย ${r.supplier}` : 'ยังไม่มีผู้ขาย'}</small>` },
       { label: 'พร้อมใช้', num: true, render: (r) => n0(r.available) },
-      { label: 'รอตรวจ (ไม่นับ)', num: true, render: (r) => (r.qcHold || r.quarantine ? t`<span class="muted">${n(r.qcHold + r.quarantine)}</span>` : dash) },
+      { label: 'รอตรวจ/กักกัน (ไม่นับ)', num: true, render: (r) => (r.qcHold || r.quarantine ? t`<span class="muted">${n(r.qcHold + r.quarantine)}</span>` : dash) },
       { label: 'จองแล้ว', num: true, render: (r) => (r.reserved ? `−${n(r.reserved)}` : dash) },
       { label: 'ระหว่างโอน', num: true, render: (r) => (r.transit ? `+${n(r.transit)}` : dash) },
       { label: 'ค้างรับเข้าทัน', num: true, render: (r) => (r.incomingSure ? `+${n(r.incomingSure)}` : dash) },
@@ -128,7 +141,7 @@
       { label: 'ต้องเติม', num: true, render: (r) => n0(r.need) },
       { label: 'ขอ/สั่งไว้แล้ว', num: true, render: (r) => n0(U.round(r.pendingPr + r.draftPo)) },
       { label: 'แนะนำสั่ง', num: true, render: (r) => (r.orderQty ? t`<b>${n(r.orderBuyQty)} ${r.buyUnit}</b>${r.factor !== 1 ? t`<br><small class="muted">= ${n(r.orderQty)} ${r.baseUnit}</small>` : ''}${r.amount != null ? t`<br><small class="muted">≈ ${h.fmt.money(r.amount)} บาท</small>` : t`<br><small class="muted">ยังไม่มีราคา</small>`}` : dash) },
-      { label: 'สถานะ', render: (r) => statusBadge(r.status) },
+      { label: 'สถานะ', render: (r) => statusBadge(r) },
       { label: '', render: (r) => h.btn(open[r.code] || v.allWhy ? 'ซ่อนเหตุผล' : 'ดูเหตุผล', { act: 'why', arg: r.code, tone: 'quiet', small: true }) },
     );
     return h.table({
@@ -138,17 +151,45 @@
     });
   }
 
+  /**
+   * Every late PO line (RRS.purchasing.outstanding) with the jobs and reservations waiting for it
+   * (RRS.purchasing.affectedJobs, which leaves out lines no job needs – those are still late and must be chased).
+   * atRisk also lists lines not late yet that arrive after a job needs them.
+   */
+  function lateRows(ctx, atRisk) {
+    const key = `${ctx.state.seq}|${ctx.state.head}|${ctx.today}|${atRisk ? 1 : 0}`;
+    const hit = lateCache.find((c) => c.key === key);
+    if (hit) return hit.rows;
+    let aj = [];
+    let late = [];
+    try {
+      aj = P().affectedJobs(ctx.state, { today: ctx.today, atRisk: !!atRisk });
+      late = P().outstanding(ctx.state, { today: ctx.today }).filter((l) => l.late);
+    } catch (e) {
+      if (root.console) root.console.error(e);
+    }
+    const seen = {};
+    for (const r of aj) seen[r.poNo + '|' + r.line] = true;
+    const rows = aj.concat(late.filter((l) => !seen[l.poNo + '|' + l.line]).map((l) => Object.assign({}, l, { jobs: [], reservations: [] })))
+      .sort((a, b) => (b.daysLate - a.daysLate) || String(a.dueDate).localeCompare(String(b.dueDate)) || a.poNo.localeCompare(b.poNo) || a.line - b.line);
+    lateCache.unshift({ key, rows });
+    if (lateCache.length > 4) lateCache.length = 4;
+    return rows;
+  }
+  const lateCache = [];
+  /** What a job waiting for the late goods is short of: its need less its own reservation, then free stock by priority. */
+  function jobBadge(j) {
+    if (j.affected) return h.badge(`ขาด ${n(j.short)}`, 'bad');
+    if (j.uncovered > 0) return h.badge(`ของในคลังพอ (${n(j.fromStock)})`, 'ok');
+    return h.badge('จองครบ', 'ok');
+  }
+
   function lateSection(ctx) {
     const v = ctx.view;
-    let rows = [];
-    try {
-      rows = P().affectedJobs(ctx.state, { today: ctx.today, atRisk: !!v.atRisk });
-    } catch (e) {
-      rows = [];
-    }
+    const rows = lateRows(ctx, v.atRisk);
     const counted = settings(ctx.state).policies.lateIsUncertain === false;
     const jobsPage = ['jobs', 'job', 'production'].find((x) => RRS.ui.pages[x]);
-    const jobRef = (jobNo) => (jobsPage ? h.link(h.code(jobNo), jobsPage, { sel: jobNo }) : h.code(jobNo));
+    const jobRef = (jobNo) => (jobsPage ? h.link(h.code(jobNo), jobsPage, { sel: jobNo, _scroll: true }) : h.code(jobNo));
     const tbl = h.table({
       id: 'rp-late-tbl', scroll: true, dense: true, rows,
       empty: v.atRisk ? 'ไม่มี PO ที่เลยกำหนดหรือเข้าหลังวันต้องใช้ของงาน' : 'ไม่มีบรรทัด PO ที่เลยกำหนด',
@@ -160,8 +201,10 @@
         { label: 'สินค้า', render: (l) => t`${h.code(l.code)} ${l.name}` },
         { label: 'กำหนดเข้า', render: (l) => t`${h.fmt.date(l.dueDate)}${l.originalDue && l.originalDue !== l.dueDate ? t`<br><small class="muted">เดิม ${h.fmt.date(l.originalDue)}</small>` : ''}<br>${l.late ? h.badge(`เลย ${l.daysLate} วัน`, 'bad') : h.badge('เข้าหลังวันต้องใช้ของงาน', 'warn')}` },
         { label: 'ค้างรับ', num: true, render: (l) => h.qty(l.outstanding, l.baseUnit) },
-        { label: 'ใบงานที่ต้องใช้ของนี้', render: (l) => (l.jobs.length ? t`${l.jobs.map((j) => t`<div>${jobRef(j.jobNo)} ต้องใช้ ${h.fmt.date(j.dueDate)} · ต้องการ ${n(j.need)} จองแล้ว ${n(j.reserved)}${j.affected ? t` ${h.badge(`ขาด ${n(j.uncovered)}`, 'bad')}` : t` ${h.badge('จองครบ', 'ok')}`}</div>`)}` : dash) },
-        { label: 'การจองที่รอของ', render: (l) => (l.reservations.length ? t`${l.reservations.map((r) => t`<div>${h.code(r.jobNo)} ${r.wh} คงจอง ${n(r.remaining)}${r.needDate ? ` · ต้องใช้ ${h.fmt.date(r.needDate)}` : ''}</div>`)}` : dash) },
+        { label: 'ใบงานที่ต้องใช้ของนี้', render: (l) => (l.jobs.length
+          ? t`${l.jobs.map((j) => t`<div>${jobRef(j.jobNo)} ต้องใช้ ${h.fmt.date(j.dueDate)} · ต้องการ ${n(j.need)} จองแล้ว ${n(j.reserved)} ${jobBadge(j)}</div>`)}`
+          : t`<span class="muted">ไม่มีใบงานที่รอของนี้</span>`) },
+        { label: 'การจองที่รอของ', render: (l) => (l.reservations.length ? t`${l.reservations.map((r) => t`<div>${h.code(r.jobNo)} คลัง ${r.wh} คงจอง ${n(r.remaining)}${r.needDate ? ` · ต้องใช้ ${h.fmt.date(r.needDate)}` : ''}</div>`)}` : dash) },
       ],
     });
     return h.section('PO เลยกำหนดและงานที่กระทบ', t`<div id="rp-late">${tbl}</div>`, {
@@ -192,12 +235,7 @@
       }
       const canPr = ctx.can('pr.create');
       const { all, byQ, rows, f } = filtered(ctx);
-      let late = [];
-      try {
-        late = P().affectedJobs(ctx.state, { today: ctx.today });
-      } catch (e) {
-        late = [];
-      }
+      const late = lateRows(ctx, false);
       const limit = v.limit || STEP;
       const picked = v.picked || {};
       const pickedRows = all.filter((r) => picked[r.code] && r.status === 'ORDER');
@@ -276,7 +314,7 @@
           'แนะนำสั่ง (หน่วยซื้อ)', 'หน่วยซื้อ', 'แนะนำสั่ง (หน่วยหลัก)', 'มูลค่าประมาณ', 'สถานะ', 'เหตุผล'];
         const out = [head].concat(rows.map((r) => [r.code, r.name, r.baseUnit, r.wh || 'ทุกคลัง', r.available, r.qcHold, r.quarantine, r.reserved, r.transit,
           r.incomingSure, r.incomingLate, r.lateCounted ? 'นับ' : 'ไม่นับ', r.demand, r.projected, r.min, r.max, r.minMaxFrom, r.leadDays, r.supplier,
-          r.need, U.round(r.pendingPr + r.draftPo), r.orderBuyQty, r.buyUnit, r.orderQty, r.amount == null ? '' : r.amount, (STATUS[r.status] || [r.status])[0],
+          r.need, U.round(r.pendingPr + r.draftPo), r.orderBuyQty, r.buyUnit, r.orderQty, r.amount == null ? '' : r.amount, statusLabel(r),
           r.reasons.join(' | ')]));
         await ctx.download(`แผนเติมสต็อก-${v.wh || 'ทุกคลัง'}-${ctx.today}.csv`, h.csv(out));
       },
@@ -301,9 +339,13 @@
           ${h.field({ name: 'mode', label: 'เมื่อกดสร้าง', type: 'radio', value: 'submit', options: [['submit', 'ส่งขออนุมัติทันที'], ['draft', 'บันทึกเป็นร่าง (แก้ต่อที่หน้าขอซื้อ)']], wide: true })}
           <p class="wide hint">ผู้ขออนุมัติใบของตัวเองไม่ได้ – ${whoCan('pr.approve')} คนอื่นเป็นผู้อนุมัติ</p>`;
         const r = await ctx.dialog({ title: `สร้างใบขอซื้อจาก ${rows.length} รายการ`, submit: 'สร้างใบขอซื้อ', wide: true, body,
-          onSubmit: (vals) => ctx.exec('pr.create', { draft: vals.mode === 'draft', remark: vals.remark, source: 'แผนเติมสต็อก',
-            lines: (vals.lines || []).map((l) => ({ code: l.code, qty: l.qty, needDate: l.needDate, wh: l.wh, supplier: l.supplier, reason: l.reason })) },
-          { quiet: true, done: (x) => `สร้างใบขอซื้อ ${x.result.prNo} แล้ว` }) });
+          onSubmit: (vals, form) => {
+            const bad = badNumbers(form);
+            if (bad.length) return { ok: false, errors: bad };
+            return ctx.exec('pr.create', { draft: vals.mode === 'draft', remark: vals.remark, source: 'แผนเติมสต็อก',
+              lines: (vals.lines || []).map((l) => ({ code: l.code, qty: l.qty, needDate: l.needDate, wh: l.wh, supplier: l.supplier, reason: l.reason })) },
+            { quiet: true, done: (x) => `สร้างใบขอซื้อ ${x.result.prNo} แล้ว` });
+          } });
         if (r && r.ok) set(ctx, { picked: {}, made: { prNo: r.result.prNo, status: r.result.status } });
       },
     },

@@ -66,6 +66,7 @@
     const v = ctx.view;
     const reg = v.reg || {};
     const list = plates(ctx.state);
+    const parent = reg.parent ? offcut(ctx.state, reg.parent) : null;
     const it = reg.code ? RRS.q.get(ctx.state, 'items', reg.code) : null;
     const whs = whsFor(ctx);
     const wh = reg.wh || (whs.length === 1 ? whs[0][0] : '');
@@ -74,27 +75,32 @@
     const track = it && RRS.master && RRS.master.TRACK ? RRS.master.TRACK[it.trackLot] || 'ล็อต' : 'ล็อต';
     const itMat = it ? U.trim(it.material) : '';
     const itThk = it ? Number(it.thickness) || 0 : 0;
-    if (!list.length) {
+    if (!list.length && !parent) {
       return h.empty('ยังไม่มีแผ่นเหล็กในทะเบียนสินค้า', 'เศษต้องบันทึกจากรหัสแผ่นต้นทาง – ใส่ วัสดุ และ ความหนา ให้รหัสแผ่นในทะเบียนสินค้าก่อน',
         t`<div class="form-actions">${RRS.ui.pages.items ? h.link('ไปทะเบียนสินค้า', 'items') : ''}${h.btn('ปิด', { act: 'cancelReg', tone: 'ghost' })}</div>`);
     }
     return h.form({
       name: 'reg', submit: 'บันทึกเศษและออกรหัส', cancel: 'cancelReg',
       body: [
-        h.field({ name: 'code', label: 'แผ่นต้นทาง (รหัสสินค้า)', type: 'select', value: reg.code, required: true, id: 'oc-reg-code', act: 'regRefresh',
-          options: list.map((i) => [i.id, `${i.id} · ${i.name}${i.thickness ? ' · หนา ' + i.thickness : ''}`]), blank: '— เลือกแผ่น —', wide: true }),
-        h.field({ name: 'material', label: 'วัสดุ', value: itMat || reg.material, readonly: !!itMat, required: true, id: 'oc-reg-mat', list: 'oc-mats',
-          hint: itMat ? 'ตามทะเบียนของแผ่นต้นทาง' : 'แผ่นนี้ไม่มีวัสดุในทะเบียน – พิมพ์ให้ตรงกับใบรับรอง' }),
-        h.field({ name: 'thickness', label: 'ความหนา (มม.)', type: 'number', value: itThk || reg.thickness, readonly: !!itThk, required: true, id: 'oc-reg-thk',
-          hint: itThk ? 'ตามทะเบียนของแผ่นต้นทาง' : '' }),
-        h.field({ name: 'width', label: 'กว้าง (มม.)', type: 'number', value: reg.width, required: true, id: 'oc-reg-w', hint: it && it.width ? `แผ่นเต็ม ${h.fmt.num(it.width)} × ${h.fmt.num(it.length)} มม.` : '' }),
+        parent ? t`<div class="wide">${h.note(t`ชิ้นที่เหลือจากเศษ ${h.code(parent.id)} (${statusLabel(parent.status)} · ${size(parent)} มม.) – วัสดุ ความหนา และล็อตตามเศษต้นทาง ขนาดต้องไม่ใหญ่กว่าเศษต้นทาง`, 'info')}</div>`
+          : '',
+        parent ? t`${h.field({ name: 'code', type: 'hidden', value: parent.code })}${h.field({ name: 'parent', type: 'hidden', value: parent.id })}${h.field({ name: 'codeShow', label: 'แผ่นต้นทาง', value: parent.code, readonly: true, id: 'oc-reg-code-ro' })}`
+          : h.field({ name: 'code', label: 'แผ่นต้นทาง (รหัสสินค้า)', type: 'select', value: reg.code, required: true, id: 'oc-reg-code', act: 'regRefresh',
+            options: list.map((i) => [i.id, `${i.id} · ${i.name}${i.thickness ? ' · หนา ' + i.thickness : ''}`]), blank: '— เลือกแผ่น —', wide: true }),
+        h.field({ name: 'material', label: 'วัสดุ', value: parent ? parent.material : itMat || reg.material, readonly: !!(parent || itMat), required: true, id: 'oc-reg-mat', list: 'oc-mats',
+          hint: parent ? 'ตามเศษต้นทาง' : itMat ? 'ตามทะเบียนของแผ่นต้นทาง' : 'แผ่นนี้ไม่มีวัสดุในทะเบียน – พิมพ์ให้ตรงกับใบรับรอง' }),
+        h.field({ name: 'thickness', label: 'ความหนา (มม.)', type: 'number', value: parent ? parent.thickness : itThk || reg.thickness, readonly: !!(parent || itThk), required: true, id: 'oc-reg-thk',
+          hint: parent ? 'ตามเศษต้นทาง' : itThk ? 'ตามทะเบียนของแผ่นต้นทาง' : '' }),
+        h.field({ name: 'width', label: 'กว้าง (มม.)', type: 'number', value: reg.width, required: true, id: 'oc-reg-w',
+          hint: parent ? `เศษต้นทาง ${size(parent)} มม.` : it && it.width ? `แผ่นเต็ม ${h.fmt.num(it.width)} × ${h.fmt.num(it.length)} มม.` : '' }),
         h.field({ name: 'length', label: 'ยาว (มม.)', type: 'number', value: reg.length, required: true, id: 'oc-reg-l' }),
         h.field({ name: 'wh', label: 'เก็บที่คลัง', type: 'select', value: wh, options: whs, required: true, id: 'oc-reg-wh', act: 'regRefresh' }),
         h.field({ name: 'bin', label: 'ช่องเก็บ / แร็คเศษ', type: 'select', value: reg.bin, options: wh ? h.binOptions(ctx.state, wh) : [], blank: wh ? 'ไม่ระบุช่อง' : 'เลือกคลังก่อน', id: 'oc-reg-bin' }),
-        tracked ? h.field({ name: 'sourceLot', label: `${track} ของแผ่นต้นทาง`, value: reg.sourceLot, required: true, id: 'oc-reg-lot', list: 'oc-lots',
+        parent ? h.field({ name: 'sourceLot', label: 'ล็อต/Heat (ตามเศษต้นทาง)', value: parent.sourceLot || '', readonly: true, id: 'oc-reg-lot', hint: parent.sourceLot ? '' : 'ไม่ติดตามล็อต' })
+        : tracked ? h.field({ name: 'sourceLot', label: `${track} ของแผ่นต้นทาง`, value: reg.sourceLot, required: true, id: 'oc-reg-lot', list: 'oc-lots',
           hint: lots.held.length ? `ล็อตที่ถูกกักกันบันทึกเป็นเศษพร้อมใช้ไม่ได้: ${lots.held.join(', ')}` : 'อ่านจากป้าย/ตัวเลขที่ตอกบนแผ่น' })
           : h.field({ name: 'sourceLot', type: 'hidden', value: '' }),
-        h.field({ name: 'createdFrom', label: 'ที่มา (งาน / ใบตัด / เอกสาร)', value: reg.createdFrom, id: 'oc-reg-from', placeholder: 'เช่น ตัดงาน JOB-0012' }),
+        h.field({ name: 'createdFrom', label: 'ที่มา (งาน / ใบตัด / เอกสาร)', value: reg.createdFrom, id: 'oc-reg-from', placeholder: parent ? `เว้นว่าง = เศษเหลือหลังตัด ${parent.id}` : 'เช่น ตัดงาน JOB-0012' }),
         h.field({ name: 'remark', label: 'หมายเหตุ', value: reg.remark, id: 'oc-reg-remark', wide: true }),
         t`<datalist id="oc-lots">${lots.ok.map((l) => t`<option value="${l}"></option>`)}</datalist><datalist id="oc-mats">${materials(ctx.state).map((m) => t`<option value="${m}"></option>`)}</datalist>`,
         t`<p class="hint wide">ระบบออกรหัส OC-… ให้ทันทีหลังบันทึก – เขียนหรือติดรหัสนั้นบนชิ้นเศษ · ทะเบียนนี้ไม่เปลี่ยนยอดสต็อก (แผ่นต้นทางเบิกไปแล้ว)</p>`,
@@ -152,12 +158,13 @@
     if (canHere && o.status === 'AVAILABLE') {
       acts.push(h.btn('ใช้ตัดงาน', { act: 'use', arg: o.id, tone: 'primary', id: 'oc-use-btn' }), h.btn('ทิ้งเศษนี้', { act: 'scrap', arg: o.id, tone: 'danger', id: 'oc-scrap-btn' }));
     }
+    if (canHere && o.status === 'USED') acts.push(h.btn('+ บันทึกชิ้นที่เหลือเพิ่ม', { act: 'regChild', arg: o.id, tone: 'ghost', id: 'oc-child-btn' }));
     if (canHere && (o.status === 'USED' || o.status === 'SCRAPPED')) {
       acts.push(h.btn(o.status === 'USED' ? 'ยกเลิกการใช้ (บันทึกผิด)' : 'ยกเลิกการทิ้ง (บันทึกผิด)', { act: 'undo', arg: o.id, tone: 'ghost', id: 'oc-undo-btn' }));
     }
     const label = t`<div class="steps"><div class="step"><span class="step-n">ป้ายเศษเหล็ก · เขียนหรือติดบนชิ้น</span><span>${bigTag(o.id)}</span>
       <span>${o.material} หนา ${thk(o.thickness)} · ${size(o)} มม.</span><span class="hint">ที่เก็บ ${loc(o)}${o.sourceLot ? ' · ล็อต/Heat ' + o.sourceLot : ''} · จาก ${o.code}</span></div></div>`;
-    const lotLink = o.sourceLot && RRS.ui.pages.lots ? h.link(o.sourceLot, 'lots', { sel: o.code + '|' + o.sourceLot, _scroll: true }) : o.sourceLot;
+    const lotLink = o.sourceLot && RRS.ui.pages.lots ? h.link(o.sourceLot, 'lots', { tab: 'list', sel: o.code + '|' + o.sourceLot, _scroll: true }) : o.sourceLot;
     const facts = h.dl([
       ['สถานะ', statusBadge(o.status)],
       ['แผ่นต้นทาง', t`${h.code(o.code)} ${it ? it.name : ''}`],
@@ -242,8 +249,6 @@
       return t`${k}${tabs}${reg}${h.toolbar(left, right)}${sel ? detail(ctx, sel) : ''}${v.tags ? tagsGrid(rows) : listTable(ctx, rows)}`;
     },
     after(ctx, root0) {
-      const box = root0.querySelector('#oc-list.scroll');
-      if (box) box.style.maxHeight = '70vh';
       const v = ctx.view;
       if (v._scroll) {
         const el = root0.querySelector('#' + v._scroll);
@@ -264,6 +269,11 @@
       },
       clear: (ctx) => ctx.set({ st: 'AVAILABLE', wh: '', mat: '', thk: '', q: '', limit: STEP }),
       newReg: (ctx) => ctx.set({ adding: true, reg: { wh: ctx.view.wh || '' }, _scroll: 'oc-reg' }),
+      regChild(ctx, el) {
+        const o = offcut(ctx.state, el.dataset.arg);
+        if (!o || o.status !== 'USED') return ctx.toast('บันทึกชิ้นที่เหลือได้เฉพาะจากเศษที่ใช้ตัดแล้ว', 'warn');
+        ctx.set({ adding: true, tab: 'list', reg: { code: o.code, parent: o.id, wh: o.wh, bin: o.bin }, _scroll: 'oc-reg' });
+      },
       cancelReg: (ctx) => ctx.set({ adding: false, reg: null }),
       regRefresh(ctx, el) {
         const form = el.closest('form');
@@ -290,7 +300,9 @@
         const o = offcut(ctx.state, el.dataset.arg);
         if (!o) return ctx.toast('ไม่พบเศษนี้แล้ว – อาจถูกใช้หรือทิ้งไปก่อน', 'warn');
         if (o.status !== 'AVAILABLE') return ctx.toast(`เศษ ${o.id} ${statusLabel(o.status)} – ใช้ซ้ำไม่ได้`, 'warn');
-        const usedFor = (ctx.view.find && ctx.view.find.usedFor) || '';
+        // prefill the job only when the piece was picked from the finder (not from an older search)
+        const fromFind = ctx.view.tab === 'find' && !!el.closest('#oc-fit');
+        const usedFor = (fromFind && ctx.view.find && (ctx.view.find.usedFor || ctx.view.find.job)) || '';
         useTarget = o.id;
         const r = await ctx.dialog({
           title: `ใช้เศษ ${o.id} ตัดงาน`, submit: 'บันทึกการใช้', wide: true,
@@ -347,14 +359,18 @@
     },
     forms: {
       async reg(ctx, vals) {
+        if (!U.trim(vals.code)) {
+          ctx.set({ reg: vals });
+          return ctx.toast('เลือกแผ่นต้นทาง (รหัสสินค้าของแผ่นที่ตัด) ก่อนบันทึก', 'bad');
+        }
         const r = await ctx.exec('offcut.add', { code: vals.code, material: vals.material, thickness: vals.thickness, width: vals.width, length: vals.length,
-          wh: vals.wh, bin: vals.bin, sourceLot: vals.sourceLot, createdFrom: vals.createdFrom, remark: vals.remark },
+          wh: vals.wh, bin: vals.bin, sourceLot: vals.sourceLot, parent: vals.parent || '', createdFrom: vals.createdFrom, remark: vals.remark },
         { done: (res) => `บันทึกเศษ ${res.result.id} แล้ว – เขียนรหัสนี้บนชิ้นเศษ` });
         if (r.ok) ctx.set({ adding: false, reg: null, sel: r.result.id, tab: 'list', st: 'AVAILABLE', _scroll: 'oc-detail' });
         else ctx.set({ reg: vals });
       },
       find(ctx, vals) {
-        ctx.set({ find: vals });
+        ctx.set({ find: vals, sel: null }); // a piece opened earlier is not part of this search
       },
     },
   });
@@ -364,6 +380,7 @@
     const f = ctx.view.find || {};
     const can = ctx.can('offcut.manage');
     const list = plates(ctx.state);
+    const jobs = RRS.q.rows(ctx.state, 'jobs', (j) => j.status === 'OPEN' || j.status === 'IN_PROGRESS').sort((a, b) => String(a.jobNo).localeCompare(String(b.jobNo)));
     const form = h.form({
       name: 'find', submit: 'หาเศษที่ใช้ได้', extra: ctx.view.find ? h.btn('ล้าง', { act: 'findClear', tone: 'ghost' }) : '',
       body: [
@@ -374,13 +391,21 @@
         h.field({ name: 'code', label: 'หรือเลือกแผ่นที่จะใช้ (ใช้วัสดุและความหนาของแผ่น)', type: 'select', value: f.code, id: 'oc-f-code',
           options: list.map((i) => [i.id, `${i.id} · ${i.name}`]), blank: 'ไม่เลือก – ใช้วัสดุ/ความหนาที่กรอก' }),
         h.field({ name: 'wh', label: 'เฉพาะคลัง', type: 'select', value: f.wh, options: h.whOptions(ctx.state), blank: 'ทุกคลัง', id: 'oc-f-wh' }),
-        h.field({ name: 'usedFor', label: 'จะใช้กับงาน/แบบ (ไม่บังคับ)', value: f.usedFor, id: 'oc-f-for', hint: 'ใส่ไว้ แล้วตอนกด ใช้เศษนี้ ระบบเติมให้' }),
+        jobs.length ? h.field({ name: 'job', label: 'ใบงานที่จะใช้ (ไม่บังคับ)', type: 'select', value: f.job, id: 'oc-f-job', options: jobs.map((j) => [j.jobNo, `${j.jobNo}${j.product ? ' · ' + j.product : ''}`]),
+          blank: 'ไม่ระบุ', hint: 'แผ่นที่จองให้ใบงานนี้นับเป็นแผ่นว่างของงานนี้' }) : '',
+        h.field({ name: 'usedFor', label: 'จะใช้กับงาน/แบบ (ไม่บังคับ)', value: f.usedFor, id: 'oc-f-for', hint: 'ใส่ไว้ แล้วตอนกด ใช้เศษนี้ ระบบเติมให้ (ว่าง = เลขใบงาน)' }),
         t`<datalist id="oc-f-mats">${materials(ctx.state).map((m) => t`<option value="${m}"></option>`)}</datalist>`,
       ],
     });
     let result = h.empty('กรอกขนาดชิ้นที่ต้องตัด', 'ระบบหาเศษพร้อมใช้ที่วัสดุ (กลุ่มที่ใช้แทนกันได้) และความหนาตรงกัน ขนาดพอ (หมุน 90° ได้) เรียงจากชิ้นเล็กสุดที่พอดี เพื่อให้เหลือเศษทิ้งน้อยที่สุด');
     if (ctx.view.find) {
-      const r = R().suggestOffcuts(ctx.state, { material: f.material, thickness: f.thickness, width: f.width, length: f.length, wh: f.wh || '', code: f.code || '' });
+      // a chosen plate gives material and thickness (as its label says); typed values only fill what the plate lacks
+      const plate = f.code ? RRS.q.get(ctx.state, 'items', f.code) : null;
+      const pMat = plate ? U.trim(plate.material) : '';
+      const pThk = plate ? Number(plate.thickness) || 0 : 0;
+      const q = { material: pMat ? '' : f.material, thickness: pThk ? '' : f.thickness, width: f.width, length: f.length, wh: f.wh || '', code: f.code || '', job: f.job || '' };
+      const usedNote = plate && (pMat || pThk) ? ` · วัสดุ ${pMat || U.trim(f.material)} หนา ${h.fmt.num(pThk || U.num(f.thickness))} มม. ตามแผ่น ${plate.id}` : '';
+      const r = R().suggestOffcuts(ctx.state, q);
       if (r.problems.length) {
         result = h.note(t`ยังหาไม่ได้ – ${h.errors({ errors: r.problems.map((p) => ({ message: p })) })}`, 'warn');
       } else {
@@ -388,20 +413,23 @@
           cols: [
             { label: 'ลำดับ', num: true, get: (x, i) => i + 1 },
             { label: 'รหัสเศษ (QR)', render: (x) => h.btn(x.id, { act: 'pick', arg: x.id, tone: 'quiet', small: true }) },
-            { label: 'วัสดุ', key: 'material' }, { label: 'หนา', num: true, key: 'thickness' },
-            { label: 'กว้าง × ยาว (มม.)', cls: 'nowrap', get: (x) => size(x) },
-            { label: 'ที่เก็บ', render: (x) => h.code(loc(x)) }, { label: 'ล็อต/Heat', get: (x) => x.sourceLot || '' },
-            { label: 'หมุน', render: (x) => (x.rotated ? h.badge('หมุน 90°', 'info') : dash) },
-            { label: 'เศษทิ้ง (%)', num: true, render: (x) => t`<b>${h.fmt.num(x.wastePct, 1)}</b>` },
+            // the action next to the id: on a phone it is on screen without scrolling the table sideways
             { label: '', render: (x) => (can && ctx.can('offcut.manage', x.wh) ? h.btn('ใช้เศษนี้', { act: 'use', arg: x.id, tone: 'primary', small: true }) : '') },
+            { label: 'กว้าง × ยาว (มม.)', cls: 'nowrap', get: (x) => size(x) },
+            { label: 'เศษทิ้ง (%)', num: true, render: (x) => t`<b>${h.fmt.num(x.wastePct, 1)}</b>` },
+            { label: 'หมุน', render: (x) => (x.rotated ? h.badge('หมุน 90°', 'info') : dash) },
+            { label: 'ที่เก็บ', render: (x) => h.code(loc(x)) }, { label: 'ล็อต/Heat', get: (x) => x.sourceLot || '' },
+            { label: 'วัสดุ', key: 'material' }, { label: 'หนา', num: true, key: 'thickness' },
           ] });
         const platesTbl = r.plates.length ? h.section('แผ่นใหม่ที่มีในคลัง (ใช้เมื่อไม่มีเศษที่พอ)', h.table({ dense: true, rows: r.plates, cols: [
           { label: 'รหัส', render: (x) => h.code(x.code) }, { label: 'ชื่อ', key: 'name' }, { label: 'พร้อมใช้', num: true, render: (x) => h.qty(x.available, x.unit) },
+          { label: 'จองให้งานอื่น', num: true, render: (x) => (x.reserved ? h.fmt.num(x.reserved) : dash) },
+          { label: 'ว่างให้ใช้', num: true, render: (x) => (x.free != null ? (x.free > 0 ? t`<b>${h.fmt.num(x.free)}</b>` : h.badge('ไม่ว่าง', 'warn')) : dash) },
           { label: 'ขนาดแผ่น (มม.)', get: (x) => (x.width && x.length ? `${h.fmt.num(x.width)} × ${h.fmt.num(x.length)}` : 'ไม่ระบุในทะเบียน') },
           { label: 'เศษทิ้ง (%)', num: true, render: (x) => (x.wastePct == null ? dash : h.fmt.num(x.wastePct, 1)) }] })) : '';
         result = t`${h.note(r.advice, r.rows.length ? 'ok' : 'warn')}
           ${r.blocked.length ? h.note(`ไม่แนะนำเพราะล็อตต้นทางถูกกักกัน: ${r.blocked.map((b) => `${b.id} (${b.reason})`).join(', ')}`, 'bad') : ''}
-          ${h.section(`เศษที่ใช้ได้ ${h.fmt.num(r.rows.length)} ชิ้น`, tbl, { sub: `ต้องการ ${h.fmt.num(U.num(f.width))} × ${h.fmt.num(U.num(f.length))} มม. · เรียงจากชิ้นเล็กสุดที่พอ · เศษทิ้ง = พื้นที่ที่เหลือหลังตัด ÷ พื้นที่ชิ้นเศษ` })}
+          ${h.section(`เศษที่ใช้ได้ ${h.fmt.num(r.rows.length)} ชิ้น`, tbl, { sub: `ต้องการ ${h.fmt.num(U.num(f.width))} × ${h.fmt.num(U.num(f.length))} มม.${usedNote} · เรียงจากชิ้นเล็กสุดที่พอ · เศษทิ้ง = พื้นที่ที่เหลือหลังตัด ÷ พื้นที่ชิ้นเศษ` })}
           ${platesTbl}`;
       }
     }

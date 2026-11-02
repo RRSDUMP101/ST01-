@@ -191,8 +191,17 @@ test('the content covers every phase (warehouses, BOM, purchasing, QC, jobs, tra
 });
 
 test('the sample is only put into an empty store; it is the same with the real clock', async () => {
-  const { ledger } = await loaded();
-  await assert.rejects(() => RRS.fixture.load(ledger), /ยังว่าง/);
+  const { ledger, store } = await loaded();
+  // the sample is there already (another tab built it): nothing is written, no error
+  const n = store.commits.length;
+  const again = await RRS.fixture.load(ledger);
+  assert.deepEqual([again.concurrent, again.commits, store.commits.length], [true, n, n]);
+  // other data (a real start, team data): refused, never written over
+  const other = new RRS.MemoryStore();
+  const ol = new RRS.Ledger(other, { holder: 'fixture-test', sleep: () => Promise.resolve() });
+  assert.equal((await ol.execute({ kind: 'system.bootstrap', payload: { name: 'ผู้ดูแล', userId: 'ADMIN' }, requestId: 'real-1' }, {})).ok, true);
+  await assert.rejects(() => RRS.fixture.load(ol), /ยังว่าง.*มีข้อมูลแล้ว 1 รายการ/);
+  assert.equal(other.commits.length, 1);
   const live = await loaded({});
   assert.deepEqual(RRS.inventory.verifyBalances(live.s), []);
   assert.ok(Date.parse(live.store.commits[live.store.commits.length - 1].at) <= Date.now());
@@ -205,7 +214,43 @@ test('a refused command stops the load with its Thai message', async () => {
   const real = ledger.execute.bind(ledger);
   ledger.execute = (cmd, ctx) => (cmd.kind === 'bom.approve'
     ? Promise.resolve({ ok: false, errors: [{ code: 'TEST', message: 'ปฏิเสธเพื่อทดสอบ' }] }) : real(cmd, ctx));
-  await assert.rejects(() => RRS.fixture.load(ledger, { now: NOW }), /สร้างข้อมูลตัวอย่างไม่สำเร็จ ขั้นที่ \d+ \(อนุมัติ BOM\): ปฏิเสธเพื่อทดสอบ/);
+  await assert.rejects(() => RRS.fixture.load(ledger, { now: NOW }), /สร้างข้อมูลตัวอย่างไม่สำเร็จ ขั้นที่ \d+ \(อนุมัติ BOM\): ปฏิเสธเพื่อทดสอบ – .*ไม่ครบชุด.*เริ่มข้อมูลตัวอย่างใหม่/);
+});
+
+test('two tabs building the sample at the same moment: one builds it, the other waits quietly – never twice or mixed', async () => {
+  const single = (await loaded()).store.commits.map((c) => c.id);
+  const store = new RRS.MemoryStore();
+  store.delay = 1; // both loaders really interleave
+  const tab = (h) => new RRS.Ledger(store, { holder: h, sleep: () => Promise.resolve() });
+  const [a, b] = [tab('tab-a'), tab('tab-b')];
+  const out = await Promise.allSettled([RRS.fixture.load(a, { now: NOW }), RRS.fixture.load(b, { now: NOW })]);
+  assert.deepEqual(out.map((x) => x.status), ['fulfilled', 'fulfilled'], JSON.stringify(out.map((x) => x.reason && x.reason.message)));
+  const infos = out.map((x) => x.value);
+  assert.equal(infos.filter((i) => i.concurrent).length, 1, 'exactly one loader stepped back');
+  assert.equal(infos.filter((i) => !i.concurrent)[0].commits, single.length);
+  store.delay = 0;
+  assert.deepEqual(store.commits.map((c) => c.id), single, 'the store holds one sample, the same as a single load');
+  await b.catchUp();
+  assert.deepEqual(RRS.inventory.verifyBalances(b.state), []);
+  assert.equal(RRS.q.rows(b.state, 'offcuts').length, 4);
+  assert.equal(b.state.head, a.state.head);
+});
+
+test('someone else saving while the sample is built stops it with a clear Thai reason', async () => {
+  const store = new RRS.MemoryStore();
+  const ledger = new RRS.Ledger(store, { holder: 'fixture-test', sleep: () => Promise.resolve() });
+  const other = new RRS.Ledger(store, { holder: 'other-tab', sleep: () => Promise.resolve() });
+  const real = ledger.execute.bind(ledger);
+  ledger.execute = async (cmd, ctx) => {
+    if (cmd.kind === 'master.import') {
+      const r = await other.execute({ kind: 'user.upsert', payload: { id: 'OTHER', name: 'อีกหน้าต่าง', roles: ['viewer'] }, requestId: 'other-1' },
+        { user: 'ADMIN', now: ctx.now });
+      assert.equal(r.ok, true, JSON.stringify(r.errors));
+    }
+    return real(cmd, ctx);
+  };
+  await assert.rejects(() => RRS.fixture.load(ledger, { now: NOW }), /ขั้นที่ \d+ \(.+\): มีการบันทึกจากหน้าต่างหรือผู้ใช้อื่นระหว่างสร้างข้อมูลตัวอย่าง – .*เริ่มข้อมูลตัวอย่างใหม่/);
+  assert.ok(store.commits.length < 30, 'stopped right there');
 });
 
 test('selftest: every acceptance criterion of Phase 0–6 passes in its own fresh world', async () => {
@@ -225,6 +270,35 @@ test('selftest: every acceptance criterion of Phase 0–6 passes in its own fres
   assert.deepEqual(progress[progress.length - 1].done, ids.length);
   assert.deepEqual(RRS.selftest.summary(results), { total: ids.length, pass: ids.length, fail: 0 });
   assert.deepEqual(RRS.selftest.ids().sort(), ids.slice().sort(), 'a scenario for every criterion');
+  // criteria that only people (or the team's real data) can settle say so – a test on test data is never the acceptance
+  const manual = results.filter((r) => r.manual).map((r) => r.id);
+  assert.deepEqual(manual, ['P0-1', 'P0-2', 'P0-3', 'P6-2', 'P6-3', 'P6-4', 'P6-5']);
+  for (const r of results) {
+    if (r.manual) {
+      assert.match(r.accept, /[฀-๿]/);
+      assert.ok(r.detail.endsWith('ยังไม่ใช่การยอมรับจริง: ' + r.accept), r.detail);
+    } else assert.equal(r.accept, '');
+  }
+  for (const id of ['P0-3', 'P6-3']) assert.match(results.find((r) => r.id === id).accept, /ไฟล์สำรองจริงของทีม/);
+  assert.match(results.find((r) => r.id === 'P1-2').detail, /หน่วยความจำ.*สองเครื่อง/);
+});
+
+test('selftest catches a store that lets two people save on top of the same balance', async () => {
+  const MS = RRS.MemoryStore.prototype;
+  const orig = MS.append;
+  MS.append = async function (commit) { // no conflict check: a lost update
+    if (this.delay) await new Promise((r) => setTimeout(r, this.delay));
+    this.commits.push(JSON.parse(JSON.stringify(commit)));
+    return { ok: true };
+  };
+  try {
+    const res = await RRS.selftest.run({ only: ['P1-2', 'P2-1'] });
+    assert.deepEqual(res.map((r) => [r.id, r.pass]), [['P1-2', false], ['P2-1', false]]);
+    assert.match(res[0].detail, /^ไม่ผ่าน .*จำนวนคนที่เบิกสำเร็จ: ได้ 2 ควรเป็น 1/);
+  } finally {
+    MS.append = orig;
+  }
+  assert.equal(RRS.selftest.summary(await RRS.selftest.run({ only: ['P1-2', 'P2-1'] })).pass, 2);
 });
 
 test('selftest never touches the data of the page and reports a broken rule as a Thai failure', async () => {

@@ -52,6 +52,16 @@
     async load(after) {
       return this._read().filter((c) => c.seq > after);
     }
+    /** One writer at a time across tabs of this browser (Web Locks); without them, single-tab behaviour. */
+    async lock() {
+      const locks = root.navigator && root.navigator.locks;
+      if (!locks) return async () => {};
+      let release;
+      await new Promise((acquired) => {
+        locks.request(this.key + ':write', () => new Promise((done) => { release = done; acquired(); }));
+      });
+      return async () => release();
+    }
     async append(commit) {
       const list = this._read();
       if (commit.seq !== list.length + 1) return { ok: false, conflict: true };
@@ -197,7 +207,9 @@
       if (r.status === 401) return { ok: false, auth: true, errors: [{ code: 'AUTH', message: 'หมดเวลาเข้าสู่ระบบ – เข้าสู่ระบบอีกครั้ง' }] };
       if (!body) return { ok: false, errors: [{ code: 'STORE', message: 'เซิร์ฟเวอร์ไม่ตอบ (' + r.status + ')' }] };
       if (body.error && !body.errors) return { ok: false, errors: [{ code: 'HTTP_' + r.status, message: body.error }] };
-      await this.catchUp();
+      try {
+        await this.catchUp(); // an account without rights may not read the data – the answer still stands
+      } catch (e) { /* shown on the next refresh */ }
       return body;
     }
     check(command, ctx) {

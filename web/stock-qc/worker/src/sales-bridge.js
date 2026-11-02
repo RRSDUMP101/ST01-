@@ -210,7 +210,8 @@ async function envelope(ws, raw) {
     payloadHash: raw.payloadHash, receivedHash: raw.payloadHash };
 }
 
-const requestIdFor = async (ws, commandId) => `so.${ws}.${(await digest(commandId)).slice(0, 48)}`;
+// so.<workspace>.<…>: a request-id namespace only server jobs may use (ledger.normalizeCommand refuses it from a page).
+const requestIdFor = async (ws, commandId) => `${ledger.SERVER_REQUEST_PREFIX}${ws}.${(await digest(commandId)).slice(0, 48)}`;
 
 /** Applies one journaled command through the server ledger. Throws an OutboundError for a problem that stops the run. */
 async function apply(env, ctx, c) {

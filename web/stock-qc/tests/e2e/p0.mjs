@@ -18,6 +18,8 @@ if (shots) fs.mkdirSync(shots, { recursive: true });
 
 const browser = await chromium.launch();
 const page = await browser.newPage({ viewport: { width: 1366, height: 860 } });
+// these steps expect a blank system: start the demo without the sample data (app.js pref 'demoEmpty')
+await page.addInitScript(() => { try { localStorage.setItem('rrs-sq:demoEmpty', 'true'); } catch (e) { /* ignore */ } });
 const problems = [];
 page.on('console', (m) => { if (m.type() === 'error' && !/fonts\.g|cdnjs|ERR_|net::/.test(m.text())) problems.push(`console: ${m.text()}`); });
 page.on('pageerror', (e) => problems.push(`pageerror: ${e.message}`));

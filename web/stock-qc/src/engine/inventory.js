@@ -129,7 +129,7 @@
       line.status = inv.inboundStatus(tx, doc, line, it);
     }
     if (it.trackLot && it.trackLot !== 'none') {
-      if (!line.lot) return tx.error('LOT_REQUIRED', `บรรทัด ${n}: ${it.id} ต้องระบุ${RRS.master.TRACK[it.trackLot]}`, Object.assign({ field: 'lot' }, where)) && null;
+      if (!line.lot) return tx.error('LOT_REQUIRED', `บรรทัด ${n}: ${it.id} ต้องระบุ ${RRS.master.TRACK[it.trackLot]}`, Object.assign({ field: 'lot' }, where)) && null;
       if (it.trackLot === 'serial' && Math.abs(base) !== 1) {
         return tx.error('SERIAL_QTY', `บรรทัด ${n}: สินค้าติดตาม Serial บันทึกได้ครั้งละ 1 หน่วยต่อบรรทัด`, where) && null;
       }

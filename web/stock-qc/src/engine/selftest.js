@@ -2,7 +2,8 @@
  * In-browser acceptance self-test (ทดสอบเกณฑ์ตรวจรับอัตโนมัติ).
  *
  *   const results = await RRS.selftest.run({ onProgress })
- *     -> [{id, phase, criterion, pass, detail, manual, checks, ms}]   (ids / text = RRS.reports.UAT_CRITERIA)
+ *     -> [{id, phase, criterion, pass, detail, manual, accept, checks, ms}]   (ids / text = RRS.reports.UAT_CRITERIA)
+ *        accept: for manual criteria, what people still have to do and where it is recorded (Thai)
  *   onProgress({done, total, id, criterion, pass})  after every criterion
  *
  * Every criterion of Phase 0–6 runs its scenario (ported from tests/phase1–6.test.mjs) in a FRESH in-memory world:
@@ -53,8 +54,19 @@
     }
     return out;
   }
-  /** Criteria where a person gives the final acceptance – the test checks the mechanism only. */
-  const MANUAL = { 'P0-1': true, 'P6-2': true, 'P6-4': true, 'P6-5': true };
+  /**
+   * Criteria where people give the final word – the test proves the mechanism on test data only; the note says what the
+   * real acceptance is and where it is recorded (restoring a test backup is not proof that the team's own backup restores).
+   */
+  const MANUAL = {
+    'P0-1': 'สโตร์ บัญชี และวิศวกรรมตรวจรหัส/หน่วย/คลังของชุดทดลองจริง แล้วบันทึกผลในหน้า ทดสอบรับงาน (UAT)',
+    'P0-2': 'ทีมตัดสินข้อตกลง ค-1 (เจ้าของข้อมูลแต่ละประเภท) ในหน้า ขอบเขต นโยบาย และข้อตกลง',
+    'P0-3': 'กู้ไฟล์สำรองจริงของทีมลงเครื่องทดสอบ แล้วบันทึกผลในหน้า สำรองและกู้คืน',
+    'P6-2': 'หัวหน้าสโตร์ หัวหน้า QC และบัญชีลงนามยอมรับยอดและขั้นตอนในหน้า ทดสอบรับงาน (UAT)',
+    'P6-3': 'กู้ไฟล์สำรองจริงของทีมลงเครื่องทดสอบ แล้วบันทึกผลในหน้า สำรองและกู้คืน',
+    'P6-4': 'วัดค่าจริงจากการทดลองใช้งานจริง เทียบเป้าที่ตกลงใน Phase 0',
+    'P6-5': 'เสนอแผนขยายผลจริงที่มีผู้รับผิดชอบและแผนย้อนกลับ ให้ผู้บริหารอนุมัติ',
+  };
   const MODULE_NAME = { planning: 'ใบงานและการจอง (planning.js)', reconcile: 'Express และตรวจนับ (reconcile.js)',
     purchasing: 'จัดซื้อ (purchasing.js)', quality: 'QC ล็อต NCR (quality.js)', reports: 'รายงานและขยายผล (reports.js)' };
   const loaded = (m) => !!RRS[m];
@@ -331,7 +343,7 @@
     c.code(loser, 'NOT_ENOUGH', 'คนที่สอง');
     const s = await w.state();
     c.eq(qty(s, { code: 'TST-002' }), 0, 'ยอดหลังเบิกพร้อมกัน');
-    return `สองคนเบิกชิ้นสุดท้ายพร้อมกัน: สำเร็จ 1 คน อีกคนได้ข้อความ "${msgs(loser).slice(0, 80)}"`;
+    return `สองคนเบิกชิ้นสุดท้ายพร้อมกัน: สำเร็จ 1 คน อีกคนได้ข้อความ "${msgs(loser).slice(0, 80)}" (ทดสอบบนที่เก็บข้อมูลทดสอบในหน่วยความจำ – ข้อมูลทีม/เซิร์ฟเวอร์จริงให้ลองเบิกจากสองเครื่องพร้อมกันอีกครั้ง)`;
   };
   S['P1-3'] = async (c) => {
     const w = await world();
@@ -1154,7 +1166,7 @@
   /** Run one criterion. */
   async function runOne(cr) {
     const t0 = Date.now();
-    const base = { id: cr.id, phase: cr.phase, criterion: cr.criterion, manual: !!MANUAL[cr.id] };
+    const base = { id: cr.id, phase: cr.phase, criterion: cr.criterion, manual: !!MANUAL[cr.id], accept: MANUAL[cr.id] || '' };
     const fn = S[cr.id];
     if (!fn) return Object.assign(base, { pass: false, detail: 'ยังไม่มีการทดสอบอัตโนมัติของเกณฑ์นี้ – ทดสอบด้วยคนแล้วบันทึกในหน้า UAT', checks: 0, ms: 0 });
     const missing = (NEEDS[cr.id] || []).filter((m) => !loaded(m));
@@ -1170,7 +1182,7 @@
     }
     const pass = c.fails.length === 0 && c.n > 0;
     let detail;
-    if (pass) detail = `${summary} (ตรวจ ${c.n} ข้อ)${base.manual ? ' – ระบบทำงานถูกต้อง การยอมรับจริงของผู้เกี่ยวข้องบันทึกในหน้า UAT' : ''}`;
+    if (pass) detail = `${summary} (ตรวจ ${c.n} ข้อ)${base.manual ? ` – ระบบทำงานถูกต้องบนข้อมูลทดสอบ ยังไม่ใช่การยอมรับจริง: ${MANUAL[cr.id]}` : ''}`;
     else detail = `ไม่ผ่าน ${c.fails.length} จาก ${c.n} ข้อ: ${c.fails.slice(0, 4).join(' · ')}${c.fails.length > 4 ? ' · …' : ''}`;
     return Object.assign(base, { pass, detail, checks: c.n, ms: Date.now() - t0 });
   }

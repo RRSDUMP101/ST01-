@@ -2,7 +2,9 @@
 # Local `wrangler dev`: copy to .dev.vars (git-ignored) and fill in throw-away values.
 # Deployed Worker: `npx wrangler secret put NAME` for each secret (staging account only).
 
-# Owner login (Sales Office pattern). ADMIN_PASSWORD_HASH: bcrypt hash, cost 12–16:
+# Owner login (Sales Office pattern). ADMIN_USERNAME: A-Z a-z 0-9 . _ @ -, 3–100 characters (no ":" or spaces).
+# ADMIN_PASSWORD_HASH: bcrypt hash, cost 12–16 accepted; use 12 (what the script makes) so the owner's login answers as
+# fast as every other account's and the owner's name cannot be told apart by timing:
 #   node scripts/hash-password.mjs | npx wrangler secret put ADMIN_PASSWORD_HASH
 # SESSION_SECRET: random, at least 32 characters (e.g. `openssl rand -hex 32`).
 ADMIN_USERNAME=

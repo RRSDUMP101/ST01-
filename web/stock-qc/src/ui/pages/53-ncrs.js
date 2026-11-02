@@ -43,10 +43,35 @@
       && (!q || [n.ncrNo, n.code, n.lot, n.defect, n.inspectionId, n.jobNo, n.docNo, (ctx.item(n.code) || {}).name].some((x) => util.ckey(x).indexOf(q) >= 0)))
       .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)) || b.ncrNo.localeCompare(a.ncrNo));
   }
-  /** Quarantined stock that no open NCR holds yet (can be raised with ncr.open). */
+  /** Quarantined stock that no open NCR holds yet (can be raised with ncr.open) – worked out once per state. */
+  let heldMemo = { state: null, seq: -1, today: '', rows: [] };
   function heldRows(ctx) {
-    return Q.qcQueue(ctx.state, ctx.today).balances.filter((b) => b.status === 'QUARANTINE' && util.round(b.qty - b.ncrHeld) > 0)
+    // the ledger updates its state object in place: the commit number tells whether anything changed
+    if (heldMemo.state === ctx.state && heldMemo.seq === ctx.state.seq && heldMemo.today === ctx.today) return heldMemo.rows;
+    const rows = Q.qcQueue(ctx.state, ctx.today).balances.filter((b) => b.status === 'QUARANTINE' && util.round(b.qty - b.ncrHeld) > 0)
       .map((b) => Object.assign({ free: util.round(b.qty - b.ncrHeld) }, b));
+    heldMemo = { state: ctx.state, seq: ctx.state.seq, today: ctx.today, rows };
+    return rows;
+  }
+  /** Quantity of a REWORK NCR already re-inspected (PASS or FAIL; void results do not count) – the engine closes at qty. */
+  function reinspected(ctx, n) {
+    return util.round(util.sum(RRS.q.rows(ctx.state, 'inspections', (x) => x.reinspectionNcr === n.ncrNo && x.status !== 'VOID'), (x) => x.qty));
+  }
+  /** The person who opened the NCR (the inspector of a failed result) does not decide it (separation of duties). */
+  const ownNcr = (ctx, n) => K.sodOn(ctx.state) && !!n.createdBy && n.createdBy === K.me(ctx);
+  /** What happened to the stock of the NCR, in the words of the store. */
+  function stockText(ctx, n, unit) {
+    if (!n.stockHeld) return 'ไม่มีของในคลัง (พบระหว่างผลิต)';
+    const q = `${h.fmt.num(n.qty)} ${unit}`;
+    if (n.status === 'OPEN') return `กักกันอยู่ ${q} – ใช้ เบิก หรือส่งมอบไม่ได้จนกว่าจะตัดสิน`;
+    if (n.disposition === 'REWORK') {
+      const left = Math.max(0, util.round(n.qty - reinspected(ctx, n)));
+      return left ? `รอแก้ไข ${h.fmt.num(left)} ${unit} – แก้แล้วให้ QC ตรวจซ้ำ` : `ตรวจซ้ำครบ ${q} แล้ว (ผลผ่านต้องให้หัวหน้า QC ปล่อยผ่านก่อนใช้)`;
+    }
+    if (n.disposition === 'RETURN') return `คืนผู้ขายแล้ว ${q}`;
+    if (n.disposition === 'SCRAP') return `ตัดทิ้งแล้ว ${q}`;
+    if (n.disposition === 'USE_AS_IS') return `กลับเป็น "ใช้ได้" ${q} ตามเงื่อนไข`;
+    return '';
   }
 
   function listView(ctx) {
@@ -110,16 +135,21 @@
     const notes = [];
     const canDisp = ctx.can('ncr.disposition', n.wh || undefined);
     if (n.status === 'OPEN') {
-      if (canDisp) acts.push(h.btn('ตัดสิน NCR', { act: 'decide', tone: 'primary', id: 'ncr-decide-btn' }));
-      else notes.push(h.note('รอหัวหน้า QC หรือวิศวกรรมตัดสิน – ระหว่างนี้ของยังกักกัน ใช้ เบิก หรือส่งมอบไม่ได้', 'warn'));
+      const own = ownNcr(ctx, n);
+      if (canDisp) {
+        acts.push(h.btn('ตัดสิน NCR', { act: 'decide', tone: 'primary', id: 'ncr-decide-btn', disabled: own,
+          title: own ? 'คุณเป็นผู้เปิด NCR นี้ – ผู้ตัดสินต้องเป็นคนละคน' : 'เลือกแก้ไข คืนผู้ขาย ตัดทิ้ง หรือยอมรับแบบมีเงื่อนไข' }));
+        if (own) notes.push(h.note(`คุณเป็นผู้เปิด ${n.ncrNo}${n.inspectionId ? ' (ผู้ตรวจที่พบปัญหา)' : ''} – ผู้ตัดสินต้องเป็นคนละคน (แยกหน้าที่) ให้หัวหน้า QC หรือวิศวกรรมคนอื่นตัดสิน`, 'warn'));
+      } else notes.push(h.note('รอหัวหน้า QC หรือวิศวกรรมตัดสิน – ระหว่างนี้ของยังกักกัน ใช้ เบิก หรือส่งมอบไม่ได้', 'warn'));
     }
     if (n.status === 'DISPOSITIONED') {
-      const needRe = n.disposition === 'REWORK' && !(n.reinspections || []).length;
+      const done = n.disposition === 'REWORK' ? reinspected(ctx, n) : 0;
+      const needRe = n.disposition === 'REWORK' && done < util.round(n.qty);
       if (needRe) {
         const rework = n.stockHeld ? RRS.q.qty(ctx.state, { code: n.code, wh: n.wh, bin: n.bin || '', lot: n.lot || '', status: 'REWORK' }) : 0;
-        notes.push(h.note(t`ตัดสินให้แก้ไขงานแล้ว – แก้เสร็จให้ QC ตรวจซ้ำ (อ้าง ${n.ncrNo}) ก่อนจึงปิด NCR ได้${rework ? t` · ${h.link('ไปตรวจซ้ำ (คิวรอแก้ไข)', 'inspections', { tab: 'queue', st: 'REWORK', sel: null })}` : ''}`, 'info'));
+        notes.push(h.note(t`ตัดสินให้แก้ไขงานแล้ว – แก้เสร็จให้ QC ตรวจซ้ำ (อ้าง ${n.ncrNo}) ให้ครบ ${h.fmt.num(n.qty)} ${unit} ก่อนจึงปิด NCR ได้ · ตรวจซ้ำแล้ว ${h.fmt.num(done)} จาก ${h.fmt.num(n.qty)}${rework ? t` · ${h.link('ไปตรวจซ้ำ (คิวรอแก้ไข)', 'inspections', { tab: 'queue', st: 'REWORK', sel: null })}` : ''}`, 'info'));
       }
-      if (canDisp) acts.push(h.btn('ปิด NCR', { act: 'closeNcr', tone: needRe ? 'ghost' : 'primary', disabled: needRe, id: 'ncr-close-btn', title: needRe ? 'ต้องตรวจซ้ำก่อนปิด' : 'ปิดเมื่อดำเนินการตามการตัดสินครบแล้ว' }));
+      if (canDisp) acts.push(h.btn('ปิด NCR', { act: 'closeNcr', tone: needRe ? 'ghost' : 'primary', disabled: needRe, id: 'ncr-close-btn', title: needRe ? `ต้องตรวจซ้ำให้ครบก่อนปิด (ตรวจแล้ว ${h.fmt.num(done)} จาก ${h.fmt.num(n.qty)})` : 'ปิดเมื่อดำเนินการตามการตัดสินครบแล้ว' }));
     }
     const re = n.reinspections || [];
     return h.section(t`${h.code(n.ncrNo)} ${it.name || n.code}`, t`${notes}
@@ -127,7 +157,7 @@
         ['สถานะ', t`${ncrBadge(n)} ${dispBadge(n.disposition)}`],
         ['สินค้า', t`${h.code(n.code)} ${it.name || ''}`], ['ล็อต', n.lot ? K.lotLink(n.code, n.lot) : ''],
         ['ตำแหน่ง', n.wh ? K.loc(n) : 'ระหว่างผลิต'], ['จำนวน', h.qty(n.qty, unit)],
-        ['ของในคลัง', n.stockHeld ? (n.status === 'OPEN' ? `กักกันอยู่ ${h.fmt.num(n.qty)} ${unit}` : 'ดำเนินการตามการตัดสินแล้ว') : 'ไม่มีของในคลัง (พบระหว่างผลิต)'],
+        ['ของในคลัง', stockText(ctx, n, unit)],
         ['ขั้นตอนที่พบ', n.stage ? K.stage(n.stage) : 'เปิดจากของกักกัน'],
         ['ผลตรวจที่พบ', n.inspectionId ? t`${K.inspLink(n.inspectionId)}${insp ? t` · ผู้ตรวจ ${ctx.userName(insp.inspector)}` : ''}` : ''],
         insp && insp.qsDocNo ? ['เอกสารกักกัน', K.docLink(insp.qsDocNo)] : null,
@@ -207,6 +237,14 @@
           { k: 'USE_AS_IS', what: `${n.stockHeld ? `ของ ${q} กลับเป็น "ใช้ได้"` : 'ยอมรับงาน'} พร้อมเงื่อนไขที่ระบุ${it.certRequired ? ' · ต้องมีใบรับรองวัสดุที่ตรวจแล้ว' : ''}${lot && lot.status === 'QUARANTINED' ? ' · ล็อตนี้กักกันทั้งล็อต ต้องปลดกักกันล็อตก่อน' : ''}`,
             off: useAsIsBlock(ctx, n) },
         ];
+        // ask the engine about each decision with a placeholder reason (nothing is saved): what it would refuse is
+        // disabled with its own reason – the lot quarantined, the certificate not checked, a count in progress …
+        const probe = 'ตรวจสอบก่อนเลือก';
+        for (const o of opts) {
+          if (o.off) continue;
+          const chk = ctx.check('ncr.disposition', { ncrNo: n.ncrNo, disposition: o.k, reason: probe, conditions: o.k === 'USE_AS_IS' ? probe : '' });
+          if (!chk.ok && chk.errors && chk.errors.length) o.off = chk.errors[0].message;
+        }
         await ctx.dialog({
           title: `ตัดสิน ${n.ncrNo}`, submit: 'บันทึกการตัดสิน', wide: true,
           body: t`<div class="wide">${h.dl([['สินค้า', t`${h.code(n.code)} ${it.name || ''}`], ['ล็อต', n.lot], ['ตำแหน่ง', n.wh ? K.loc(n) : 'ระหว่างผลิต'],

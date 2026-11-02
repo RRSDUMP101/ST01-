@@ -1,7 +1,7 @@
 /*
  * Sample data (ข้อมูลตัวอย่าง) for the demo mode, training and screen tests.
  *
- *   await RRS.fixture.load(ledger, {now?, onProgress?})  ->  {commits, steps, ms}
+ *   await RRS.fixture.load(ledger, {now?, onProgress?})  ->  {commits, steps, ms, jobs, today, concurrent?}
  *
  * Everything is made ONLY through ledger.execute({kind, payload, requestId}, {user, now}) with the real commands of every
  * module that is loaded, so the sample follows every rule of the engine (permissions, separation of duties, stock never
@@ -192,24 +192,36 @@
   }
 
   const pad = (n) => String(n).padStart(3, '0');
+  const FIRST_REQUEST = 'demo-001-system.bootstrap'; // request id of the first command of the sample
   const has = (kind) => !!RRS.commands.defs[kind];
   const errText = (r) => (r.errors || []).map((e) => e.message).join(' / ') || 'ไม่ทราบสาเหตุ';
   const rowsOf = (state, t, f) => RRS.q.rows(state, t, f);
 
   /**
    * Builds the sample in an EMPTY store through `ledger`. opts: {now (ISO, default the real time), onProgress({step, kind,
-   * label})}. Throws an Error with the Thai messages of the first command that is refused.
+   * label})}. Throws an Error with the Thai messages of the first command that is refused (and what to do next), or when
+   * someone else writes to the store while the sample is built, or when the store holds other data. When another tab /
+   * ledger has built or is building the same sample (the store already holds its first request, or a command comes back
+   * as a duplicate request), this one stops quietly with `concurrent: true` and writes nothing – the other tab's commits
+   * reach it through the store, so the sample is never built twice or half-mixed.
    */
   async function load(ledger, opts) {
     opts = opts || {};
     const started = Date.now();
     await ledger.catchUp();
+    const T = timeline(opts.now || new Date().toISOString());
     if (ledger.state.seq !== 0) {
+      // this very sample is already there (another tab found the store empty a moment earlier and is building it)
+      if ((ledger.state.requests || {})[FIRST_REQUEST]) {
+        return { commits: ledger.state.seq, steps: 0, ms: Date.now() - started, jobs: [], today: T.today, concurrent: true };
+      }
       throw new Error(`ใส่ข้อมูลตัวอย่างได้เฉพาะที่เก็บข้อมูลที่ยังว่าง – ที่นี่มีข้อมูลแล้ว ${ledger.state.seq} รายการ (ไม่เขียนทับข้อมูลเดิม)`);
     }
-    const T = timeline(opts.now || new Date().toISOString());
     const day = T.day;
     let n = 0;
+    let written = 0; // commits this load wrote (the store must hold exactly these while the sample is built)
+    const OTHER = {}; // thrown when another tab / ledger is building the same sample at the same moment
+    const HOW = 'ข้อมูลตัวอย่างหยุดอยู่ที่ขั้นก่อนหน้า (ไม่ครบชุด) – กด เริ่มข้อมูลตัวอย่างใหม่ เพื่อสร้างใหม่ ถ้ายังไม่ได้ให้แจ้งผู้ดูแลระบบพร้อมข้อความนี้';
     /** Run one command as `user` at the next time of the timeline; skipped (null) when its module is not loaded. */
     async function run(user, kind, payload, extraCtx) {
       if (!has(kind)) return null;
@@ -217,7 +229,14 @@
       const label = RRS.commands.defs[kind].label || kind;
       const ctx = Object.assign({ user, now: T.tick() }, extraCtx || {});
       const r = await ledger.execute({ kind, payload, requestId: `demo-${pad(n)}-${kind}` }, ctx);
-      if (!r.ok) throw new Error(`สร้างข้อมูลตัวอย่างไม่สำเร็จ ขั้นที่ ${n} (${label}): ${errText(r)}`);
+      // the same request id was saved already: another tab started the same sample a moment earlier – let it finish
+      // (its commits reach this tab through the store) instead of building a second, half-matching story
+      if (r.ok && r.duplicate) throw OTHER;
+      if (!r.ok) throw new Error(`สร้างข้อมูลตัวอย่างไม่สำเร็จ ขั้นที่ ${n} (${label}): ${errText(r)} – ${HOW}`);
+      written += 1;
+      if (ledger.state.seq !== written) {
+        throw new Error(`สร้างข้อมูลตัวอย่างไม่สำเร็จ ขั้นที่ ${n} (${label}): มีการบันทึกจากหน้าต่างหรือผู้ใช้อื่นระหว่างสร้างข้อมูลตัวอย่าง – ${HOW}`);
+      }
       if (opts.onProgress) {
         try { opts.onProgress({ step: n, kind, label }); } catch (e) { /* progress display only */ }
       }
@@ -235,231 +254,240 @@
       const l = po && (po.lines || []).find((x) => x.code === code);
       return l ? l.line : null;
     };
+    try {
+      return await build();
+    } catch (e) {
+      if (e !== OTHER) throw e;
+      await ledger.catchUp();
+      return { commits: ledger.state.seq, steps: n - 1, ms: Date.now() - started, jobs: [], today: T.today, concurrent: true };
+    }
 
-    // ---- day −14: ground rules, master data, opening balances --------------------------------------------
-    T.at(-14, '08:00');
-    await run('', 'system.bootstrap', { name: ADMIN.name, userId: ADMIN.id, company: COMPANY });
-    for (const u of USERS) await run(ADMIN.id, 'user.upsert', Object.assign({ create: true, warehouses: [] }, u));
-    await run('DEMO_MGR', 'settings.update', { patch: {
-      company: COMPANY,
-      cutoffAt: T.iso(-14, '07:30'),
-      pilot: { groups: [GROUP], warehouses: WAREHOUSES.map((w) => w.code), note: 'ขอบเขตตัวอย่าง: กระบะดั๊มพ์ 6 ล้อ ทั้งสามคลัง – ' + NOTE },
-      express: { defaultWarehouse: '01' },
-    } });
-    T.at(-14, '08:30');
-    await run(ADMIN.id, 'master.import', { warehouses: WAREHOUSES.map((w) => Object.assign({ create: true }, w)), bins: BINS,
-      items: ITEMS, units: UNITS });
-    await run('DEMO_ENG', 'bom.upsert', { product: 'DEMO-DB6', rev: 'A', drawingNo: 'DEMO-DWG-100', lines: BOM });
-    await run('DEMO_ENG', 'bom.approve', { product: 'DEMO-DB6', rev: 'A' });
-    const plans = {};
-    for (const [code, stage, rev, ref, chars] of [
-      ['DEMO-PL30', 'INCOMING', '', 'DEMO-WI-QC-01 ตรวจรับเหล็กแผ่น (ตัวอย่าง)', PLATE_PLAN],
-      ['DEMO-SP-L', 'FINAL', 'B', 'DEMO-DWG-111 ฉบับ B (ตัวอย่าง)', PANEL_PLAN],
-      ['DEMO-DB6', 'FINAL', 'A', 'DEMO-DWG-100 ฉบับ A (ตัวอย่าง)', BODY_PLAN],
-    ]) {
-      const p = await run('DEMO_ENG', 'qc.plan.save', { code, stage, drawingRev: rev, sourceRef: ref, sampling: 'ตรวจทุกชิ้น', chars });
-      if (p) {
-        plans[code] = res(p, 'id');
-        await run('DEMO_QCLEAD', 'qc.plan.approve', { id: plans[code] });
+    async function build() {
+      // ---- day −14: ground rules, master data, opening balances --------------------------------------------
+      T.at(-14, '08:00');
+      await run('', 'system.bootstrap', { name: ADMIN.name, userId: ADMIN.id, company: COMPANY });
+      for (const u of USERS) await run(ADMIN.id, 'user.upsert', Object.assign({ create: true, warehouses: [] }, u));
+      await run('DEMO_MGR', 'settings.update', { patch: {
+        company: COMPANY,
+        cutoffAt: T.iso(-14, '07:30'),
+        pilot: { groups: [GROUP], warehouses: WAREHOUSES.map((w) => w.code), note: 'ขอบเขตตัวอย่าง: กระบะดั๊มพ์ 6 ล้อ ทั้งสามคลัง – ' + NOTE },
+        express: { defaultWarehouse: '01' },
+      } });
+      T.at(-14, '08:30');
+      await run(ADMIN.id, 'master.import', { warehouses: WAREHOUSES.map((w) => Object.assign({ create: true }, w)), bins: BINS,
+        items: ITEMS, units: UNITS });
+      await run('DEMO_ENG', 'bom.upsert', { product: 'DEMO-DB6', rev: 'A', drawingNo: 'DEMO-DWG-100', lines: BOM });
+      await run('DEMO_ENG', 'bom.approve', { product: 'DEMO-DB6', rev: 'A' });
+      const plans = {};
+      for (const [code, stage, rev, ref, chars] of [
+        ['DEMO-PL30', 'INCOMING', '', 'DEMO-WI-QC-01 ตรวจรับเหล็กแผ่น (ตัวอย่าง)', PLATE_PLAN],
+        ['DEMO-SP-L', 'FINAL', 'B', 'DEMO-DWG-111 ฉบับ B (ตัวอย่าง)', PANEL_PLAN],
+        ['DEMO-DB6', 'FINAL', 'A', 'DEMO-DWG-100 ฉบับ A (ตัวอย่าง)', BODY_PLAN],
+      ]) {
+        const p = await run('DEMO_ENG', 'qc.plan.save', { code, stage, drawingRev: rev, sourceRef: ref, sampling: 'ตรวจทุกชิ้น', chars });
+        if (p) {
+          plans[code] = res(p, 'id');
+          await run('DEMO_QCLEAD', 'qc.plan.approve', { id: plans[code] });
+        }
       }
-    }
-    T.at(-14, '09:30');
-    await run('DEMO_MGR', 'decision.record', { id: 'Q01', decidedBy: 'ตัวอย่าง – เจ้าของโครงการ + บัญชี + สโตร์', decidedOn: day(-14),
-      answer: 'ตัวอย่าง: RRS เป็นเจ้าของจำนวนตามคลัง/ช่องเก็บ, Express เป็นเจ้าของต้นทุนและเอกสารบัญชี, ไฟล์ Express ใช้กระทบยอด ไม่เขียนทับ' });
-    await run('DEMO_MGR', 'decision.record', { id: 'Q02', decidedBy: 'ตัวอย่าง – IT + สโตร์', decidedOn: day(-14),
-      answer: 'ตัวอย่าง: ผู้ใช้ 10–20 คน บันทึกพร้อมกันผ่านบริการกลางทีละรายการ ไม่ต้องทำงาน offline' });
-    await run('DEMO_MGR', 'kpi.record', { id: 'count_accuracy', baseline: 82, target: 95, measuredOn: day(-14), note: 'ค่าตัวอย่าง – ไม่ใช่ค่าที่วัดจริง' });
-    await run('DEMO_MGR', 'kpi.record', { id: 'qc_wait', baseline: 36, target: 12, measuredOn: day(-14), note: 'ค่าตัวอย่าง – ไม่ใช่ค่าที่วัดจริง' });
-    T.at(-14, '10:00');
-    const aj = await run('DEMO_LEAD', 'doc.post', { type: 'AJ', ref: 'นับตั้งต้น (ตัวอย่าง)', remark: 'ยอดตั้งต้นตัวอย่าง ณ เวลาตัดยอด – ' + NOTE,
-      lines: OPENING });
-    await run('DEMO_STORE', 'lot.update', { code: 'DEMO-PL30', lot: 'HT-DEMO-2401', cert: { no: 'MTC-DEMO-2401', file: '' }, note: 'ใบรับรองตัวอย่าง' });
-    await run('DEMO_QC', 'lot.verifyCert', { code: 'DEMO-PL30', lot: 'HT-DEMO-2401' });
-    T.at(-14, '13:00');
-    for (const s of SUPPLIERS) await run('DEMO_PUR', 'supplier.upsert', Object.assign({ create: true }, s));
-    for (const t of TERMS) await run('DEMO_PUR', 'itemSupplier.upsert', t);
-    await run('DEMO_PUR', 'reorder.set', { code: 'DEMO-BLT-M16', wh: '02', min: 200, max: 600, supplier: 'DEMO-SUP-HW' });
+      T.at(-14, '09:30');
+      await run('DEMO_MGR', 'decision.record', { id: 'Q01', decidedBy: 'ตัวอย่าง – เจ้าของโครงการ + บัญชี + สโตร์', decidedOn: day(-14),
+        answer: 'ตัวอย่าง: RRS เป็นเจ้าของจำนวนตามคลัง/ช่องเก็บ, Express เป็นเจ้าของต้นทุนและเอกสารบัญชี, ไฟล์ Express ใช้กระทบยอด ไม่เขียนทับ' });
+      await run('DEMO_MGR', 'decision.record', { id: 'Q02', decidedBy: 'ตัวอย่าง – IT + สโตร์', decidedOn: day(-14),
+        answer: 'ตัวอย่าง: ผู้ใช้ 10–20 คน บันทึกพร้อมกันผ่านบริการกลางทีละรายการ ไม่ต้องทำงาน offline' });
+      await run('DEMO_MGR', 'kpi.record', { id: 'count_accuracy', baseline: 82, target: 95, measuredOn: day(-14), note: 'ค่าตัวอย่าง – ไม่ใช่ค่าที่วัดจริง' });
+      await run('DEMO_MGR', 'kpi.record', { id: 'qc_wait', baseline: 36, target: 12, measuredOn: day(-14), note: 'ค่าตัวอย่าง – ไม่ใช่ค่าที่วัดจริง' });
+      T.at(-14, '10:00');
+      const aj = await run('DEMO_LEAD', 'doc.post', { type: 'AJ', ref: 'นับตั้งต้น (ตัวอย่าง)', remark: 'ยอดตั้งต้นตัวอย่าง ณ เวลาตัดยอด – ' + NOTE,
+        lines: OPENING });
+      await run('DEMO_STORE', 'lot.update', { code: 'DEMO-PL30', lot: 'HT-DEMO-2401', cert: { no: 'MTC-DEMO-2401', file: '' }, note: 'ใบรับรองตัวอย่าง' });
+      await run('DEMO_QC', 'lot.verifyCert', { code: 'DEMO-PL30', lot: 'HT-DEMO-2401' });
+      T.at(-14, '13:00');
+      for (const s of SUPPLIERS) await run('DEMO_PUR', 'supplier.upsert', Object.assign({ create: true }, s));
+      for (const t of TERMS) await run('DEMO_PUR', 'itemSupplier.upsert', t);
+      await run('DEMO_PUR', 'reorder.set', { code: 'DEMO-BLT-M16', wh: '02', min: 200, max: 600, supplier: 'DEMO-SUP-HW' });
 
-    // ---- day −13: bolts and locks ordered, never delivered (late) ----------------------------------------
-    T.at(-13, '09:10');
-    const poHw = await run('DEMO_PUR', 'po.create', { supplier: 'DEMO-SUP-HW', remark: 'ตัวอย่าง: เติมอุปกรณ์ยึดและตัวล็อก',
-      lines: [{ code: 'DEMO-LOCK', qty: 4, dueDate: day(-4), wh: '02' }, { code: 'DEMO-BLT-M16', qty: 2, dueDate: day(-4), wh: '02' }] });
-    if (poHw) await run('DEMO_PUR', 'po.issue', { poNo: res(poHw, 'poNo') });
+      // ---- day −13: bolts and locks ordered, never delivered (late) ----------------------------------------
+      T.at(-13, '09:10');
+      const poHw = await run('DEMO_PUR', 'po.create', { supplier: 'DEMO-SUP-HW', remark: 'ตัวอย่าง: เติมอุปกรณ์ยึดและตัวล็อก',
+        lines: [{ code: 'DEMO-LOCK', qty: 4, dueDate: day(-4), wh: '02' }, { code: 'DEMO-BLT-M16', qty: 2, dueDate: day(-4), wh: '02' }] });
+      if (poHw) await run('DEMO_PUR', 'po.issue', { poNo: res(poHw, 'poNo') });
 
-    // ---- day −11: two jobs, one fully reserved, one short ------------------------------------------------
-    T.at(-11, '08:40');
-    const jobs = [];
-    for (const [soNo, qty, due, priority] of [['SO-DEMO-001', 1, day(5), 2], ['SO-DEMO-002', 2, day(12), 3]]) {
-      const j = await run('DEMO_PLAN', 'job.create', { soNo, product: 'DEMO-DB6', qty, dueDate: due, priority, remark: 'ใบงานตัวอย่าง' });
-      if (j) jobs.push(res(j, 'jobNo'));
-    }
-    for (const m of MAKE) {
-      const jobNo = jobs[m.job];
-      if (!jobNo) continue;
-      for (const code of Object.keys(m.make)) {
-        const line = jobLine(jobNo, code);
-        if (line != null) await run('DEMO_PLAN', 'job.setMake', { jobNo, line, toMake: m.make[code] });
+      // ---- day −11: two jobs, one fully reserved, one short ------------------------------------------------
+      T.at(-11, '08:40');
+      const jobs = [];
+      for (const [soNo, qty, due, priority] of [['SO-DEMO-001', 1, day(5), 2], ['SO-DEMO-002', 2, day(12), 3]]) {
+        const j = await run('DEMO_PLAN', 'job.create', { soNo, product: 'DEMO-DB6', qty, dueDate: due, priority, remark: 'ใบงานตัวอย่าง' });
+        if (j) jobs.push(res(j, 'jobNo'));
       }
-    }
-    for (const jobNo of jobs) await run('DEMO_PLAN', 'reserve.auto', { jobNo });
-
-    // ---- day −10 / −9: purchase request → approval → PO; hydraulics for the short job -------------------
-    T.at(-10, '09:00');
-    const pr = await run('DEMO_PLAN', 'pr.create', { remark: 'ตัวอย่าง: เหล็กแผ่นสำหรับใบงาน SO-DEMO-002 และเติม Min', lines: [
-      { code: 'DEMO-PL45', qty: 4, needDate: day(3), wh: '01', supplier: 'DEMO-SUP-STEEL', reason: 'ใบงาน SO-DEMO-002 ยังขาดเหล็กแผ่น 4.5 มม.' },
-      { code: 'DEMO-PL30', qty: 10, needDate: day(3), wh: '01', supplier: 'DEMO-SUP-STEEL', reason: 'ต่ำกว่า Min หลังจองให้ใบงาน' }] });
-    let poSteel = null;
-    if (pr) {
-      T.at(-10, '11:00');
-      await run('DEMO_PURLEAD', 'pr.approve', { prNo: res(pr, 'prNo'), remark: 'อนุมัติ (ตัวอย่าง)' });
-      T.at(-10, '13:30');
-      poSteel = await run('DEMO_PUR', 'po.create', { supplier: 'DEMO-SUP-STEEL', prNos: [res(pr, 'prNo')], remark: 'ตัวอย่าง' });
-      if (poSteel) await run('DEMO_PUR', 'po.issue', { poNo: res(poSteel, 'poNo') });
-    }
-    T.at(-9, '10:00');
-    const poHyd = await run('DEMO_PUR', 'po.create', { supplier: 'DEMO-SUP-HYD', remark: 'ตัวอย่าง: ชุดไฮดรอลิกสำหรับใบงาน SO-DEMO-002',
-      lines: [{ code: 'DEMO-CYL', qty: 2, dueDate: day(10), wh: '02' }, { code: 'DEMO-PTO', qty: 2, dueDate: day(10), wh: '02' }] });
-    if (poHyd) await run('DEMO_PUR', 'po.issue', { poNo: res(poHyd, 'poNo') });
-
-    // ---- day −7: pick the plates for the first job, record the offcuts -----------------------------------
-    T.at(-7, '08:20');
-    let pdNo = '';
-    if (jobs[0] && RRS.planning && has('pick.post')) {
-      const lines = [];
-      for (const p of RRS.planning.pickList(st(), jobs[0])) {
-        if (['DEMO-PL30', 'DEMO-PL45', 'DEMO-CH100'].indexOf(p.code) < 0) continue;
-        for (const s of p.suggest) lines.push({ reservationId: p.reservationId, qty: s.qty, wh: p.wh, bin: s.bin, lot: s.lot, scannedCode: p.code });
+      for (const m of MAKE) {
+        const jobNo = jobs[m.job];
+        if (!jobNo) continue;
+        for (const code of Object.keys(m.make)) {
+          const line = jobLine(jobNo, code);
+          if (line != null) await run('DEMO_PLAN', 'job.setMake', { jobNo, line, toMake: m.make[code] });
+        }
       }
-      if (lines.length) {
-        const pd = await run('DEMO_STORE', 'pick.post', { jobNo: jobs[0], lines, remark: 'ตัวอย่าง: จ่ายเหล็กแผ่นและเหล็กรางน้ำไปตัด/พับ' });
-        pdNo = res(pd, 'docNo');
+      for (const jobNo of jobs) await run('DEMO_PLAN', 'reserve.auto', { jobNo });
+
+      // ---- day −10 / −9: purchase request → approval → PO; hydraulics for the short job -------------------
+      T.at(-10, '09:00');
+      const pr = await run('DEMO_PLAN', 'pr.create', { remark: 'ตัวอย่าง: เหล็กแผ่นสำหรับใบงาน SO-DEMO-002 และเติม Min', lines: [
+        { code: 'DEMO-PL45', qty: 4, needDate: day(3), wh: '01', supplier: 'DEMO-SUP-STEEL', reason: 'ใบงาน SO-DEMO-002 ยังขาดเหล็กแผ่น 4.5 มม.' },
+        { code: 'DEMO-PL30', qty: 10, needDate: day(3), wh: '01', supplier: 'DEMO-SUP-STEEL', reason: 'ต่ำกว่า Min หลังจองให้ใบงาน' }] });
+      let poSteel = null;
+      if (pr) {
+        T.at(-10, '11:00');
+        await run('DEMO_PURLEAD', 'pr.approve', { prNo: res(pr, 'prNo'), remark: 'อนุมัติ (ตัวอย่าง)' });
+        T.at(-10, '13:30');
+        poSteel = await run('DEMO_PUR', 'po.create', { supplier: 'DEMO-SUP-STEEL', prNos: [res(pr, 'prNo')], remark: 'ตัวอย่าง' });
+        if (poSteel) await run('DEMO_PUR', 'po.issue', { poNo: res(poSteel, 'poNo') });
       }
-    }
-    T.at(-7, '15:30');
-    const made = `${jobs[0] || 'SO-DEMO-001'}${pdNo ? ' (' + pdNo + ')' : ''}`;
-    await run('DEMO_PROD', 'offcut.add', { code: 'DEMO-PL30', width: 600, length: 1200, wh: '01', bin: 'RM-OFF', sourceLot: 'HT-DEMO-2401',
-      createdFrom: `เศษจากตัดแผงข้าง ${made}`, remark: 'ตัวอย่าง' });
-    await run('DEMO_PROD', 'offcut.add', { code: 'DEMO-PL45', width: 450, length: 1800, wh: '01', bin: 'RM-OFF', sourceLot: 'HT-DEMO-2402',
-      createdFrom: `เศษจากตัดพื้นกระบะ ${made}`, remark: 'ตัวอย่าง' });
-    const oc = await run('DEMO_PROD', 'offcut.add', { code: 'DEMO-PL30', width: 900, length: 1100, wh: '01', bin: 'RM-OFF',
-      sourceLot: 'HT-DEMO-2401', createdFrom: `เศษจากตัดฝาท้าย ${made}`, remark: 'ตัวอย่าง' });
-    if (oc) {
-      await run('DEMO_PROD', 'offcut.use', { id: res(oc, 'id'), usedFor: 'ตัวอย่าง: แผ่นปิดมุมฝาท้าย SO-DEMO-001',
-        remaining: [{ width: 300, length: 900, bin: 'RM-OFF', remark: 'เศษเหลือหลังตัด' }] });
-    }
+      T.at(-9, '10:00');
+      const poHyd = await run('DEMO_PUR', 'po.create', { supplier: 'DEMO-SUP-HYD', remark: 'ตัวอย่าง: ชุดไฮดรอลิกสำหรับใบงาน SO-DEMO-002',
+        lines: [{ code: 'DEMO-CYL', qty: 2, dueDate: day(10), wh: '02' }, { code: 'DEMO-PTO', qty: 2, dueDate: day(10), wh: '02' }] });
+      if (poHyd) await run('DEMO_PUR', 'po.issue', { poNo: res(poHyd, 'poNo') });
 
-    // ---- day −6: part of the plate PO arrives in two heats (waits for QC) + mill certificates -------------
-    T.at(-6, '09:15');
-    let rrNo = '';
-    if (poSteel) {
-      const poNo = res(poSteel, 'poNo');
-      const line = poLine(poNo, 'DEMO-PL30');
-      const rr = await run('DEMO_STORE', 'po.receive', { poNo, supplierDoc: 'DN-DEMO-0001', remark: 'ตัวอย่าง: ผู้ขายส่งก่อนบางส่วน', lines: [
-        { line, qty: 4, bin: 'RM-RCV', lot: 'HT-DEMO-2410' }, { line, qty: 2, bin: 'RM-RCV', lot: 'HT-DEMO-2411' }] });
-      rrNo = res(rr, 'docNo');
-      T.at(-6, '10:00');
-      await run('DEMO_STORE', 'lot.update', { code: 'DEMO-PL30', lot: 'HT-DEMO-2410', cert: { no: 'MTC-DEMO-2410', file: '' }, note: 'ใบรับรองตัวอย่าง' });
-      await run('DEMO_STORE', 'lot.update', { code: 'DEMO-PL30', lot: 'HT-DEMO-2411', cert: { no: 'MTC-DEMO-2411', file: '' }, note: 'ใบรับรองตัวอย่าง' });
-      await run('DEMO_QC', 'lot.verifyCert', { code: 'DEMO-PL30', lot: 'HT-DEMO-2410' });
-    }
-
-    // ---- day −5: incoming inspection – one PASS released, one FAIL → NCR decided REWORK ------------------
-    T.at(-5, '09:00');
-    if (rrNo && plans['DEMO-PL30']) {
-      const insp = (lot, qty, surface, note) => run('DEMO_QC', 'qc.inspect', { stage: 'INCOMING', code: 'DEMO-PL30', wh: '01', bin: 'RM-RCV',
-        lot, qty, planId: plans['DEMO-PL30'], sourceDoc: rrNo, note, results: [
-          { char: 'ความหนา', value: 3.02 }, { char: 'ความยาวแผ่น', value: 2439 }, { char: 'ผิว/สนิม', value: surface },
-          { char: 'เลข Heat ตรงใบรับรอง', value: 'ผ่าน' }] });
-      const pass = await insp('HT-DEMO-2410', 4, 'ผ่าน', 'ตัวอย่าง: ผ่านทุกหัวข้อ');
-      if (pass) await run('DEMO_QCLEAD', 'qc.release', { id: res(pass, 'id') });
-      T.at(-5, '10:30');
-      const fail = await insp('HT-DEMO-2411', 2, 'ไม่ผ่าน', 'ตัวอย่าง: สนิมผิวด้านล่างทั้งสองแผ่น');
-      if (fail && res(fail, 'ncrNo')) {
-        await run('DEMO_QCLEAD', 'ncr.disposition', { ncrNo: res(fail, 'ncrNo'), disposition: 'REWORK',
-          reason: 'ตัวอย่าง: ขัดสนิมผิว ทารองพื้นกันสนิม แล้วส่งตรวจซ้ำ' });
+      // ---- day −7: pick the plates for the first job, record the offcuts -----------------------------------
+      T.at(-7, '08:20');
+      let pdNo = '';
+      if (jobs[0] && RRS.planning && has('pick.post')) {
+        const lines = [];
+        for (const p of RRS.planning.pickList(st(), jobs[0])) {
+          if (['DEMO-PL30', 'DEMO-PL45', 'DEMO-CH100'].indexOf(p.code) < 0) continue;
+          for (const s of p.suggest) lines.push({ reservationId: p.reservationId, qty: s.qty, wh: p.wh, bin: s.bin, lot: s.lot, scannedCode: p.code });
+        }
+        if (lines.length) {
+          const pd = await run('DEMO_STORE', 'pick.post', { jobNo: jobs[0], lines, remark: 'ตัวอย่าง: จ่ายเหล็กแผ่นและเหล็กรางน้ำไปตัด/พับ' });
+          pdNo = res(pd, 'docNo');
+        }
       }
-    }
-
-    // ---- day −4: a side panel finished and received into QC_HOLD ----------------------------------------
-    T.at(-4, '14:00');
-    if (jobs[0]) {
-      const line = jobLine(jobs[0], 'DEMO-SP-L');
-      if (line != null) await run('DEMO_PROD', 'job.record', { jobNo: jobs[0], line, qty: 1, remark: 'ตัวอย่าง: ตัด/พับ/เชื่อมเสร็จ' });
-      T.at(-4, '15:30');
-      await run('DEMO_STORE', 'doc.post', { type: 'FR', job: jobs[0], remark: 'ตัวอย่าง: รับแผงข้างซ้ายจากการผลิต (รอ QC ก่อนประกอบ)',
-        lines: [{ code: 'DEMO-SP-L', qty: 1, wh: '02', bin: 'WIP-L1' }] });
-    }
-
-    // ---- day −3: welding wire on its way to the shop floor (transfer still in transit) --------------------
-    T.at(-3, '10:00');
-    const tr = await run('DEMO_STORE', 'doc.post', { type: 'TR', remark: 'ตัวอย่าง: ส่งลวดเชื่อมไปชั้นหน้างาน (ยังไม่รับปลายทาง)',
-      lines: [{ code: 'DEMO-WIRE', qty: 1, unit: 'ม้วน', wh: '01', bin: 'RM-C1', toWh: '02', toBin: 'WIP-C1' }] });
-    const trNo = res(tr, 'docNo');
-
-    // ---- day −2: Express stock file of warehouse 01 with a few differences ------------------------------
-    T.at(-2, '09:30');
-    if (has('express.import') && RRS.reconcile && RRS.reconcile.rrsQtyAt) {
-      const snapshotAt = T.iso(-3, '17:00');
-      const rows = [];
-      for (const it of ITEMS) {
-        const q = RRS.reconcile.rrsQtyAt(st(), it.code, '01', snapshotAt);
-        if (!q) continue;
-        let qty = q;
-        if (it.code === 'DEMO-CH100') qty = util.round(q + 56); // one bar more in Express – waiting for an answer
-        if (it.code === 'DEMO-WIRE') qty = util.round(q + 15); // the transfer is not keyed in Express (ค-11)
-        rows.push({ row: rows.length + 2, code: it.expressCode || it.code, wh: '01', qty, unit: it.baseUnit });
+      T.at(-7, '15:30');
+      const made = `${jobs[0] || 'SO-DEMO-001'}${pdNo ? ' (' + pdNo + ')' : ''}`;
+      await run('DEMO_PROD', 'offcut.add', { code: 'DEMO-PL30', width: 600, length: 1200, wh: '01', bin: 'RM-OFF', sourceLot: 'HT-DEMO-2401',
+        createdFrom: `เศษจากตัดแผงข้าง ${made}`, remark: 'ตัวอย่าง' });
+      await run('DEMO_PROD', 'offcut.add', { code: 'DEMO-PL45', width: 450, length: 1800, wh: '01', bin: 'RM-OFF', sourceLot: 'HT-DEMO-2402',
+        createdFrom: `เศษจากตัดพื้นกระบะ ${made}`, remark: 'ตัวอย่าง' });
+      const oc = await run('DEMO_PROD', 'offcut.add', { code: 'DEMO-PL30', width: 900, length: 1100, wh: '01', bin: 'RM-OFF',
+        sourceLot: 'HT-DEMO-2401', createdFrom: `เศษจากตัดฝาท้าย ${made}`, remark: 'ตัวอย่าง' });
+      if (oc) {
+        await run('DEMO_PROD', 'offcut.use', { id: res(oc, 'id'), usedFor: 'ตัวอย่าง: แผ่นปิดมุมฝาท้าย SO-DEMO-001',
+          remaining: [{ width: 300, length: 900, bin: 'RM-OFF', remark: 'เศษเหลือหลังตัด' }] });
       }
-      rows.push({ row: rows.length + 2, code: 'E-9999', wh: '01', qty: 3, unit: 'ชิ้น' }); // not in the item register
-      const csv = ['รหัสสินค้า,คลัง,จำนวน,หน่วย'].concat(rows.map((r) => [r.code, r.wh, r.qty, r.unit].join(','))).join('\n');
-      const imp = await run('DEMO_LEAD', 'express.import', { fileName: 'DEMO-Express-คลัง01.csv', fileHash: util.sha256(csv), snapshotAt,
-        source: 'Express (ไฟล์ตัวอย่าง)', rows });
-      if (imp && trNo) {
-        await run('DEMO_ACC', 'express.resolve', { batchId: res(imp, 'batchId'), lines: [{ code: 'DEMO-WIRE', wh: '01', action: 'explain',
-          reason: `ตัวอย่าง: ${trNo} โอนลวดเชื่อมไปคลัง 02 – ใบโอนยังไม่มีประเภทเอกสารใน Express (ค-11)` }] });
+
+      // ---- day −6: part of the plate PO arrives in two heats (waits for QC) + mill certificates -------------
+      T.at(-6, '09:15');
+      let rrNo = '';
+      if (poSteel) {
+        const poNo = res(poSteel, 'poNo');
+        const line = poLine(poNo, 'DEMO-PL30');
+        const rr = await run('DEMO_STORE', 'po.receive', { poNo, supplierDoc: 'DN-DEMO-0001', remark: 'ตัวอย่าง: ผู้ขายส่งก่อนบางส่วน', lines: [
+          { line, qty: 4, bin: 'RM-RCV', lot: 'HT-DEMO-2410' }, { line, qty: 2, bin: 'RM-RCV', lot: 'HT-DEMO-2411' }] });
+        rrNo = res(rr, 'docNo');
+        T.at(-6, '10:00');
+        await run('DEMO_STORE', 'lot.update', { code: 'DEMO-PL30', lot: 'HT-DEMO-2410', cert: { no: 'MTC-DEMO-2410', file: '' }, note: 'ใบรับรองตัวอย่าง' });
+        await run('DEMO_STORE', 'lot.update', { code: 'DEMO-PL30', lot: 'HT-DEMO-2411', cert: { no: 'MTC-DEMO-2411', file: '' }, note: 'ใบรับรองตัวอย่าง' });
+        await run('DEMO_QC', 'lot.verifyCert', { code: 'DEMO-PL30', lot: 'HT-DEMO-2410' });
       }
-    }
-    T.at(-2, '11:00');
-    if (aj) await run('DEMO_ACC', 'doc.markExpress', { docNo: res(aj, 'docNo'), expressNo: 'DEMO-EXP-AJ-0001' });
-    if (pdNo) await run('DEMO_ACC', 'doc.markExpress', { docNo: pdNo, expressNo: 'DEMO-EXP-PD-0001' });
 
-    // ---- day −1: count with differences waiting for approval, UAT examples, Sales Office job, daily check --
-    T.at(-1, '08:30');
-    const ct = await run('DEMO_LEAD', 'count.create', { wh: '01', bins: ['RM-C1'], note: 'ตัวอย่าง: นับวัสดุสิ้นเปลืองประจำสัปดาห์' });
-    if (ct) {
-      const id = res(ct, 'id');
-      const counted = [['DEMO-PAINT-P', 30], ['DEMO-DISC', 47], ['DEMO-PAINT-B', 18], ['DEMO-WIRE', 30]]
-        .map(([code, c]) => ({ code, bin: 'RM-C1', counted: c }));
-      await run('DEMO_STORE', 'count.enter', { id, lines: counted });
-      T.at(-1, '09:30');
-      // big differences need a second count by another person (the store lead counts again and finds the same)
-      await run('DEMO_LEAD', 'count.enter', { id, lines: counted.filter((l) => l.code === 'DEMO-PAINT-P' || l.code === 'DEMO-DISC') });
-      await run('DEMO_STORE', 'count.submit', { id });
-    }
-    T.at(-1, '13:00');
-    for (const [id, status, evidence, note] of [
-      ['P1-1', 'PASS', 'ตัวอย่าง: ทดสอบในหน้า ทดสอบรับงาน (เบิกจากคลัง 02 ไม่กระทบคลัง 01)', NOTE],
-      ['P1-2', 'NOT_RUN', '', 'ตัวอย่าง: รอทดสอบเบิกชิ้นสุดท้ายจากสองเครื่องพร้อมกัน'],
-      ['P2-1', 'FAIL', 'ตัวอย่าง: ทดสอบจอง SO-DEMO-001/002', 'ตัวอย่างผลไม่ผ่าน: ผู้ทดสอบเข้าใจหน้าจอผิด ต้องทดสอบใหม่ – ' + NOTE],
-      ['P3-3', 'NOT_RUN', '', 'ตัวอย่าง: รอรอบนับจริงของคลัง 02'],
-    ]) await run('DEMO_LEAD', 'uat.record', { id, status, evidence, note });
-    await run('DEMO_LEAD', 'training.record', { userId: 'DEMO_STORE', role: 'store', topic: 'ตัวอย่าง: รับ–เบิก–โอน และการสแกนหยิบตามใบจัดชุด',
-      trainedOn: day(-1), note: NOTE });
-    await run('DEMO_STORE', 'pilot.issue', { severity: 'MINOR', area: 'คลังวัตถุดิบ', description: 'ตัวอย่าง: ป้ายช่องเก็บ RM-A2 ซีด สแกนไม่ติด', ref: 'RM-A2' });
-    if (has('sales.syncJob') && RRS.sales) {
-      // a production job as the Sales Office connector would send it (ids only, no customer name) – not mapped to a BOM yet
-      const payload = { orderNumber: 'SO-DEMO-003', customerId: 'DEMO-CUST-01', dealId: 'DEMO-DEAL-01', vehicle: 'รถบรรทุก 6 ล้อ (ตัวอย่าง)',
-        due: day(20), cancelled: false,
-        items: [{ lineId: 'DEMO-L1', description: 'กระบะดั๊มพ์ 6 ล้อ ตามแบบมาตรฐาน (ตัวอย่าง)', qty: '1', unit: 'ชุด', productId: 'DEMO-PRD-DB6' }],
-        release: { allowed: false, blockers: ['ตัวอย่าง: รอยืนยันแบบกับลูกค้า'], drawingRevision: null, bomRevision: null, bomFingerprint: null } };
-      await run(ADMIN.id, 'sales.syncJob', { schemaVersion: 1, type: 'upsert_draft', workspace: 'domestic', commandId: 'DEMO-CMD-0001',
-        orderId: 'DEMO-ORD-0003', productionJobId: 'DEMO-PJ-0003', version: 1, payloadHash: util.sha256(JSON.stringify(payload)), payload },
-      { via: 'sales-bridge:domestic' });
-    }
-    T.at(-1, '17:00');
-    await run('DEMO_LEAD', 'daily.check', { note: 'ตัวอย่าง: ตรวจยอดประจำวันก่อนปิดงาน' });
+      // ---- day −5: incoming inspection – one PASS released, one FAIL → NCR decided REWORK ------------------
+      T.at(-5, '09:00');
+      if (rrNo && plans['DEMO-PL30']) {
+        const insp = (lot, qty, surface, note) => run('DEMO_QC', 'qc.inspect', { stage: 'INCOMING', code: 'DEMO-PL30', wh: '01', bin: 'RM-RCV',
+          lot, qty, planId: plans['DEMO-PL30'], sourceDoc: rrNo, note, results: [
+            { char: 'ความหนา', value: 3.02 }, { char: 'ความยาวแผ่น', value: 2439 }, { char: 'ผิว/สนิม', value: surface },
+            { char: 'เลข Heat ตรงใบรับรอง', value: 'ผ่าน' }] });
+        const pass = await insp('HT-DEMO-2410', 4, 'ผ่าน', 'ตัวอย่าง: ผ่านทุกหัวข้อ');
+        if (pass) await run('DEMO_QCLEAD', 'qc.release', { id: res(pass, 'id') });
+        T.at(-5, '10:30');
+        const fail = await insp('HT-DEMO-2411', 2, 'ไม่ผ่าน', 'ตัวอย่าง: สนิมผิวด้านล่างทั้งสองแผ่น');
+        if (fail && res(fail, 'ncrNo')) {
+          await run('DEMO_QCLEAD', 'ncr.disposition', { ncrNo: res(fail, 'ncrNo'), disposition: 'REWORK',
+            reason: 'ตัวอย่าง: ขัดสนิมผิว ทารองพื้นกันสนิม แล้วส่งตรวจซ้ำ' });
+        }
+      }
 
-    await ledger.catchUp();
-    return { commits: ledger.state.seq, steps: n, ms: Date.now() - started, jobs, today: T.today };
+      // ---- day −4: a side panel finished and received into QC_HOLD ----------------------------------------
+      T.at(-4, '14:00');
+      if (jobs[0]) {
+        const line = jobLine(jobs[0], 'DEMO-SP-L');
+        if (line != null) await run('DEMO_PROD', 'job.record', { jobNo: jobs[0], line, qty: 1, remark: 'ตัวอย่าง: ตัด/พับ/เชื่อมเสร็จ' });
+        T.at(-4, '15:30');
+        await run('DEMO_STORE', 'doc.post', { type: 'FR', job: jobs[0], remark: 'ตัวอย่าง: รับแผงข้างซ้ายจากการผลิต (รอ QC ก่อนประกอบ)',
+          lines: [{ code: 'DEMO-SP-L', qty: 1, wh: '02', bin: 'WIP-L1' }] });
+      }
+
+      // ---- day −3: welding wire on its way to the shop floor (transfer still in transit) --------------------
+      T.at(-3, '10:00');
+      const tr = await run('DEMO_STORE', 'doc.post', { type: 'TR', remark: 'ตัวอย่าง: ส่งลวดเชื่อมไปชั้นหน้างาน (ยังไม่รับปลายทาง)',
+        lines: [{ code: 'DEMO-WIRE', qty: 1, unit: 'ม้วน', wh: '01', bin: 'RM-C1', toWh: '02', toBin: 'WIP-C1' }] });
+      const trNo = res(tr, 'docNo');
+
+      // ---- day −2: Express stock file of warehouse 01 with a few differences ------------------------------
+      T.at(-2, '09:30');
+      if (has('express.import') && RRS.reconcile && RRS.reconcile.rrsQtyAt) {
+        const snapshotAt = T.iso(-3, '17:00');
+        const rows = [];
+        for (const it of ITEMS) {
+          const q = RRS.reconcile.rrsQtyAt(st(), it.code, '01', snapshotAt);
+          if (!q) continue;
+          let qty = q;
+          if (it.code === 'DEMO-CH100') qty = util.round(q + 56); // one bar more in Express – waiting for an answer
+          if (it.code === 'DEMO-WIRE') qty = util.round(q + 15); // the transfer is not keyed in Express (ค-11)
+          rows.push({ row: rows.length + 2, code: it.expressCode || it.code, wh: '01', qty, unit: it.baseUnit });
+        }
+        rows.push({ row: rows.length + 2, code: 'E-9999', wh: '01', qty: 3, unit: 'ชิ้น' }); // not in the item register
+        const csv = ['รหัสสินค้า,คลัง,จำนวน,หน่วย'].concat(rows.map((r) => [r.code, r.wh, r.qty, r.unit].join(','))).join('\n');
+        const imp = await run('DEMO_LEAD', 'express.import', { fileName: 'DEMO-Express-คลัง01.csv', fileHash: util.sha256(csv), snapshotAt,
+          source: 'Express (ไฟล์ตัวอย่าง)', rows });
+        if (imp && trNo) {
+          await run('DEMO_ACC', 'express.resolve', { batchId: res(imp, 'batchId'), lines: [{ code: 'DEMO-WIRE', wh: '01', action: 'explain',
+            reason: `ตัวอย่าง: ${trNo} โอนลวดเชื่อมไปคลัง 02 – ใบโอนยังไม่มีประเภทเอกสารใน Express (ค-11)` }] });
+        }
+      }
+      T.at(-2, '11:00');
+      if (aj) await run('DEMO_ACC', 'doc.markExpress', { docNo: res(aj, 'docNo'), expressNo: 'DEMO-EXP-AJ-0001' });
+      if (pdNo) await run('DEMO_ACC', 'doc.markExpress', { docNo: pdNo, expressNo: 'DEMO-EXP-PD-0001' });
+
+      // ---- day −1: count with differences waiting for approval, UAT examples, Sales Office job, daily check --
+      T.at(-1, '08:30');
+      const ct = await run('DEMO_LEAD', 'count.create', { wh: '01', bins: ['RM-C1'], note: 'ตัวอย่าง: นับวัสดุสิ้นเปลืองประจำสัปดาห์' });
+      if (ct) {
+        const id = res(ct, 'id');
+        const counted = [['DEMO-PAINT-P', 30], ['DEMO-DISC', 47], ['DEMO-PAINT-B', 18], ['DEMO-WIRE', 30]]
+          .map(([code, c]) => ({ code, bin: 'RM-C1', counted: c }));
+        await run('DEMO_STORE', 'count.enter', { id, lines: counted });
+        T.at(-1, '09:30');
+        // big differences need a second count by another person (the store lead counts again and finds the same)
+        await run('DEMO_LEAD', 'count.enter', { id, lines: counted.filter((l) => l.code === 'DEMO-PAINT-P' || l.code === 'DEMO-DISC') });
+        await run('DEMO_STORE', 'count.submit', { id });
+      }
+      T.at(-1, '13:00');
+      for (const [id, status, evidence, note] of [
+        ['P1-1', 'PASS', 'ตัวอย่าง: ทดสอบในหน้า ทดสอบรับงาน (เบิกจากคลัง 02 ไม่กระทบคลัง 01)', NOTE],
+        ['P1-2', 'NOT_RUN', '', 'ตัวอย่าง: รอทดสอบเบิกชิ้นสุดท้ายจากสองเครื่องพร้อมกัน'],
+        ['P2-1', 'FAIL', 'ตัวอย่าง: ทดสอบจอง SO-DEMO-001/002', 'ตัวอย่างผลไม่ผ่าน: ผู้ทดสอบเข้าใจหน้าจอผิด ต้องทดสอบใหม่ – ' + NOTE],
+        ['P3-3', 'NOT_RUN', '', 'ตัวอย่าง: รอรอบนับจริงของคลัง 02'],
+      ]) await run('DEMO_LEAD', 'uat.record', { id, status, evidence, note });
+      await run('DEMO_LEAD', 'training.record', { userId: 'DEMO_STORE', role: 'store', topic: 'ตัวอย่าง: รับ–เบิก–โอน และการสแกนหยิบตามใบจัดชุด',
+        trainedOn: day(-1), note: NOTE });
+      await run('DEMO_STORE', 'pilot.issue', { severity: 'MINOR', area: 'คลังวัตถุดิบ', description: 'ตัวอย่าง: ป้ายช่องเก็บ RM-A2 ซีด สแกนไม่ติด', ref: 'RM-A2' });
+      if (has('sales.syncJob') && RRS.sales) {
+        // a production job as the Sales Office connector would send it (ids only, no customer name) – not mapped to a BOM yet
+        const payload = { orderNumber: 'SO-DEMO-003', customerId: 'DEMO-CUST-01', dealId: 'DEMO-DEAL-01', vehicle: 'รถบรรทุก 6 ล้อ (ตัวอย่าง)',
+          due: day(20), cancelled: false,
+          items: [{ lineId: 'DEMO-L1', description: 'กระบะดั๊มพ์ 6 ล้อ ตามแบบมาตรฐาน (ตัวอย่าง)', qty: '1', unit: 'ชุด', productId: 'DEMO-PRD-DB6' }],
+          release: { allowed: false, blockers: ['ตัวอย่าง: รอยืนยันแบบกับลูกค้า'], drawingRevision: null, bomRevision: null, bomFingerprint: null } };
+        await run(ADMIN.id, 'sales.syncJob', { schemaVersion: 1, type: 'upsert_draft', workspace: 'domestic', commandId: 'DEMO-CMD-0001',
+          orderId: 'DEMO-ORD-0003', productionJobId: 'DEMO-PJ-0003', version: 1, payloadHash: util.sha256(JSON.stringify(payload)), payload },
+        { via: 'sales-bridge:domestic' });
+      }
+      T.at(-1, '17:00');
+      await run('DEMO_LEAD', 'daily.check', { note: 'ตัวอย่าง: ตรวจยอดประจำวันก่อนปิดงาน' });
+
+      await ledger.catchUp();
+      return { commits: ledger.state.seq, steps: n, ms: Date.now() - started, jobs, today: T.today };
+    }
   }
 
   /** Is this code / id part of the sample (DEMO- / DEMO_ / SO-DEMO-)? */

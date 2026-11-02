@@ -85,7 +85,7 @@
   const table = (o) => {
     const cols = o.cols;
     const rows = o.rows || [];
-    if (!rows.length && o.empty !== false) return empty(o.empty || 'ยังไม่มีข้อมูล', o.emptyText || '');
+    if (!rows.length && o.empty !== false) return o.id ? t`<div${safe(attr('id', o.id))}>${empty(o.empty || 'ยังไม่มีข้อมูล', o.emptyText || '')}</div>` : empty(o.empty || 'ยังไม่มีข้อมูล', o.emptyText || '');
     const head = cols.map((c) => t`<th class="${c.num ? 'n' : ''} ${c.cls || ''}"${safe(c.w ? ` style="width:${esc(c.w)}"` : '')}>${c.label}</th>`);
     const body = rows.map((r, i) => {
       const cells = cols.map((c) => {
@@ -110,7 +110,8 @@
 
   /**
    * h.field({name, label, type, value, options, required, hint, placeholder, step, list, readonly, wide, id})
-   *   type: text | number | date | datetime | select | multiselect | textarea | checkbox | hidden | file
+   *   type: text | number | date | datetime | select | multiselect | radio | textarea | checkbox | hidden | file
+   *   act: data-act (fires on change), live: fire on input (250 ms), cls: extra class on the field, min / max
    *   options: [[value, label], …] or [value, …]
    */
   let fieldN = 0;
@@ -133,9 +134,9 @@
       return t`<label class="fld fld-check${o.wide ? ' wide' : ''}"><input type="checkbox"${common} value="1"${safe(attr('checked', !!o.value))}><span class="fld-cl"><span>${o.label}</span>${o.hint ? t`<small class="hint">${o.hint}</small>` : ''}</span></label>`;
     } else {
       const type = o.type === 'datetime' ? 'datetime-local' : o.type || 'text';
-      input = t`<input type="${type}"${common}${safe(attr('value', o.value == null ? '' : o.value))}${safe(attr('step', o.step || (type === 'number' ? 'any' : null)))}${safe(attr('list', o.list))}${safe(attr('accept', o.accept))}${safe(attr('inputmode', type === 'number' ? 'decimal' : null))}>`;
+      input = t`<input type="${type}"${common}${safe(attr('min', o.min))}${safe(attr('max', o.max))}${safe(attr('value', o.value == null ? '' : o.value))}${safe(attr('step', o.step || (type === 'number' ? 'any' : null)))}${safe(attr('list', o.list))}${safe(attr('accept', o.accept))}${safe(attr('inputmode', type === 'number' ? 'decimal' : null))}>`;
     }
-    return t`<label class="fld${o.wide ? ' wide' : ''}" for="${id}"><span class="fld-l">${o.label}${o.required ? t` <b class="req">*</b>` : ''}</span>${input}${o.hint ? t`<small class="hint">${o.hint}</small>` : ''}</label>`;
+    return t`<label class="fld${o.wide ? ' wide' : ''}${o.cls ? ' ' + o.cls : ''}" for="${id}"><span class="fld-l">${o.label}${o.required ? t` <b class="req">*</b>` : ''}</span>${input}${o.hint ? t`<small class="hint">${o.hint}</small>` : ''}</label>`;
   };
   /** h.form({name, body, submit, cancel (act name), danger}) */
   const form = (o) => t`<form class="form" data-form="${o.name}" novalidate><div class="fgrid">${o.body}</div><div class="form-actions">${o.submit !== false ? btn(o.submit || 'บันทึก', { type: 'submit', tone: o.danger ? 'danger' : 'primary' }) : ''}${o.cancel ? btn('ยกเลิก', { act: o.cancel, tone: 'ghost' }) : ''}${o.extra || ''}</div></form>`;

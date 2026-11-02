@@ -17,10 +17,33 @@ const WINDOW_MS = 15 * 60 * 1000;
 const PER_IP = 10;
 const OVERALL = 100;
 
+/**
+ * Names of Object.prototype (__proto__, constructor, toString, …) are never account names: an account name becomes an
+ * engine row key (access_requests is keyed by it), and '__proto__' as a key would swap a state table's prototype.
+ */
+export function reservedName(name) {
+  return Object.prototype.hasOwnProperty.call(Object.prototype, String(name));
+}
+/** A name that may be an account (owner included): A-Z a-z 0-9 . _ @ -, 3–100 characters, not an Object.prototype name. */
+export function validUsername(name) {
+  return typeof name === 'string' && USERNAME_RE.test(name) && !reservedName(name);
+}
+/**
+ * bcrypt "hash" for usernames that cannot log in (unknown, switched off): same cost as the accounts' own hashes
+ * (BCRYPT_COST), so a failed login takes as long whether the account exists or not. Before, ADMIN_PASSWORD_HASH was
+ * used (cost 12–16 allowed): with a cost-14 owner hash an unknown name answered 4× slower than a real one. The hash part
+ * is a fixed filler – no password gives it, so the comparison is always false. (The owner's own login runs at the cost
+ * of ADMIN_PASSWORD_HASH: keep it at 12, as scripts/hash-password.mjs does, so the owner's name does not stand out.)
+ */
+const DUMMY_HASH = `$2b$${String(BCRYPT_COST).padStart(2, '0')}$${'x'.repeat(53)}`;
+
 export function authConfiguration(env) {
   const missing = ['ADMIN_USERNAME', 'ADMIN_PASSWORD_HASH', 'SESSION_SECRET'].filter((k) => !str(env, k));
-  const validHash = HASH_RE.test(str(env, 'ADMIN_PASSWORD_HASH'));
-  return { ready: !missing.length && validHash && str(env, 'SESSION_SECRET').length >= 32, missing };
+  const invalid = [];
+  if (str(env, 'ADMIN_USERNAME') && !validUsername(str(env, 'ADMIN_USERNAME'))) invalid.push('ADMIN_USERNAME');
+  if (str(env, 'ADMIN_PASSWORD_HASH') && !HASH_RE.test(str(env, 'ADMIN_PASSWORD_HASH'))) invalid.push('ADMIN_PASSWORD_HASH');
+  if (str(env, 'SESSION_SECRET') && str(env, 'SESSION_SECRET').length < 32) invalid.push('SESSION_SECRET');
+  return { ready: !missing.length && !invalid.length, missing, invalid };
 }
 
 function cookieToken(req) {
@@ -42,7 +65,7 @@ async function account(env, username) {
   if (owner && (await secretEqual(username, owner))) {
     return { username: owner, passwordHash: str(env, 'ADMIN_PASSWORD_HASH'), owner: true, mustChange: false };
   }
-  if (!USERNAME_RE.test(username)) return null;
+  if (!validUsername(username)) return null;
   const u = await db(env).prepare('SELECT username,password_hash,active,must_change FROM sq_app_users WHERE username=?').bind(username).first();
   return u && Number(u.active) === 1
     ? { username: u.username, passwordHash: u.password_hash, owner: false, mustChange: Number(u.must_change) === 1 }
@@ -118,7 +141,7 @@ export async function login(env, req) {
   // The password is compared even for an unknown username: the answer never says which part was wrong.
   const acceptable = password.length > 0 && byteLength(password) <= 72 && username.length > 0 && username.length <= 128;
   const user = acceptable ? await account(env, username) : null;
-  const passwordOK = await bcrypt.compare(acceptable ? password : randomToken(), user ? user.passwordHash : str(env, 'ADMIN_PASSWORD_HASH'));
+  const passwordOK = await bcrypt.compare(acceptable ? password : randomToken(), user ? user.passwordHash : DUMMY_HASH);
   if (!acceptable || !passwordOK || !user) {
     await audit(env, ip, 'login_failed');
     throw new HttpError(401, GENERIC_ERROR);
@@ -201,6 +224,7 @@ export async function setCredentials(env, req, session) {
   if (unknown.length) throw new HttpError(400, `ไม่รู้จักข้อมูล: ${unknown.join(', ')}`);
   const username = typeof input.username === 'string' ? input.username.trim() : '';
   if (!USERNAME_RE.test(username)) throw new HttpError(400, 'ชื่อผู้ใช้ใช้ได้ A-Z a-z 0-9 . _ @ - ยาว 3–100 ตัว');
+  if (reservedName(username)) throw new HttpError(400, `ใช้ชื่อ ${username} เป็นชื่อผู้ใช้ไม่ได้ (ชื่อสงวนของระบบ)`);
   const owner = str(env, 'ADMIN_USERNAME');
   if (owner && (await secretEqual(username, owner))) {
     throw new HttpError(400, 'บัญชีเจ้าของระบบสงวนไว้ ตั้งได้ที่ค่า ADMIN_USERNAME / ADMIN_PASSWORD_HASH ของเซิร์ฟเวอร์เท่านั้น');

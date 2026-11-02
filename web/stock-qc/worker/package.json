@@ -1,0 +1,23 @@
+{
+  "name": "rrs-stock-qc-worker",
+  "private": true,
+  "version": "0.1.0",
+  "description": "RRS Stock & QC server: Cloudflare Worker with D1 + R2 + session login, recorded like RRS Sale Office (see ../BACKEND_DESIGN.md)",
+  "type": "module",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "sync-engine": "node scripts/sync-engine.mjs",
+    "build:site": "node scripts/build-site.mjs",
+    "hash-password": "node scripts/hash-password.mjs",
+    "test": "node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "bcryptjs": "3.0.3"
+  },
+  "devDependencies": {
+    "miniflare": "4.20260515.0",
+    "wrangler": "4.92.0"
+  }
+}

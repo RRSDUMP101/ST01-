@@ -148,7 +148,7 @@
     },
     forms: {
       async save(ctx, v) {
-        const r = await ctx.exec('item.upsert', v, { done: 'บันทึกสินค้าแล้ว' });
+        const r = await ctx.exec('item.upsert', Object.assign({}, v, { create: ctx.view.sel === '__new' }), { done: 'บันทึกสินค้าแล้ว' });
         if (r.ok) ctx.set({ sel: RRS.util.normCode(v.code) });
       },
       async unit(ctx, v) {

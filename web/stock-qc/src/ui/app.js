@@ -166,7 +166,7 @@
   }
   function isEditing() {
     const el = root.document.activeElement;
-    return !!(el && el.closest && el.closest('#main form, #dlg') && /INPUT|TEXTAREA|SELECT/.test(el.tagName));
+    return !!(el && el.closest && el.closest('#main, #dlg') && /INPUT|TEXTAREA|SELECT/.test(el.tagName) && el.type !== 'button' && el.type !== 'submit');
   }
 
   // ---- server mode: session login like RRS Sale Office (cookie set by the Worker) ---------------------------------
@@ -228,6 +228,24 @@
     });
     if (url.length > 180000) throw new Error('รูปใหญ่เกินไปสำหรับโหมดนี้');
     return { id: 'inline-' + RRS.util.sha256(url).slice(0, 16), name: file.name, url, type: 'image/jpeg' };
+  }
+
+  /** Every commit from the store (audit fingerprint check, backup). */
+  async function loadCommits() {
+    if (app.mode === 'server') {
+      const out = [];
+      let after = 0;
+      for (let i = 0; i < 1000; i++) {
+        const r = await fetch(`${app.api}/commits?after=${after}`, { credentials: 'same-origin' });
+        if (!r.ok) throw new Error('อ่านข้อมูลจากเซิร์ฟเวอร์ไม่ได้ (' + r.status + ')');
+        const body = await r.json();
+        out.push(...(body.commits || []));
+        if (!body.more || !(body.commits || []).length) break;
+        after = out[out.length - 1].seq;
+      }
+      return out;
+    }
+    return app.store ? app.store.load(0) : [];
   }
 
   // ---- toasts and dialogs --------------------------------------------------------------------------------------
@@ -361,6 +379,13 @@
       },
       check: (kind, payload) => (app.ledger ? app.ledger.check({ kind, payload }, { user: user ? user.id : '', via: app.account || '' }) : { ok: false, errors: [] }),
       toast, dialog, confirm: confirmBox, download, api: apiCall, uploadFile, server: app.mode === 'server',
+      account: app.account || '',
+      loadCommits,
+      /** Replace the body of the open dialog (e.g. after loading something). */
+      dialogBody(html) {
+        const box = root.document.querySelector('#dlg .dlg-b .fgrid');
+        if (box) box.innerHTML = String(html);
+      },
       item: (code) => RRS.q.item(state, code),
       userName: (id) => {
         const u = RRS.q.get(state, 'users', id);
@@ -473,12 +498,22 @@
       html = h.empty('หน้านี้แสดงไม่ได้', (e && e.message) || String(e));
     }
     const y = root.scrollY;
+    const focus = root.document.activeElement;
+    const keep = focus && focus.id && main.contains(focus) && /INPUT|TEXTAREA|SELECT/.test(focus.tagName)
+      ? { id: focus.id, start: focus.selectionStart, end: focus.selectionEnd } : null;
     main.innerHTML = String(t`<div class="page" data-page="${page.id}"><header class="page-h"><div><p class="eyebrow">${(PHASES.find((p) => p.n === page.phase) || {}).label || ''}</p><h1>${page.title}</h1>${page.sub ? t`<p class="page-s">${page.sub}</p>` : ''}</div></header>${html}</div>${h.lists.items(ctx.state)}${h.lists.warehouses(ctx.state)}${h.lists.bins(ctx.state)}`);
     if (page.after) {
       try {
         page.after(ctx, main);
       } catch (e) {
         if (root.console) root.console.error(e);
+      }
+    }
+    if (keep) {
+      const el = root.document.getElementById(keep.id);
+      if (el && el !== root.document.activeElement) {
+        el.focus({ preventScroll: true });
+        try { if (keep.start != null) el.setSelectionRange(keep.start, keep.end); } catch (e) { /* not a text field */ }
       }
     }
     if (Math.abs(root.scrollY - y) > 2) root.scrollTo(0, y);
@@ -633,13 +668,24 @@
       }
       if (el.closest && el.closest('#main form, #dlg')) app.dirty = true;
       const act = el.dataset && el.dataset.act;
-      if (!act || !(el.tagName === 'SELECT' || el.tagName === 'INPUT')) return;
+      if (!act || !(el.tagName === 'SELECT' || el.tagName === 'INPUT') || el.hasAttribute('data-live')) return;
       const page = RRS.ui.pages[app.page];
       const fn = page && page.actions[act];
       if (fn) await fn(makeCtx(page.id), el, ev);
     });
+    let liveTimer = null;
     doc.addEventListener('input', (ev) => {
-      if (ev.target.closest && ev.target.closest('#main form, #dlg')) app.dirty = true;
+      const el = ev.target;
+      if (el.matches && el.matches('[data-live][data-act]')) {
+        clearTimeout(liveTimer);
+        liveTimer = setTimeout(async () => {
+          const page = RRS.ui.pages[app.page];
+          const fn = page && page.actions[el.dataset.act];
+          if (fn) await fn(makeCtx(page.id), el, ev);
+        }, 250);
+        return;
+      }
+      if (el.closest && el.closest('#main form, #dlg')) app.dirty = true;
     });
     doc.addEventListener('submit', async (ev) => {
       const form = ev.target;

@@ -9,17 +9,23 @@
  *  - codes resolve only by item code / Express code / count code (tx.item), never by name; a row that does not resolve
  *    is kept with code '' and reported. Express warehouse -> RRS warehouse by warehouses.expressCode, else the same code,
  *    else settings.express.defaultWarehouse (each row records how: whBy).
- *  - the difference is taken AT THE SNAPSHOT: RRS qty at snapshot = qty now − movements recorded after the snapshot.
+ *  - the difference is taken AT THE SNAPSHOT: RRS qty at snapshot = qty now − movements recorded after the snapshot
+ *    (stock in transit between two warehouses is in neither; a move between bins of one warehouse stays in it).
  *    An adjustment (only when settings.ownership.qty === 'Express') posts that difference, so everything recorded after
  *    the file was made is kept. A file older than the newest closed batch needs confirmOld:true; a row whose stock was
- *    re-based after the snapshot by a count or another Express adjustment cannot be adjusted from this file at all.
+ *    re-based after the snapshot – by another count/Express AJ, or by an approved count made after it (also one
+ *    without a difference) – cannot be adjusted from this file at all.
+ *  - pendingDocs of a row: documents that were in RRS at the snapshot (by posting time) and are not keyed in Express.
  *
  * Counts are sessions per warehouse (+ bins; none = whole warehouse) in the place the stock really is:
  *  - count.enter stores the system qty at that location at entry time; a big difference needs a second count by a
- *    different person; two people with different values stay DUPLICATE until a further count agrees with one of them
- *  - count.approve (a person who counted nothing in the session) needs a reason for every difference and posts ONE AJ
- *    in the session's warehouse; movements after a line was counted are kept (timestamp rule) and must be acknowledged
- *  - mode 'freeze': while the session is OPEN or SUBMITTED no document line may touch its warehouse/bins (COUNT_FREEZE)
+ *    different person; two counts agree when they find the same difference from the system at their own time (stock
+ *    may move between them); disagreeing counts stay DUPLICATE until a further count agrees with one of them
+ *  - count.approve (a person who neither counted nor submitted the session) needs a reason for every difference and
+ *    posts ONE AJ in the session's warehouse; movements after a line was counted are kept (timestamp rule) and must be
+ *    acknowledged (ack), as must a line counted above the record where QC_HOLD/QUARANTINE/REWORK stock lies
+ *  - mode 'freeze': while the session is OPEN or SUBMITTED no document line may touch its warehouse/bins and no
+ *    transfer may be received into them (COUNT_FREEZE)
  *
  * Read helpers for screens: RRS.reconcile.{rrsQtyAt, reconcile, pendingExpress, countView, frozenBy}.
  */
@@ -40,7 +46,7 @@
       ['rows', 'json', 'แถวในไฟล์ {row, fileRow, rawCode, rawWh, code (ว่าง = ไม่รู้จักรหัส), wh, whBy expressCode/code/default, qty, unit, base (หน่วยหลัก)}'],
       ['unknownRows', 'number', 'จำนวนแถวที่ไม่รู้จักรหัส'],
       ['olderThanLatest', 'bool', 'เก่ากว่ารอบที่ปิดล่าสุด (ตอนนำเข้า)'],
-      ['resolutions', 'json', 'การตัดสินผลต่างรายบรรทัด {key, code, wh, row, action adjust/explain, reason, bin, lot, express, rrsAtSnapshot, qty, docNo, by, at, cancelledBy, cancelledAt}'],
+      ['resolutions', 'json', 'การตัดสินผลต่างรายบรรทัด {key, code, wh, row, action adjust/explain, reason, bin, lot, express, rrsAtSnapshot, qty, pendingDocs (เอกสารที่ยังไม่คีย์ ณ เวลาไฟล์), confirmOld (ยืนยันใช้ไฟล์เก่า), docNo, by, at, cancelledBy, cancelledAt}'],
       ['closedBy', 'text', 'ผู้ปิดรอบ'], ['closedAt', 'datetime', 'ปิดรอบเมื่อ'], ['closeTotals', 'json', 'สรุปผลต่างตอนปิดรอบ'],
       ['discardedBy', 'text', 'ผู้ยกเลิกรอบ'], ['discardedAt', 'datetime', 'ยกเลิกรอบเมื่อ'], ['discardReason', 'text', 'เหตุผลยกเลิกรอบ']],
   });
@@ -50,11 +56,11 @@
     fields: [['id', 'text', 'รหัสรอบนับ (CT-00001)'], ['wh', 'text', 'คลัง'], ['bins', 'list', 'ช่องเก็บที่นับ (ว่าง = ทั้งคลัง)'],
       ['mode', 'enum', 'วิธีคุมการเคลื่อนไหว', 'timestamp = คิดผลต่าง ณ เวลานับ / freeze = หยุดเคลื่อนไหวพื้นที่ที่นับ'],
       ['status', 'enum', 'สถานะ', 'OPEN/SUBMITTED/APPROVED/CANCELLED'], ['note', 'text', 'หมายเหตุ'],
-      ['lines', 'json', 'บรรทัดนับ {key code|bin|lot, code, bin, lot, status, system, counted, countedBy, countedAt, countedSeq (การนับครั้งแรก), recounts[{counted, system, by, at, seq}], final (ผลที่ยอมรับ), diff, adjust, reason, reasonBy, responsible, flags[]}'],
+      ['lines', 'json', 'บรรทัดนับ {key code|bin|lot, code, bin, lot, status, system, counted, countedBy, countedAt, countedSeq (การนับครั้งแรก), recounts[{counted, system, by, at, seq}], final (ผลที่ยอมรับ), diff, adjust, movedQty, heldQty (ของรอตรวจ/กักกันที่ตำแหน่งเดียวกัน), reason, reasonBy, reasonAt, responsible, flags[]}'],
       ['createdBy', 'text', 'ผู้เปิดรอบนับ'], ['createdAt', 'datetime', 'เปิดรอบเมื่อ'],
       ['submittedBy', 'text', 'ผู้ส่งผลนับ'], ['submittedAt', 'datetime', 'ส่งผลนับเมื่อ'],
       ['approvedBy', 'text', 'ผู้อนุมัติผลนับ'], ['approvedAt', 'datetime', 'อนุมัติเมื่อ'], ['approvedSeq', 'number', 'ลำดับ commit ที่อนุมัติ'],
-      ['ack', 'json', 'รับทราบรายการเคลื่อนไหวระหว่างนับ {by, at, lines[]}'], ['docNo', 'text', 'ใบปรับยอด AJ'],
+      ['ack', 'json', 'รับทราบก่อนอนุมัติ {by, at, lines[] (เคลื่อนไหวหลังนับ), held[] (นับเกินที่ตำแหน่งมีของรอตรวจ/กักกัน)}'], ['docNo', 'text', 'ใบปรับยอด AJ'],
       ['cancelledBy', 'text', 'ผู้ยกเลิก'], ['cancelledAt', 'datetime', 'ยกเลิกเมื่อ'], ['cancelReason', 'text', 'เหตุผลยกเลิก'],
       ['docCancelled', 'json', 'ใบ AJ ของรอบนี้ถูกยกเลิก {docNo, by, at, reason}']],
   });
@@ -65,7 +71,8 @@
   const COUNT_STATUS = { OPEN: 'กำลังนับ', SUBMITTED: 'ส่งผลนับแล้ว รออนุมัติ', APPROVED: 'อนุมัติแล้ว', CANCELLED: 'ยกเลิก' };
   const COUNT_MODE = { timestamp: 'คิดผลต่าง ณ เวลานับ (เคลื่อนไหวต่อได้)', freeze: 'หยุดเคลื่อนไหวพื้นที่ที่นับชั่วคราว' };
   const FLAG = { RECOUNT: 'ต่างเกินเกณฑ์ – ต้องให้อีกคนนับซ้ำ', DUPLICATE: 'ผลนับต่างกันระหว่างผู้นับ – ต้องนับซ้ำ',
-    RECOUNTED: 'ยืนยันด้วยการนับซ้ำ', MOVED_DURING_COUNT: 'มีรายการเคลื่อนไหวหลังนับ' };
+    RECOUNTED: 'ยืนยันด้วยการนับซ้ำ', MOVED_DURING_COUNT: 'มีรายการเคลื่อนไหวหลังนับ',
+    HELD_STOCK: 'นับได้มากกว่าระบบ ขณะที่ตำแหน่งนี้มีของรอตรวจ/กักกัน/รอแก้ไข – ตรวจว่าไม่ได้นับรวม' };
   const POSTED = ['POSTED', 'IN_TRANSIT', 'RECEIVED'];
   const LIVE_COUNT = ['OPEN', 'SUBMITTED'];
   const MAX_ROW_BYTES = 180000; // one row must stay well inside one commit (< 200 KB JSON)
@@ -133,18 +140,42 @@
   }
 
   // ---- RRS quantity at a moment ----------------------------------------------------------------------------
-  /** Per code|wh (TRANSIT excluded, all quality statuses): qty now and the net of movements after `atMs`. */
+  /**
+   * Warehouse of stock "in transit" (TRANSIT, bin = transfer docNo) for a code: a transfer between bins of ONE warehouse
+   * never leaves that warehouse (Express has no bins), so its in-transit stock still counts there. A transfer between
+   * two warehouses is in neither until received ('' = leave it out).
+   */
+  function transitHome(read) {
+    const home = {};
+    for (const d of read('documents')) {
+      if (d.type !== 'TR') continue;
+      const per = {};
+      for (const l of d.lines || []) {
+        const wh = l.wh && l.wh === l.toWh ? l.wh : '';
+        per[l.code] = l.code in per && per[l.code] !== wh ? '' : wh;
+      }
+      for (const c in per) if (per[c]) home[d.docNo + '|' + c] = per[c];
+    }
+    return (r) => home[r.bin + '|' + r.code] || '';
+  }
+
+  /** Per code|wh (all quality statuses; in transit only inside one warehouse): qty now and the net of movements after `atMs`. */
   function qtyIndex(read, atMs) {
     const now = {};
     const after = {};
+    const homeOf = transitHome(read);
+    const whOf = (r) => (r.wh === TRANSIT ? homeOf(r) : r.wh);
     for (const b of read('balances')) {
-      if (b.wh === TRANSIT) continue;
-      const k = b.code + '|' + b.wh;
+      const wh = whOf(b);
+      if (!wh) continue;
+      const k = b.code + '|' + wh;
       now[k] = (now[k] || 0) + b.qty;
     }
     for (const m of read('movements')) {
-      if (m.wh === TRANSIT || !(ms(m.at) > atMs)) continue;
-      const k = m.code + '|' + m.wh;
+      if (!(ms(m.at) > atMs)) continue;
+      const wh = whOf(m);
+      if (!wh) continue;
+      const k = m.code + '|' + wh;
       after[k] = (after[k] || 0) + m.qty;
     }
     return {
@@ -155,13 +186,16 @@
   }
 
   /**
-   * RRS quantity of `code` in warehouse `wh` at `atIso`: today's balance over all statuses (in-transit stock is not in
-   * any warehouse) minus every movement recorded after `atIso`.
+   * RRS quantity of `code` in warehouse `wh` at `atIso`: today's balance over all statuses (stock in transit between two
+   * warehouses is in neither; a move between bins of one warehouse stays in it) minus every movement recorded after
+   * `atIso`. null when `atIso` is not a time (never today's quantity in disguise).
    */
   rec.rrsQtyAt = function rrsQtyAt(state, code, wh, atIso) {
+    const at = ms(atIso);
+    if (isNaN(at)) return null;
     const it = RRS.q.item(state, code);
     const id = it ? it.id : util.normCode(code);
-    return qtyIndex(stateReader(state), ms(atIso)).at(id + '|' + util.normCode(wh));
+    return qtyIndex(stateReader(state), at).at(id + '|' + util.normCode(wh));
   };
 
   // ---- Express reconciliation rows -------------------------------------------------------------------------
@@ -182,7 +216,6 @@
 
   function buildReconcile(read, batch) {
     const snapMs = ms(batch.snapshotAt);
-    const snapDate = util.bkkDate(batch.snapshotAt);
     const idx = qtyIndex(read, snapMs);
     const items = {};
     for (const it of read('items')) items[it.id] = it;
@@ -202,21 +235,32 @@
       e.rows.push(r.row);
       if (e.rawCodes.indexOf(r.rawCode) < 0) e.rawCodes.push(r.rawCode);
     }
-    // documents not keyed in Express yet (dated on or before the snapshot) and stock re-based after the snapshot
+    // Documents that explain a difference: in RRS at the snapshot (posted at or before it, not cancelled before it – the
+    // quantity at the snapshot is taken by posting time, not by document date) and not keyed in Express (WAIT).
+    // Stock re-based after the snapshot: another count/Express AJ posted after it, or an approved count whose accepted
+    // count of the code in this warehouse was made after it (also a count without a difference verified the stock).
     const pend = {};
     const stale = {};
     const add = (map, k, no) => {
       (map[k] || (map[k] = [])).indexOf(no) < 0 && map[k].push(no);
     };
+    const inRrsAtSnap = (d) => ms(d.postedAt) <= snapMs
+      && (POSTED.indexOf(d.status) >= 0 || (d.status === 'CANCELLED' && ms(d.cancelledAt) > snapMs));
     for (const d of read('documents')) {
-      if (POSTED.indexOf(d.status) < 0) continue;
       const lines = d.lines || [];
-      if (d.expressStatus === 'WAIT' && d.date <= snapDate) {
+      if (d.expressStatus === 'WAIT' && inRrsAtSnap(d)) {
         for (const l of lines) for (const w of [l.wh, l.toWh]) if (w) add(pend, l.code + '|' + w, d.docNo);
       }
+      if (POSTED.indexOf(d.status) < 0) continue;
       const src = String(d.source || '');
       if ((src.indexOf('count:') === 0 || src.indexOf('express:') === 0) && src !== 'express:' + batch.id && ms(d.postedAt) > snapMs) {
         for (const l of lines) if (l.wh) add(stale, l.code + '|' + l.wh, d.docNo);
+      }
+    }
+    for (const s of read('count_sessions')) {
+      if (s.status !== 'APPROVED' || s.docCancelled) continue;
+      for (const l of s.lines || []) {
+        if (ms((l.final && l.final.at) || l.countedAt) > snapMs) add(stale, l.code + '|' + s.wh, s.id);
       }
     }
     const keys = Object.keys(exp);
@@ -445,7 +489,7 @@
           }
           if (row.diff === 0) return tx.error('NOTHING', `บรรทัด ${n}: ${row.code} ไม่มีผลต่าง`, where);
           if (row.staleBy.length) {
-            return tx.error('STALE_ROW', `บรรทัด ${n}: ${row.code} คลัง ${row.wh} ถูกปรับยอดหลังเวลาของไฟล์แล้ว (${row.staleBy.join(', ')}) – ไฟล์นี้ล้าสมัยสำหรับรายการนี้ ใช้ไฟล์ใหม่กว่า`, where);
+            return tx.error('STALE_ROW', `บรรทัด ${n}: ${row.code} คลัง ${row.wh} ถูกตรวจนับ/ปรับยอดหลังเวลาของไฟล์แล้ว (${row.staleBy.join(', ')}) – ไฟล์นี้ล้าสมัยสำหรับรายการนี้ ใช้ไฟล์ใหม่กว่า`, where);
           }
           if (r.olderThanLatest && p.confirmOld !== true) {
             return tx.error('OLD_SNAPSHOT', `บรรทัด ${n}: ไฟล์ของรอบ ${b.id} เก่ากว่ารอบที่ปิดล่าสุด – ยืนยัน (confirmOld) ก่อนปรับยอดจากไฟล์เก่า`, where);
@@ -455,9 +499,15 @@
         entries.push({ key: row.key, code: row.code, wh: row.wh, row: row.status === 'UNKNOWN_CODE' ? row.rows[0] : '', status: row.status,
           action, reason, bin: action === 'adjust' ? util.normCode(raw.bin) : '', lot: action === 'adjust' ? util.trim(raw.lot) : '',
           express: row.express, rrsAtSnapshot: row.rrsAtSnapshot, rrsNow: row.rrsNow, qty: action === 'adjust' ? row.diff : 0,
+          pendingDocs: row.pendingDocs.slice(), confirmOld: action === 'adjust' && r.olderThanLatest,
           docNo: '', by: tx.userId, at: tx.now, cancelledBy: '', cancelledAt: '' });
       });
       if (!tx.ok) return;
+      for (const a of adjusts) {
+        if (a.row.pendingDocs.length) {
+          tx.warn(`${a.row.code} คลัง ${a.row.wh}: มีเอกสารที่ยังไม่คีย์ Express ณ เวลาของไฟล์ (${a.row.pendingDocs.join(', ')}) – ปรับตามไฟล์แล้ว ห้ามคีย์เอกสารเหล่านี้ซ้ำใน Express โดยไม่ตรวจ`);
+        }
+      }
       let docNo = '';
       if (adjusts.length) {
         if (!tx.different(b.importedBy, 'ผู้ปรับยอดตามไฟล์ Express (ผู้นำเข้าไฟล์ปรับเองไม่ได้)')) return;
@@ -523,11 +573,15 @@
     return [{ counted: l.counted, system: l.system, by: l.countedBy, at: l.countedAt, seq: l.countedSeq }].concat(l.recounts || []);
   }
 
+  /** What one count says about the record: counted − system qty AT THAT COUNT'S TIME. Stock may move between a count and
+   *  its recount (timestamp mode), so two counts agree when they find the same difference, not the same raw number. */
+  const impliedDiff = (e) => util.round(e.counted - e.system);
+
   /**
    * Re-evaluates a line after an entry:
    *  one count            -> accepted, or RECOUNT when |counted − system| exceeds the limit
-   *  two or more counts   -> accepted (RECOUNTED) when the latest agrees with an earlier count by another person,
-   *                          else DUPLICATE until a further count agrees with one of them
+   *  two or more counts   -> accepted (RECOUNTED) when the latest finds the same difference as an earlier count by
+   *                          another person, else DUPLICATE until a further count agrees with one of them
    */
   function evalLine(l, pol) {
     const all = entriesOf(l);
@@ -535,10 +589,10 @@
     let final = null;
     let flags;
     if (all.length === 1) {
-      const over = Math.abs(util.round(last.counted - last.system)) > recountLimit(last.system, pol);
+      const over = Math.abs(impliedDiff(last)) > recountLimit(last.system, pol);
       flags = over ? ['RECOUNT'] : [];
       final = over ? null : last;
-    } else if (all.slice(0, -1).some((e) => util.round(e.counted) === util.round(last.counted))) {
+    } else if (all.slice(0, -1).some((e) => impliedDiff(e) === impliedDiff(last))) {
       flags = ['RECOUNTED'];
       final = last;
     } else {
@@ -564,9 +618,12 @@
       (moves[k] || (moves[k] = [])).push(m);
     }
     const bal = {};
+    const held = {}; // QC_HOLD / QUARANTINE / REWORK at the same code|bin|lot: kept apart, must not be counted as usable
     for (const b of read('balances')) {
-      if (b.wh !== s.wh || b.status !== STATUS.AVAILABLE) continue;
-      bal[lineKey(b.code, b.bin, b.lot)] = b;
+      if (b.wh !== s.wh) continue;
+      const k = lineKey(b.code, b.bin, b.lot);
+      if (b.status === STATUS.AVAILABLE) bal[k] = b;
+      else held[k] = util.round((held[k] || 0) + b.qty);
     }
     const items = {};
     for (const it of read('items')) items[it.id] = it;
@@ -576,12 +633,15 @@
       const flags = (l.flags || []).slice();
       if (moved && flags.indexOf('MOVED_DURING_COUNT') < 0) flags.push('MOVED_DURING_COUNT');
       const adjust = l.final ? util.round(l.final.counted - l.final.system) : null;
+      const heldQty = held[l.key] || 0;
+      // found more than the record where tagged QC stock lies: probably counted twice – the approver must check
+      if (s.status !== 'APPROVED' && adjust > 0 && heldQty > 0 && flags.indexOf('HELD_STOCK') < 0) flags.push('HELD_STOCK');
       return Object.assign({}, l, {
         name: (items[l.code] || {}).name || l.name || '', unit: (items[l.code] || {}).baseUnit || '',
         counters: entriesOf(l).map((e) => e.by), adjust: l.adjust != null && s.status === 'APPROVED' ? l.adjust : adjust,
-        currentSystem: bal[l.key] ? util.round(bal[l.key].qty) : 0, movedCount: after.length,
-        movedQty: util.round(util.sum(after, (m) => m.qty)), moved, flags, pending: isPending(l),
-        needsReason: !!adjust && !l.reason,
+        currentSystem: bal[l.key] ? util.round(bal[l.key].qty) : 0, heldQty, movedCount: after.length,
+        movedQty: util.round(util.sum(after, (m) => m.qty)), moved, held: flags.indexOf('HELD_STOCK') >= 0, flags,
+        pending: isPending(l), needsReason: !!adjust && !l.reason,
       });
     });
     const counted = {};
@@ -592,15 +652,16 @@
     const aj = lines.filter((l) => l.adjust).map((l) => ({ key: l.key, code: l.code, wh: s.wh, bin: l.bin, lot: l.lot, qty: l.adjust }));
     const pending = lines.filter((l) => l.pending).length;
     const movedN = lines.filter((l) => l.moved).length;
+    const heldN = lines.filter((l) => l.held).length;
     return {
       session: Object.assign({}, s, { lines: undefined }), lines, aj, uncounted,
-      totals: { lines: lines.length, pending, moved: movedN, adjustLines: aj.length,
+      totals: { lines: lines.length, pending, moved: movedN, held: heldN, adjustLines: aj.length,
         plus: util.round(util.sum(aj.filter((a) => a.qty > 0), (a) => a.qty)),
         minus: util.round(util.sum(aj.filter((a) => a.qty < 0), (a) => a.qty)),
         needsReason: lines.filter((l) => l.needsReason).length, uncounted: uncounted.length },
       canSubmit: s.status === 'OPEN' && lines.length > 0 && pending === 0,
       canApprove: s.status === 'SUBMITTED' && pending === 0,
-      needsAck: movedN > 0,
+      needsAck: movedN > 0 || heldN > 0,
     };
   }
 
@@ -761,6 +822,8 @@
       if (!s) return;
       if (!needWh(tx, 'count.approve', s.wh)) return;
       for (const c of countersOf(s)) if (!tx.different(c, 'ผู้อนุมัติผลนับ')) return; // the approver counted nothing here
+      // ... and did not send it for approval (submitting is the request; nobody approves their own request)
+      if (!tx.different(s.submittedBy, 'ผู้อนุมัติผลนับ (ผู้ส่งผลนับรอบนี้อนุมัติเองไม่ได้)')) return;
       const v = buildCountView(txReader(tx), s);
       if (v.totals.pending) return tx.error('NEEDS_RECOUNT', `ยังมี ${v.totals.pending} บรรทัดที่ต้องนับซ้ำ`);
       const reasons = p.reasons && typeof p.reasons === 'object' ? p.reasons : {};
@@ -769,13 +832,15 @@
       for (const k in reasons) if (!keys[k]) tx.error('BAD_KEY', `ไม่มีบรรทัด ${k} ในรอบนับ ${s.id}`, { field: 'reasons' });
       if (!tx.ok) return;
       const moved = [];
+      const held = [];
       const lines = v.lines.map((l, i) => {
         const r = reasons[l.key];
         const reason = util.trim(r && typeof r === 'object' ? r.reason : r);
         const responsible = util.trim(r && typeof r === 'object' ? r.responsible : '');
         if (l.adjust && !reason) tx.error('REASON_REQUIRED', `${l.code} ${locText(s.wh, l.bin)}${l.lot ? ' ล็อต ' + l.lot : ''}: ยอดต่าง ${l.adjust} ต้องระบุเหตุผล`, { line: i + 1, field: l.key });
         if (l.moved) moved.push(l.key);
-        const stored = Object.assign({}, s.lines[i], { adjust: l.adjust || 0, flags: l.flags, movedQty: l.movedQty });
+        if (l.held) held.push(l.key);
+        const stored = Object.assign({}, s.lines[i], { adjust: l.adjust || 0, flags: l.flags, movedQty: l.movedQty, heldQty: l.heldQty });
         if (reason) Object.assign(stored, { reason, reasonBy: tx.userId, reasonAt: tx.now, responsible: responsible || tx.userId });
         return stored;
       });
@@ -783,8 +848,11 @@
       if (moved.length && p.ack !== true) {
         return tx.error('MOVED_DURING_COUNT', `${moved.length} บรรทัดมีรายการเคลื่อนไหวหลังนับ (${moved.slice(0, 10).join(', ')}) – ระบบจะปรับเฉพาะผลต่าง ณ เวลานับ (ยอดที่เคลื่อนไหวหลังนับคงไว้) ตรวจแล้วยืนยันรับทราบ (ack)`);
       }
+      if (held.length && p.ack !== true) {
+        return tx.error('HELD_STOCK', `${held.length} บรรทัดนับได้มากกว่าระบบ ขณะที่ตำแหน่งเดียวกันมีของรอตรวจ/กักกัน/รอแก้ไข (${held.slice(0, 10).join(', ')}) – ตรวจว่าไม่ได้นับของเหล่านั้นรวมเป็นของใช้ได้ แล้วยืนยันรับทราบ (ack)`);
+      }
       const approved = Object.assign({}, s, { status: 'APPROVED', lines, approvedBy: tx.userId, approvedAt: tx.now, approvedSeq: tx.seq,
-        ack: moved.length ? { by: tx.userId, at: tx.now, lines: moved } : null });
+        ack: moved.length || held.length ? { by: tx.userId, at: tx.now, lines: moved, held } : null });
       tx.put('count_sessions', s.id, approved); // approved first: the freeze no longer holds while its own AJ posts
       const adj = lines.map((l, i) => ({ l, i })).filter((x) => x.l.adjust);
       if (adj.length) {
@@ -794,7 +862,7 @@
         if (!posted) return;
         tx.put('count_sessions', s.id, Object.assign({}, approved, { docNo: posted.docNo }));
       }
-      tx.result = { id: s.id, docNo: tx.result.docNo || '', adjusted: adj.length, moved };
+      tx.result = { id: s.id, docNo: tx.result.docNo || '', adjusted: adj.length, moved, held };
       tx.summary = `อนุมัติผลนับ ${s.id}${adj.length ? ' ปรับยอด ' + tx.result.docNo + ' ' + adj.length + ' บรรทัด' : ' ไม่มีผลต่าง'}`;
     },
   });
@@ -816,24 +884,49 @@
   });
 
   // ---- hooks into document posting ---------------------------------------------------------------------------
-  function freezeError(tx, s, line, n, verb) {
-    tx.error('COUNT_FREEZE', `บรรทัด ${n}: ${line.code} ที่ ${locText(s.wh, s.bins.length ? (line.bin || line.toBin) : '')} อยู่ระหว่างตรวจนับ ${s.id} (หยุดเคลื่อนไหวชั่วคราว) – ${verb}ได้หลังอนุมัติหรือยกเลิกรอบนับ`, { line: n });
+  /** COUNT_FREEZE naming the place that is frozen (wh/bin of the line that touches it). */
+  function freezeError(tx, s, code, wh, bin, n, verb, extra) {
+    tx.error('COUNT_FREEZE', `บรรทัด ${n}: ${code} ที่ ${locText(wh, bin)} อยู่ระหว่างตรวจนับ ${s.id} (หยุดเคลื่อนไหวชั่วคราว) – ${verb}ได้หลังอนุมัติหรือยกเลิกรอบนับ${extra || ''}`, { line: n });
   }
+  const liveFreezes = (tx) => tx.all('count_sessions', (s) => s.mode === 'freeze' && LIVE_COUNT.indexOf(s.status) >= 0);
 
   // freeze: refuse any document line that touches a warehouse/bin under an OPEN or SUBMITTED freeze session
   RRS.hooks.on('doc.lineCheck', function (tx, doc, line) {
-    const sessions = tx.all('count_sessions', (s) => s.mode === 'freeze' && LIVE_COUNT.indexOf(s.status) >= 0);
+    const sessions = liveFreezes(tx);
     if (!sessions.length) return;
-    const s = freezeAt(sessions, line.wh, line.bin, doc.source) || (line.toWh ? freezeAt(sessions, line.toWh, line.toBin, doc.source) : null);
-    if (s) freezeError(tx, s, line, line.line, 'บันทึก');
+    const from = freezeAt(sessions, line.wh, line.bin, doc.source);
+    if (from) return freezeError(tx, from, line.code, line.wh, line.bin, line.line, 'บันทึก');
+    const to = line.toWh ? freezeAt(sessions, line.toWh, line.toBin, doc.source) : null;
+    if (to) freezeError(tx, to, line.code, line.toWh, line.toBin, line.line, 'บันทึก');
   });
+
+  // transfer.receive moves stock into the destination without the document line checks (doc.lineCheck), so a
+  // transfer posted before the freeze could be received into a frozen bin. The receipt is refused here: after the
+  // command has run, every movement it wrote outside TRANSIT is checked against the live freeze sessions (same commit,
+  // so the error leaves nothing behind). Receiving into another, unfrozen bin (toBin) still works.
+  const receive = commands.defs['transfer.receive'];
+  if (receive && !receive.countFreeze) {
+    const inner = receive.prepare;
+    receive.prepare = function (tx, p) {
+      const out = inner.call(this, tx, p);
+      if (!tx.ok) return out;
+      const sessions = liveFreezes(tx);
+      if (!sessions.length) return out;
+      for (const m of tx.all('movements', (x) => x.seq === tx.seq && x.wh !== TRANSIT)) {
+        const s = freezeAt(sessions, m.wh, m.bin, '');
+        if (s) return freezeError(tx, s, m.code, m.wh, m.bin, m.line, 'รับโอน', ' หรือรับเข้าช่องอื่นที่ไม่ได้นับ');
+      }
+      return out;
+    };
+    receive.countFreeze = true;
+  }
 
   RRS.hooks.on('doc.cancelled', function (tx, doc, lines) {
     // cancelling writes reversing movements in the same places – also refused while those places are frozen
-    const sessions = tx.all('count_sessions', (s) => s.mode === 'freeze' && LIVE_COUNT.indexOf(s.status) >= 0);
+    const sessions = liveFreezes(tx);
     for (const l of sessions.length ? lines || [] : []) {
       const s = freezeAt(sessions, l.wh, l.bin, doc.source);
-      if (s) return freezeError(tx, s, l, l.line, 'ยกเลิกเอกสาร');
+      if (s) return freezeError(tx, s, l.code, l.wh, l.bin, l.line, 'ยกเลิกเอกสาร');
     }
     const src = String(doc.source || '');
     const info = { docNo: doc.docNo, by: tx.userId, at: tx.now, reason: doc.cancelReason || '' };

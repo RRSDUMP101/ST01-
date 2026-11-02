@@ -33,6 +33,12 @@
   /** PO line still to come: ordered − received − cancelled (base unit). */
   const outstanding = (l) => RRS.util.round((Number(l.base != null ? l.base : l.qty) || 0) - (Number(l.received) || 0) - (Number(l.cancelled) || 0));
   function latePoLines(state, today) {
+    // the purchasing module's own rule when it is loaded (open PO, something outstanding, due date passed)
+    if (RRS.purchasing && typeof RRS.purchasing.outstanding === 'function') {
+      try {
+        return RRS.purchasing.outstanding(state, { today }).filter((l) => l.late);
+      } catch (e) { /* fall back to the shared-table rule below */ }
+    }
     const out = [];
     for (const po of rows(state, 'pos', (p) => p.status === 'ISSUED' || p.status === 'PARTIAL')) {
       for (const l of po.lines || []) if (l.dueDate && l.dueDate < today && outstanding(l) > 0) out.push({ po, line: l });
@@ -127,7 +133,9 @@
       add(rows(s, 'count_sessions', (c) => c.status === 'OPEN' && can('count.enter', c.wh)).length, 'กรอกผลตรวจนับ', 'รอบนับที่เปิดอยู่', pCount);
     }
     if (can('count.approve') && has(s, 'count_sessions')) {
-      add(rows(s, 'count_sessions', (c) => c.status === 'SUBMITTED' && c.createdBy !== me).length, 'อนุมัติผลตรวจนับ', 'ส่งผลนับแล้ว รออนุมัติปรับยอด', pCount);
+      // separation of duties: whoever counted a line in the session cannot approve it
+      const countedBy = (c) => (c.lines || []).some((l) => l.countedBy === me || (l.recounts || []).some((r) => r.by === me));
+      add(rows(s, 'count_sessions', (c) => c.status === 'SUBMITTED' && !countedBy(c)).length, 'อนุมัติผลตรวจนับ', 'ส่งผลนับแล้ว รออนุมัติปรับยอด (ผู้ที่นับในรอบนั้นอนุมัติเองไม่ได้)', pCount);
     }
     const pExpress = findPage(['express', 'reconcile'], /Express/);
     if ((can('express.import') || can('express.reconcile')) && has(s, 'express_batches')) {
@@ -147,7 +155,10 @@
       add(holdLocs, 'ตรวจของที่รอตรวจ', 'ของสถานะรอตรวจยังใช้/เบิกไม่ได้จนกว่าจะผ่าน QC', pQc);
     }
     if (can('qc.release') && has(s, 'inspections')) {
-      add(rows(s, 'inspections', (i) => i.status === 'OPEN' && i.result === 'PASS' && i.inspector !== me).length, 'ปล่อยผ่านของที่ตรวจผ่าน', 'ผลตรวจผ่านแล้ว รอหัวหน้า QC ปล่อยให้ใช้ได้', pQc);
+      // the quality module decides who may release (not the inspector, not who posted the receipt, certificate checked)
+      const check = RRS.quality && typeof RRS.quality.releaseCheck === 'function' ? (i) => !RRS.quality.releaseCheck(s, i.id, me).length : (i) => i.inspector !== me;
+      add(rows(s, 'inspections', (i) => i.status === 'OPEN' && i.result === 'PASS' && can('qc.release', i.wh) && check(i)).length,
+        'ปล่อยผ่านของที่ตรวจผ่าน', 'ผลตรวจผ่านแล้ว รอผู้อนุมัติที่ไม่ใช่ผู้ตรวจปล่อยให้ใช้ได้', pQc);
     }
     const pNcr = findPage(['ncrs', 'ncr'], /NCR|ของไม่ได้มาตรฐาน/);
     if (can('ncr.disposition') && has(s, 'ncrs')) add(rows(s, 'ncrs', (n) => n.status === 'OPEN').length, 'ตัดสินของไม่ได้มาตรฐาน (NCR)', 'NCR ที่ยังไม่ตัดสินว่าแก้/คืน/ทิ้ง/ใช้ตามสภาพ', pNcr, null, 'bad');
@@ -204,7 +215,7 @@
     const st = settingsOf(s);
     const decided = rows(s, 'decisions', (d) => d.status === 'decided').length;
     return [
-      { done: !!(st.pilot.groups.length || st.pilot.warehouses.length), label: 'กำหนดขอบเขตทดลองและเวลาตัดยอด', page: 'setup', view: { tab: 'scope' } },
+      { done: !!((st.pilot.groups.length || st.pilot.warehouses.length) && st.cutoffAt), label: 'กำหนดขอบเขตทดลองและเวลาตัดยอด', page: 'setup', view: { tab: 'scope' } },
       { done: rows(s, 'warehouses').length > 0, label: 'เพิ่มคลังและช่องเก็บ', page: 'warehouses' },
       { done: rows(s, 'items').length > 0, label: 'เพิ่มสินค้า (ทีละรายการหรือนำเข้า CSV)', page: 'items' },
       { done: rows(s, 'users').length > 1, label: 'เพิ่มผู้ใช้และบทบาท', page: 'users' },
@@ -238,7 +249,7 @@
       const steps = startSteps(ctx);
       const setupLeft = steps.filter((x) => !x.done).length;
       const start = setupLeft ? h.section('เริ่มต้นใช้งาน (Phase 0)', t`<div class="steps">${steps.map((st, i) => t`<div class="step"><span class="step-n">ขั้นที่ ${i + 1}</span>
-        <span>${h.link(st.label, st.page, st.view)}</span>${st.done ? h.badge('เสร็จแล้ว', 'ok') : h.badge('ยังไม่ทำ', 'muted')}</div>`)}</div>`,
+        <span>${h.link(st.label, st.page, st.view)}</span><span>${st.done ? h.badge('เสร็จแล้ว', 'ok') : h.badge('ยังไม่ทำ', 'muted')}</span></div>`)}</div>`,
       { sub: 'ทำตามลำดับนี้ก่อนบันทึกรับ–จ่ายจริง – ระบบจะซ่อนกล่องนี้เมื่อครบทุกขั้น' }) : '';
 
       const work = myWork(ctx);

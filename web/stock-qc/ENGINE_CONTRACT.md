@@ -83,3 +83,23 @@ Document types added by later modules: `RV` คืนสินค้าผู้
 `SC` ตัดทิ้ง/ของเสีย (P5, dir −1, outStatuses AVAILABLE/QUARANTINE/REWORK), `DL` ส่งมอบลูกค้า (P5, dir −1, AVAILABLE only),
 `QS` เปลี่ยนสถานะคุณภาพ (P5, written by the quality module with paired `tx.move` calls; never posted by hand).
 None of these has a confirmed Express document type yet (`express: false`).
+
+## Changes after the first build round (use these instead of workarounds)
+
+- `RRS.inventory.post(tx, doc, {perm})` – warehouse checks of that posting use `perm` (e.g. `count.approve`,
+  `ncr.disposition`, `express.reconcile`) instead of the document type's own permission. No more Proxy / `tx.can` overrides.
+- hook `'transfer.receiveLine'(tx, doc, line, info)` runs for every transfer line being received; `info = {qty, toWh, toBin,
+  status, remark}` – call `tx.error` to refuse (count freeze) or set `info.status` (a lot quarantined in transit lands in
+  QUARANTINE).
+- `RRS.inventory.newDocRow(tx, payload, type)` and `RRS.inventory.draftLines(payload)` are exported; document rows also keep
+  `supplier` and `supplierDoc`; lines keep `replace` (RV replacement request).
+- `RRS.inventory.manualType(type)` – types with `manual: false` in `defineType` or `dir: 'S'` (QS) cannot be drafted or
+  posted by hand (error BAD_TYPE).
+- the reservation check in posting groups lines by code + warehouse + job + reservation, so one document may serve several jobs.
+- `RRS.auth.PERM_LABELS` has Thai names for every permission (NO_PERMISSION messages use them).
+- master data: `create: true` on item/warehouse/bin/user/bom upserts refuses an existing key (DUPLICATE) instead of
+  overwriting; codes may not contain `|` or control characters; bin codes, user ids and BOM revisions no spaces; lot numbers no `|`.
+- extra shared fields recorded by the modules: `reorder_rules` (code|wh: min, max, leadDays, supplier, coverDays, usageDays,
+  active, perm `reorder.manage`), PO line `replaced, overAllowed, overApprovals, originalDue, prLine, amount`, PR
+  `submittedBy/At, restCancelled, convertedBy/At, log`; inspections status `VOID` with `voidedBy/At, voidReason`,
+  `releasedQty, releases[]`; lots `poLine, history`; ncrs `stockHeld, stage, reinspections[], history`; command `ncr.open`.

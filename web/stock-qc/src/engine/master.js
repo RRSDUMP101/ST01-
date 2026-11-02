@@ -151,11 +151,26 @@
     },
   });
 
+  /** Codes are joined with '|' into row keys, so they may not contain '|' or control characters. */
+  const BAD_CODE = /[|\u0000-\u001f\u007f]/;
+  function codeOk(tx, code, what, where) {
+    if (BAD_CODE.test(code)) return tx.error('BAD_CODE', `${what} "${code}" มีอักขระที่ใช้ไม่ได้ (| หรืออักขระควบคุม)`, where);
+    return true;
+  }
+  /** payload.create === true: adding a new record – refuse when the key exists instead of overwriting it. */
+  function createOnly(tx, p, table, key, label, where) {
+    if (p.create === true && tx.get(table, key)) return tx.error('DUPLICATE', `${label} ${key} มีอยู่แล้ว – เปิดรายการเดิมเพื่อแก้ไขแทน`, where);
+    return true;
+  }
+  RRS.master_codeOk = codeOk;
+
   define('user.upsert', {
     label: 'บันทึกผู้ใช้', perm: 'users.manage',
     prepare(tx, p) {
       const id = util.normCode(p.id);
       if (!id) return tx.error('REQUIRED', 'กรอกรหัสผู้ใช้', { field: 'id' });
+      if (/\s/.test(id) || !codeOk(tx, id, 'รหัสผู้ใช้', { field: 'id' })) return tx.error('BAD_CODE', 'รหัสผู้ใช้ห้ามมีช่องว่างหรือ |', { field: 'id' });
+      if (!createOnly(tx, p, 'users', id, 'ผู้ใช้', { field: 'id' })) return;
       const name = util.trim(p.name);
       if (!name) return tx.error('REQUIRED', 'กรอกชื่อ', { field: 'name' });
       const roles = (p.roles || []).filter((r) => auth.ROLES[r]);
@@ -206,6 +221,7 @@
     if (!code) return tx.error('REQUIRED', 'กรอกรหัสคลัง', Object.assign({ field: 'code' }, where));
     if (code === RRS.TRANSIT) return tx.error('RESERVED', `${RRS.TRANSIT} สงวนไว้สำหรับของระหว่างโอน`, Object.assign({ field: 'code' }, where));
     if (!/^[A-Z0-9][A-Z0-9_-]*$/.test(code)) return tx.error('BAD_CODE', 'รหัสคลังใช้ A-Z 0-9 - _', Object.assign({ field: 'code' }, where));
+    if (!createOnly(tx, p, 'warehouses', code, 'คลัง', Object.assign({ field: 'code' }, where))) return null;
     const name = util.trim(p.name) || code;
     const active = bool(p.active, true);
     const prev = tx.get('warehouses', code);
@@ -220,6 +236,8 @@
     const code = util.normCode(p.code);
     if (!tx.get('warehouses', wh)) return tx.error('NOT_FOUND', `ไม่พบคลัง ${wh}`, Object.assign({ field: 'wh' }, where));
     if (!code) return tx.error('REQUIRED', 'กรอกรหัสช่องเก็บ', Object.assign({ field: 'code' }, where));
+    if (/\s/.test(code) || BAD_CODE.test(code)) return tx.error('BAD_CODE', `รหัสช่องเก็บ "${code}" ห้ามมีช่องว่างหรือ |`, Object.assign({ field: 'code' }, where));
+    if (!createOnly(tx, p, 'bins', wh + '|' + code, 'ช่องเก็บ', Object.assign({ field: 'code' }, where))) return null;
     const active = bool(p.active, true);
     const prev = tx.get('bins', wh + '|' + code);
     if (prev && prev.active !== false && !active && tx.qty({ wh, bin: code }) !== 0) {
@@ -258,6 +276,8 @@
   function upsertItem(tx, p, where) {
     const id = util.normCode(p.id || p.code);
     if (!id) return tx.error('REQUIRED', 'กรอกรหัสสินค้า', Object.assign({ field: 'code' }, where));
+    if (!codeOk(tx, id, 'รหัสสินค้า', Object.assign({ field: 'code' }, where))) return null;
+    if (!createOnly(tx, p, 'items', id, 'สินค้า', Object.assign({ field: 'code' }, where))) return null;
     const name = util.trim(p.name);
     if (!name) return tx.error('REQUIRED', `กรอกชื่อสินค้า ${id}`, Object.assign({ field: 'name' }, where));
     const prev = tx.get('items', id);
@@ -339,7 +359,9 @@
       if (!prod) return tx.error('NOT_FOUND', `ไม่พบสินค้า ${p.product}`, { field: 'product' });
       const rev = util.normCode(p.rev);
       if (!rev) return tx.error('REQUIRED', 'กรอกฉบับ (rev)', { field: 'rev' });
+      if (/\s/.test(rev) || !codeOk(tx, rev, 'ฉบับ', { field: 'rev' })) return tx.error('BAD_CODE', 'ฉบับห้ามมีช่องว่างหรือ |', { field: 'rev' });
       const k = prod.id + '|' + rev;
+      if (!createOnly(tx, p, 'boms', k, 'BOM ฉบับ', { field: 'rev' })) return;
       const prev = tx.get('boms', k);
       if (prev && prev.status !== 'DRAFT') return tx.error('LOCKED', `BOM ${prod.id} ฉบับ ${rev} อนุมัติแล้ว – สร้างฉบับใหม่แทนการแก้`);
       const lines = [];
@@ -396,6 +418,7 @@
     prepare(tx, p) {
       const id = util.trim(p.id);
       const prev = tx.get('kpis', id) || KPI_DEFAULTS.find((k) => k.id === id);
+      if ('label' in p && !util.trim(p.label)) return tx.error('REQUIRED', 'ชื่อตัวชี้วัดว่างไม่ได้', { field: 'label' });
       const label = util.trim(p.label) || (prev && prev.label);
       if (!id || !label) return tx.error('REQUIRED', 'กรอกชื่อตัวชี้วัด');
       const baseline = p.baseline === '' || p.baseline == null ? null : util.num(p.baseline);

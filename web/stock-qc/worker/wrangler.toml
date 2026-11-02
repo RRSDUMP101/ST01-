@@ -1,0 +1,43 @@
+# RRS Stock & QC – Cloudflare Worker (D1 + R2 + session login), recorded the way RRS Sale Office records data.
+# See ../BACKEND_DESIGN.md. STAGING DEFAULTS: every live / scheduler / bridge flag is off and nothing is sent anywhere.
+#
+# The database_id and bucket name below are LOCAL PLACEHOLDERS for `wrangler dev` / tests. Never commit a real id and
+# never point a copy of this file at production D1/R2 or production Sales Office.
+# Secrets (names in .dev.vars.example) are set with `wrangler secret put NAME`, or in .dev.vars (git-ignored) locally.
+# The page in ../dist must be built for server mode first: `npm run build:site` (= RRS_API=/api node ../build.mjs).
+
+name = "rrs-stock-qc"
+main = "src/index.js"
+compatibility_date = "2025-09-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Regenerates src/engine-imports.js from ../src/engine/order.json before `wrangler dev` / `wrangler deploy`.
+[build]
+command = "node scripts/sync-engine.mjs"
+
+[assets]
+directory = "../dist"
+binding = "ASSETS"
+# /api/* always runs the Worker; the page itself also goes through it so it gets the no-framing headers.
+run_worker_first = ["/api/*", "/", "/index.html", "/artifact.html"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "rrs-stock-qc-staging"
+database_id = "00000000-0000-0000-0000-000000000000" # LOCAL PLACEHOLDER – not a real D1 database
+migrations_dir = "migrations"
+
+[[r2_buckets]]
+binding = "BUCKET"
+bucket_name = "rrs-stock-qc-staging" # LOCAL PLACEHOLDER – staging bucket name only
+
+[vars]
+SQ_ENV = "staging"
+# Sales Office connector: off | pull | pull_push. Off by default (decision ค-10: never two connectors per workspace).
+SQ_SALES_BRIDGE = "off"
+# Google Drive backup of commits: off unless "true".
+SQ_DRIVE_BACKUP_ENABLED = "false"
+# A state snapshot goes to R2 every this many commits (fast cold start).
+SQ_SNAPSHOT_EVERY = "500"
+
+# No [triggers] cron yet: the Drive backup and Sales Office sync come in later steps, also off by default.

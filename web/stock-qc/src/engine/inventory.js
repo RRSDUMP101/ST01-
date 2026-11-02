@@ -14,6 +14,8 @@
  *   'doc.check'     (tx, doc, lines)  checks over the whole document
  *   'doc.posted'    (tx, doc, lines)  side effects in the same commit (PO received, reservations used …)
  *   'doc.cancelled' (tx, doc, lines)  undo those side effects
+ *   'transfer.receiveLine' (tx, doc, line, info) a transfer line arriving: refuse with tx.error, or set info.status
+ * RRS.inventory.post(tx, doc, {perm}) checks the warehouses with that permission (e.g. count.approve, ncr.disposition).
  * and RRS.inventory.reservedElsewhere(fn): fn(tx, code, wh, doc, line) -> qty kept for other jobs.
  */
 (function (root) {
@@ -63,6 +65,12 @@
   function typeDef(type) {
     return DOC_TYPES[type] || null;
   }
+  /** Types people may create by hand (QS and types with manual:false are written by their module only). */
+  function manualType(type) {
+    const td = DOC_TYPES[type];
+    return !!td && td.manual !== false && td.dir !== 'S';
+  }
+  inv.manualType = manualType;
   function isOut(td, line) {
     return td.dir === -1 || td.dir === 'T' || (td.dir === 0 && line.base < 0);
   }
@@ -82,7 +90,7 @@
   }
 
   /** Check one line and turn it into the stored form (base-unit quantity, resolved item code …). */
-  function resolveLine(tx, doc, raw, i) {
+  function resolveLine(tx, doc, raw, i, opts) {
     const td = typeDef(doc.type);
     const n = i + 1;
     const where = { line: n };
@@ -102,11 +110,12 @@
       lot: util.trim(raw.lot), status: raw.status && STATUS[raw.status] ? raw.status : '',
       unitCost: isNaN(util.num(raw.unitCost)) ? it.unitCost || 0 : util.num(raw.unitCost), remark: util.trim(raw.remark),
       reservationId: raw.reservationId || '', poNo: raw.poNo || '', poLine: raw.poLine || '', jobNo: raw.jobNo || '',
+      replace: raw.replace === true || raw.replace === 'true',
     };
-    if (!checkLocation(tx, line.wh, line.bin, n, 'wh', td.perm || 'doc.post')) return null;
+    if (!checkLocation(tx, line.wh, line.bin, n, 'wh', (opts && opts.perm) || td.perm || 'doc.post')) return null;
     if (td.dir === 'T') {
       if (!line.toWh) return tx.error('REQUIRED', `บรรทัด ${n}: ระบุคลังปลายทาง`, Object.assign({ field: 'toWh' }, where)) && null;
-      if (!checkLocation(tx, line.toWh, line.toBin, n, 'toWh', 'transfer.receive')) return null;
+      if (!checkLocation(tx, line.toWh, line.toBin, n, 'toWh', (opts && opts.perm) || 'transfer.receive')) return null;
       if (line.toWh === line.wh && line.toBin === line.bin) return tx.error('SAME_PLACE', `บรรทัด ${n}: ต้นทางกับปลายทางเป็นที่เดียวกัน`, where) && null;
     }
     const out = isOut(td, line);
@@ -121,9 +130,10 @@
     }
     if (it.trackLot && it.trackLot !== 'none') {
       if (!line.lot) return tx.error('LOT_REQUIRED', `บรรทัด ${n}: ${it.id} ต้องระบุ${RRS.master.TRACK[it.trackLot]}`, Object.assign({ field: 'lot' }, where)) && null;
-      if (it.trackLot === 'serial' && Math.abs(base) !== 1 && td.dir !== 0) {
+      if (it.trackLot === 'serial' && Math.abs(base) !== 1) {
         return tx.error('SERIAL_QTY', `บรรทัด ${n}: สินค้าติดตาม Serial บันทึกได้ครั้งละ 1 หน่วยต่อบรรทัด`, where) && null;
       }
+      if (/[|\u0000-\u001f]/.test(line.lot)) return tx.error('BAD_LOT', `บรรทัด ${n}: เลขล็อตห้ามมี | หรืออักขระควบคุม`, Object.assign({ field: 'lot' }, where)) && null;
     } else if (line.lot) {
       return tx.error('LOT_NOT_TRACKED', `บรรทัด ${n}: ${it.id} ไม่ได้ตั้งให้ติดตามล็อต – ลบล็อตออก หรือแก้ทะเบียนสินค้า`, Object.assign({ field: 'lot' }, where)) && null;
     }
@@ -173,7 +183,7 @@
       (byLoc[k] || (byLoc[k] = { loc, need: 0, lines: [] })).need += Math.abs(ln.base);
       byLoc[k].lines.push(ln);
       if (ln.status === STATUS.AVAILABLE) {
-        const wk = ln.code + '|' + ln.wh;
+        const wk = ln.code + '|' + ln.wh + '|' + (ln.jobNo || doc.job || '') + '|' + (ln.reservationId || '');
         (byWh[wk] || (byWh[wk] = { code: ln.code, wh: ln.wh, need: 0, lines: [] })).need += Math.abs(ln.base);
         byWh[wk].lines.push(ln);
       }
@@ -209,14 +219,17 @@
       department: util.trim(p.department), ref: util.trim(p.ref), remark: util.trim(p.remark), lines: [],
       createdBy: tx.userId, createdAt: tx.now, postedBy: '', postedAt: '', cancelledBy: '', cancelledAt: '', cancelReason: '',
       override: null, expressStatus: '', expressNo: '', source: util.trim(p.source),
+      supplier: util.trim(p.supplier), supplierDoc: util.trim(p.supplierDoc),
     };
   }
+  inv.newDocRow = newDocRow;
+  inv.draftLines = draftLines;
   function draftLines(p) {
     return (p.lines || []).map((l) => ({
       code: util.trim(l.code), qty: l.qty, unit: util.trim(l.unit), wh: util.normCode(l.wh), bin: util.normCode(l.bin),
       toWh: util.normCode(l.toWh), toBin: util.normCode(l.toBin), lot: util.trim(l.lot), status: l.status || '',
       unitCost: l.unitCost == null ? '' : l.unitCost, remark: util.trim(l.remark), reservationId: l.reservationId || '',
-      poNo: l.poNo || '', poLine: l.poLine || '', jobNo: l.jobNo || '',
+      poNo: l.poNo || '', poLine: l.poLine || '', jobNo: l.jobNo || '', replace: l.replace === true || l.replace === 'true',
     }));
   }
 
@@ -232,7 +245,7 @@
     if (!d.lines || !d.lines.length) return tx.error('NO_LINES', 'เอกสารยังไม่มีบรรทัด') && null;
     if (td.needsJob && !d.job) return tx.error('REQUIRED', `${d.type} ต้องระบุงาน/SO`, { field: 'job' }) && null;
     const errorsBefore = tx.errors.length;
-    const lines = d.lines.map((raw, i) => resolveLine(tx, d, raw, i));
+    const lines = d.lines.map((raw, i) => resolveLine(tx, d, raw, i, opts));
     if (tx.errors.length > errorsBefore) return null;
     RRS.hooks.run('doc.check', tx, d, lines);
     if (tx.errors.length > errorsBefore) return null;
@@ -278,6 +291,7 @@
     prepare(tx, p) {
       const type = String(p.type || '').toUpperCase();
       if (!typeDef(type)) return tx.error('BAD_TYPE', `ไม่รู้จักประเภทเอกสาร ${p.type}`);
+      if (!manualType(type)) return tx.error('BAD_TYPE', `${type} สร้างโดยระบบเท่านั้น ทำเป็นเอกสารเองไม่ได้`);
       let row;
       if (p.docNo) {
         row = tx.get('documents', p.docNo);
@@ -291,6 +305,13 @@
         row.docNo = tx.nextNo(type, row.date);
       }
       row.lines = draftLines(p);
+      const td0 = typeDef(type);
+      for (let i = 0; i < row.lines.length; i++) {
+        const ln = row.lines[i];
+        for (const wh of [ln.wh, ln.toWh]) {
+          if (wh && !tx.can('doc.draft', wh) && !tx.can(td0.perm || 'doc.post', wh)) return tx.need('doc.draft', wh, { line: i + 1 });
+        }
+      }
       tx.put('documents', row.docNo, row);
       tx.result.docNo = row.docNo;
       tx.summary = `ร่าง ${row.docNo}`;
@@ -323,6 +344,7 @@
       } else {
         const type = String(p.type || '').toUpperCase();
         if (!typeDef(type)) return tx.error('BAD_TYPE', `ไม่รู้จักประเภทเอกสาร ${p.type}`);
+        if (!manualType(type)) return tx.error('BAD_TYPE', `${type} สร้างโดยระบบเท่านั้น ทำเป็นเอกสารเองไม่ได้`);
         d = newDocRow(tx, p, type);
         d.lines = draftLines(p);
       }
@@ -416,9 +438,14 @@
         if (qty > left) { tx.error('TOO_MUCH', `บรรทัด ${l.line}: รับได้ไม่เกิน ${left} ${l.baseUnit}`, { line: l.line }); continue; }
         const toBin = r.toBin != null ? util.normCode(r.toBin) : l.toBin;
         if (!checkLocation(tx, l.toWh, toBin, l.line, 'toBin', 'transfer.receive')) continue;
-        const mv = { docType: 'TR', docNo: d.docNo, line: l.line, job: d.job, remark: 'รับโอน', date: tx.date };
+        // modules may refuse the receipt (count freeze) or change the status it lands in (a lot quarantined in transit)
+        const info = { qty, toWh: l.toWh, toBin, status: l.status, remark: 'รับโอน' };
+        const before = tx.errors.length;
+        RRS.hooks.run('transfer.receiveLine', tx, d, l, info);
+        if (tx.errors.length > before) continue;
+        const mv = { docType: 'TR', docNo: d.docNo, line: l.line, job: d.job, remark: info.remark, date: tx.date };
         tx.move({ code: l.code, wh: TRANSIT, bin: d.docNo, status: l.status, lot: l.lot }, -qty, mv);
-        tx.move({ code: l.code, wh: l.toWh, bin: toBin, status: l.status, lot: l.lot }, qty, mv);
+        tx.move({ code: l.code, wh: l.toWh, bin: toBin, status: info.status && STATUS[info.status] ? info.status : l.status, lot: l.lot }, qty, mv);
         l.received = util.round((l.received || 0) + qty);
         l.receivedBin = toBin;
         any = true;

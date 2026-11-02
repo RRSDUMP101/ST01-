@@ -207,7 +207,20 @@
     'backup.export': ['manager', 'accounting'],
     'backup.restore': [],
   };
-  const PERM_LABELS = {};
+  const PERM_LABELS = {
+    'settings.edit': 'แก้ค่าตั้งระบบ', 'users.manage': 'จัดการผู้ใช้', 'master.edit': 'แก้ข้อมูลหลัก', 'bom.approve': 'อนุมัติ BOM',
+    'decision.record': 'บันทึกข้อตกลง', 'kpi.record': 'บันทึกตัวชี้วัด', 'doc.draft': 'ร่างเอกสาร', 'doc.post': 'บันทึกรับ–จ่าย',
+    'doc.postAdjust': 'บันทึกปรับยอด', 'doc.cancel': 'ยกเลิกเอกสาร', 'doc.markExpress': 'บันทึกเลขที่ Express',
+    'stock.overrideApprove': 'อนุมัติข้อยกเว้นยอดติดลบ', 'transfer.receive': 'รับโอน', 'job.manage': 'จัดการงานผลิต',
+    'production.record': 'บันทึกผลผลิต', 'reserve.manage': 'จองของให้งาน', 'pick.post': 'หยิบ/เบิกให้งาน',
+    'express.import': 'นำเข้า Express', 'express.reconcile': 'กระทบยอด Express', 'count.create': 'เปิดรอบนับ',
+    'count.enter': 'บันทึกผลนับ', 'count.approve': 'อนุมัติผลนับ', 'supplier.manage': 'จัดการผู้ขาย', 'pr.create': 'ขอซื้อ',
+    'pr.approve': 'อนุมัติขอซื้อ', 'po.manage': 'จัดการใบสั่งซื้อ', 'po.receive': 'รับของตาม PO', 'po.overReceive': 'อนุมัติรับเกิน PO',
+    'po.close': 'ปิด PO', 'qc.plan': 'ทำแผนตรวจ', 'qc.planApprove': 'อนุมัติแผนตรวจ', 'qc.inspect': 'บันทึกผลตรวจ QC',
+    'qc.release': 'ปล่อยผ่าน QC', 'qc.quarantine': 'กักกันล็อต', 'ncr.disposition': 'ตัดสิน NCR', 'ncr.useAsIs': 'อนุมัติใช้ตามสภาพ',
+    'lot.manage': 'จัดการล็อต/ใบรับรอง', 'offcut.manage': 'จัดการเศษเหล็ก', 'uat.record': 'บันทึกผลทดสอบรับงาน',
+    'backup.export': 'สำรองข้อมูล', 'backup.restore': 'กู้คืนข้อมูล',
+  };
   const auth = { ROLES, PERMS, PERM_LABELS };
   auth.definePerm = function definePerm(perm, roles, label) {
     PERMS[perm] = roles.slice();

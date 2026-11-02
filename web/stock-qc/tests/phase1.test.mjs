@@ -232,3 +232,31 @@ test('commit chain: every commit verifies; a changed commit is detected', async 
   forged.effects[0].v.qty = 999;
   assert.equal(RRS.core.verifyCommit(forged), false);
 });
+
+test('Phase 0: "add" never overwrites; bad characters in codes are refused by the engine', async () => {
+  const w = await world();
+  const dupItem = await w.exec('LEAD', 'item.upsert', { create: true, code: 'TST-001', name: 'ทับ', baseUnit: 'ชิ้น' });
+  assert.equal(dupItem.errors[0].code, 'DUPLICATE');
+  const dupWh = await w.exec('LEAD', 'warehouse.upsert', { create: true, code: 'a', name: 'ทับ' });
+  assert.equal(dupWh.errors[0].code, 'DUPLICATE');
+  const dupUser = await w.exec('ADMIN', 'user.upsert', { create: true, id: 'admin', name: 'x', roles: ['viewer'] });
+  assert.equal(dupUser.errors[0].code, 'DUPLICATE');
+  const s = await w.state();
+  assert.equal(s.tables.users.ADMIN.roles[0], 'admin');
+  assert.equal((await w.exec('LEAD', 'bin.upsert', { wh: 'A', code: 'A 03' })).errors[0].code, 'BAD_CODE');
+  assert.equal((await w.exec('LEAD', 'item.upsert', { code: 'X|Y', name: 'x', baseUnit: 'ชิ้น' })).errors[0].code, 'BAD_CODE');
+  assert.equal((await w.exec('ADMIN', 'user.upsert', { id: 'A B', name: 'x', roles: ['viewer'] })).errors[0].code, 'BAD_CODE');
+  assert.equal((await w.exec('LEAD', 'kpi.record', { id: 'fpy', label: '' })).errors[0].code, 'REQUIRED');
+});
+
+test('Phase 1: a user limited to warehouse A cannot save a draft for B; serial AJ is one per line', async () => {
+  const w = await world();
+  await w.ok('ADMIN', 'user.upsert', { id: 'ONLYA', name: 'สโตร์ A', roles: ['store'], warehouses: ['A'] });
+  const r = await w.exec('ONLYA', 'doc.saveDraft', { type: 'PD', lines: [{ code: 'TST-001', qty: 1, wh: 'B' }] });
+  assert.equal(r.errors[0].code, 'NO_PERMISSION');
+  await w.ok('LEAD', 'item.upsert', { code: 'TST-SER', name: 'ซีเรียล', baseUnit: 'ชิ้น', trackLot: 'serial' });
+  const aj = await w.exec('LEAD', 'doc.post', { type: 'AJ', lines: [{ code: 'TST-SER', qty: 2, wh: 'A', bin: 'A-01', lot: 'SN1' }] });
+  assert.equal(aj.errors[0].code, 'SERIAL_QTY');
+  const pipe = await w.exec('LEAD', 'doc.post', { type: 'AJ', lines: [{ code: 'TST-PLATE', qty: 1, wh: 'A', bin: 'A-01', lot: 'H|1' }] });
+  assert.equal(pipe.errors[0].code, 'BAD_LOT');
+});

@@ -17,6 +17,8 @@
       policies: Object.assign({}, d.policies, s.policies), express: Object.assign({}, d.express, s.express),
     });
   }
+  /** Checkbox with its hint under the label (the kit field puts the hint beside it and squeezes the box). */
+  const checkbox = (o) => t`<label class="fld fld-check${o.wide ? ' wide' : ''}"><span><input type="checkbox" name="${o.name}" value="1"${h.safe(o.value ? ' checked' : '')}></span><span>${o.label}${o.hint ? t`<br><small class="hint">${o.hint}</small>` : ''}</span></label>`;
   const whoCan = (perm) => RRS.auth.rolesFor(perm).map((r) => RRS.auth.ROLES[r] || r).join(', ');
   const readOnly = (perm) => h.note(`ดูอย่างเดียว – แก้ได้โดย: ${whoCan(perm)}`, 'info');
 
@@ -57,7 +59,7 @@
       h.field({ name: 'negativeStock', label: 'เมื่อยอดไม่พอ', type: 'select', blank: false, value: p.negativeStock,
         options: [['block', 'บล็อก – บันทึกไม่ได้เลย'], ['approve', 'ขออนุมัติข้อยกเว้นได้']],
         hint: 'บล็อก: เอกสารที่ทำให้ยอดติดลบบันทึกไม่ได้ · ขออนุมัติ: ผู้ทำส่งขอพร้อมเหตุผล หัวหน้าสโตร์/บัญชีอีกคนอนุมัติ' }),
-      h.field({ name: 'sod', label: 'แยกหน้าที่ – คนทำรายการอนุมัติงานของตัวเองไม่ได้', type: 'checkbox', value: p.sod !== false,
+      checkbox({ name: 'sod', label: 'แยกหน้าที่ – คนทำรายการอนุมัติงานของตัวเองไม่ได้', value: p.sod !== false,
         hint: 'ใช้กับข้อยกเว้นยอดติดลบ ผลนับ ใบขอซื้อ การปล่อยผ่าน QC และ NCR' }),
       h.field({ name: 'overReceivePct', label: 'รับเกิน PO ได้ไม่เกิน (%)', type: 'number', value: p.overReceivePct,
         hint: 'รับเกินกว่านี้ต้องให้หัวหน้าจัดซื้ออนุมัติ · 0 = รับเกินไม่ได้' }),
@@ -68,7 +70,7 @@
       h.field({ name: 'countMode', label: 'ระหว่างตรวจนับ', type: 'select', blank: false, value: p.countMode,
         options: [['timestamp', 'ทำรายการได้ตามปกติ (ปรับตามเวลานับ)'], ['freeze', 'หยุดรับ–จ่ายช่องที่กำลังนับ']],
         hint: 'ปรับตามเวลานับ: ระบบคิดผลต่างจากยอด ณ เวลาที่นับแต่ละบรรทัด · หยุด: ช่องที่นับรับ–จ่ายไม่ได้จนอนุมัติผลนับ' }),
-      h.field({ name: 'lateIsUncertain', label: 'PO เลยกำหนดส่ง ไม่นับเป็นของเข้าแน่นอน', type: 'checkbox', value: p.lateIsUncertain !== false,
+      checkbox({ name: 'lateIsUncertain', label: 'PO เลยกำหนดส่ง ไม่นับเป็นของเข้าแน่นอน', value: p.lateIsUncertain !== false,
         hint: 'การวางแผนจะแยกของจาก PO ที่เลยกำหนดออกเป็น "ไม่แน่นอน"' }),
       h.field({ name: 'nonMovingDays', label: 'ของไม่เคลื่อนไหวเมื่อเกิน (วัน)', type: 'number', value: p.nonMovingDays,
         hint: 'ของที่ไม่มีรับ–จ่ายนานกว่านี้แสดงในรายงานของค้างนาน' }),
@@ -111,7 +113,9 @@
   }
   function scopeForm(ctx, st) {
     const whs = h.whOptions(ctx.state);
-    for (const w of st.pilot.warehouses || []) if (!whs.some(([c]) => c === w)) whs.push([w, `${w} (ไม่พบในระบบ)`]);
+    for (const w of st.pilot.warehouses || []) {
+      if (!whs.some(([c]) => c === w)) whs.push([w, `${w} (${RRS.q.get(ctx.state, 'warehouses', w) ? 'ปิดใช้งานแล้ว' : 'ไม่พบในระบบ'})`]);
+    }
     const groups = knownGroups(ctx.state, st);
     return h.form({ name: 'scope', submit: 'บันทึกขอบเขต', body: [
       h.field({ name: 'company', label: 'ชื่อบริษัท/หน่วยงาน', value: st.company }),
@@ -274,11 +278,19 @@
         await ctx.dialog({ title: isNew ? 'เพิ่มตัวชี้วัด' : `ตัวชี้วัด: ${k.label}`, submit: 'บันทึก',
           body: t`${h.field({ name: 'label', label: 'ชื่อตัวชี้วัด', value: k && k.label, required: true, wide: true })}
             ${h.field({ name: 'unit', label: 'หน่วย', value: k && k.unit, placeholder: '% ครั้ง นาที …' })}
-            ${h.field({ name: 'measuredOn', label: 'วันที่วัด', type: 'date', value: (k && k.measuredOn) || ctx.today })}
+            ${h.field({ name: 'measuredOn', label: 'วันที่วัดค่าก่อนเริ่ม', type: 'date', value: (k && k.measuredOn) || ctx.today, hint: 'ไม่ใส่ค่าก่อนเริ่ม = ยังไม่บันทึกวันที่วัด' })}
             ${h.field({ name: 'baseline', label: 'ค่าก่อนเริ่ม', type: 'number', value: k && numVal(k.baseline), hint: 'ว่าง = ยังไม่ได้วัด' })}
             ${h.field({ name: 'target', label: 'เป้าหมาย', type: 'number', value: k && numVal(k.target) })}
             ${h.field({ name: 'note', label: 'วิธีวัด/หมายเหตุ', type: 'textarea', value: k && k.note, wide: true, placeholder: 'เช่น นับสุ่ม 50 รายการ เทียบยอดในระบบ' })}`,
-          onSubmit: (vv) => {
+          onSubmit: (vv, form) => {
+            const errs = [];
+            if (!RRS.util.trim(vv.label)) errs.push({ message: 'กรอกชื่อตัวชี้วัด' });
+            for (const [n, lab] of [['baseline', 'ค่าก่อนเริ่ม'], ['target', 'เป้าหมาย']]) {
+              const el = form && form.querySelector(`[name="${n}"]`);
+              if (el && el.validity && el.validity.badInput) errs.push({ message: `ช่อง ${lab} ต้องเป็นตัวเลข เช่น 92.5 – ถ้ายังไม่ได้วัดให้เว้นว่าง` });
+            }
+            if (errs.length) return { ok: false, errors: errs };
+            if (RRS.util.trim(vv.baseline) === '') vv.measuredOn = ''; // no measurement yet -> no measured date
             let kid = id;
             if (isNew) {
               const used = new Set(RRS.q.rows(ctx.state, 'kpis').map((x) => x.id));

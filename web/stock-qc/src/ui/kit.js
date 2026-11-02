@@ -99,10 +99,11 @@
       });
       const act = o.rowAct ? safe(` data-act="${esc(o.rowAct)}" data-arg="${esc(o.rowArg ? o.rowArg(r, i) : i)}" class="clickable${o.rowCls ? ' ' + esc(o.rowCls(r) || '') : ''}"`) :
         safe(o.rowCls ? ` class="${esc(o.rowCls(r) || '')}"` : '');
-      return t`<tr${act}>${cells}</tr>`;
+      const extra = o.detail ? o.detail(r, i) : null;
+      return t`<tr${act}>${cells}</tr>${extra ? t`<tr class="detail-row"><td colspan="${cols.length}">${extra}</td></tr>` : ''}`;
     });
     const foot = o.foot ? t`<tfoot><tr>${o.foot.map((f, i) => t`<td class="${cols[i] && cols[i].num ? 'n' : ''}">${f}</td>`)}</tr></tfoot>` : '';
-    return t`<div class="tbl-wrap"${safe(attr('id', o.id))}><table class="tbl${o.dense ? ' dense' : ''}"><thead><tr>${head}</tr></thead><tbody>${body}</tbody>${foot}</table></div>`;
+    return t`<div class="tbl-wrap${o.scroll ? ' scroll' : ''}"${safe(attr('id', o.id))}><table class="tbl${o.dense ? ' dense' : ''}"><thead><tr>${head}</tr></thead><tbody>${body}</tbody>${foot}</table></div>`;
   };
 
   const empty = (title, text, action) => t`<div class="empty"><p class="empty-t">${title}</p>${text ? t`<p class="empty-s">${text}</p>` : ''}${action || ''}</div>`;
@@ -116,7 +117,7 @@
   const field = (o) => {
     const id = o.id || `f-${o.name.replace(/[^\w-]/g, '_')}-${++fieldN}`;
     const opts = (o.options || []).map((x) => (Array.isArray(x) ? x : [x, x]));
-    const common = safe(`${attr('id', id)}${attr('name', o.name)}${attr('required', !!o.required)}${attr('readonly', !!o.readonly)}${attr('disabled', !!o.disabled)}${attr('placeholder', o.placeholder)}`);
+    const common = safe(`${attr('id', id)}${attr('name', o.name)}${attr('required', !!o.required)}${attr('readonly', !!o.readonly)}${attr('disabled', !!o.disabled)}${attr('placeholder', o.placeholder)}${attr('data-act', o.act)}${attr('data-live', o.live ? '1' : null)}`);
     let input;
     if (o.type === 'hidden') return t`<input type="hidden" name="${o.name}" value="${o.value == null ? '' : o.value}">`;
     if (o.type === 'select') {
@@ -124,10 +125,12 @@
     } else if (o.type === 'multiselect') {
       const vals = (o.value || []).map(String);
       input = t`<div class="checks" id="${id}">${opts.map(([v, l]) => t`<label class="chk"><input type="checkbox" name="${o.name}[]" value="${v}"${safe(attr('checked', vals.indexOf(String(v)) >= 0))}> ${l}</label>`)}</div>`;
+    } else if (o.type === 'radio') {
+      input = t`<div class="checks radios" id="${id}" role="radiogroup">${opts.map(([v, l]) => t`<label class="chk"><input type="radio" name="${o.name}" value="${v}"${safe(attr('checked', String(v) === String(o.value == null ? '' : o.value)))}${safe(attr('data-act', o.act))}${safe(attr('disabled', !!o.disabled))}> ${l}</label>`)}</div>`;
     } else if (o.type === 'textarea') {
       input = t`<textarea${common} rows="${o.rows || 3}">${o.value == null ? '' : o.value}</textarea>`;
     } else if (o.type === 'checkbox') {
-      return t`<label class="fld fld-check${o.wide ? ' wide' : ''}"><input type="checkbox"${common} value="1"${safe(attr('checked', !!o.value))}> <span>${o.label}</span>${o.hint ? t`<small class="hint">${o.hint}</small>` : ''}</label>`;
+      return t`<label class="fld fld-check${o.wide ? ' wide' : ''}"><input type="checkbox"${common} value="1"${safe(attr('checked', !!o.value))}><span class="fld-cl"><span>${o.label}</span>${o.hint ? t`<small class="hint">${o.hint}</small>` : ''}</span></label>`;
     } else {
       const type = o.type === 'datetime' ? 'datetime-local' : o.type || 'text';
       input = t`<input type="${type}"${common}${safe(attr('value', o.value == null ? '' : o.value))}${safe(attr('step', o.step || (type === 'number' ? 'any' : null)))}${safe(attr('list', o.list))}${safe(attr('accept', o.accept))}${safe(attr('inputmode', type === 'number' ? 'decimal' : null))}>`;
@@ -268,6 +271,21 @@
     return out;
   };
 
+  /**
+   * Rows -> CSV text for Excel/Google Sheets: UTF-8 BOM, quoted cells, objects as JSON, and text that a spreadsheet
+   * would run as a formula (= + - @ tab CR at the start) prefixed with an apostrophe.
+   */
+  const csv = (rows) => '\ufeff' + rows.map((r) => r.map((v) => {
+    let x = v == null ? '' : typeof v === 'object' ? JSON.stringify(v) : String(v);
+    if (/^[=+\-@\t\r]/.test(x) && !/^-?\d+(\.\d+)?$/.test(x)) x = "'" + x;
+    return /[",\n\r]/.test(x) ? '"' + x.replace(/"/g, '""') + '"' : x;
+  }).join(',')).join('\r\n') + '\r\n';
+  /** Progress bar: fraction 0..1 (width is layout only; colours come from the stylesheet). */
+  const meter = (fraction, label) => {
+    const f = Math.max(0, Math.min(1, Number(fraction) || 0));
+    return t`<div class="meter" role="meter" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.round(f * 100)}"${safe(attr('aria-label', label))}><div class="bar-meter"><span style="width:${Math.round(f * 1000) / 10}%"></span></div>${label ? t`<small class="hint">${label}</small>` : ''}</div>`;
+  };
+
   /** The errors of a failed command as a list. */
   const errors = (r) => (r && r.errors && r.errors.length ? t`<ul class="errs">${r.errors.map((e) => t`<li>${e.message}</li>`)}</ul>` : '');
 
@@ -279,6 +297,6 @@
     },
     h: { t, safe, esc, show, attr, join, fmt, badge, statusBadge, docStatus, code, qty, btn, link, table, empty, field, form,
       tabs, kpi, kpis, section, toolbar, note, dl, lists, whOptions, binOptions, userOptions, lineEditor, parseForm,
-      cleanLines, errors, Safe, parseCsv, readTable, mapHeader },
+      cleanLines, errors, Safe, parseCsv, readTable, mapHeader, csv, meter },
   };
 })(typeof globalThis !== 'undefined' ? globalThis : this);

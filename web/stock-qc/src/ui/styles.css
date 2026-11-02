@@ -179,6 +179,15 @@ input, select, textarea { font: inherit; color: var(--fg); background: var(--pan
 input:focus, select:focus, textarea:focus { border-color: var(--accent); outline: 2px solid var(--accent-soft); outline-offset: 0; }
 input[readonly] { background: var(--sunk); }
 .fld-check { flex-direction: row; align-items: flex-start; gap: 8px; padding-top: 18px; }
+.fld-check input { flex: none; }
+.fld-cl { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.fgrid > * { min-width: 0; }
+.step > .badge { align-self: flex-start; }
+.tbl-wrap.scroll { max-height: 70vh; overflow: auto; }
+.tbl tr.detail-row td { background: var(--sunk); }
+.sec { scroll-margin-top: calc(70px + env(safe-area-inset-top, 0px)); }
+.nowrap { white-space: nowrap; }
+.meter { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .fld-check input, .chk input { width: auto; margin-top: 3px; }
 .checks, .radios { display: flex; flex-wrap: wrap; gap: 6px 14px; }
 .chk { display: inline-flex; gap: 6px; align-items: flex-start; font-size: .9rem; }

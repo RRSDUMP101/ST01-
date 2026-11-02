@@ -11,12 +11,14 @@
  *    product lists its own lines, lines[].qty is per set (required = qty × line qty, qty defaults to 1).
  *    A job with a product also has line 0 = the product itself (output: true, required 0, toMake = qty) so the
  *    finished goods can be received (FR) against the job.
- *  - issues PD/OU (and DL when a later module defines it) with a job consume that job's reservations – the line's
- *    reservationId first, then the job's open reservations of that code + warehouse, oldest first – and add to the
- *    job line's issued. RT with a job lowers issued (never below 0). FR with a job may receive at most
+ *  - issues PD/OU with a job consume that job's reservations – the line's reservationId first, then the job's open
+ *    reservations of that code + warehouse, oldest first – and add to the job line's issued (a code that is not in
+ *    the job becomes an extra line, required 0). The job must be open. A delivery DL (defined by a later module)
+ *    with a job only consumes that job's reservations and adds to an existing line – it may follow a finished job. RT with a job lowers issued (never below 0). FR with a job may receive at most
  *    finished − received of the job line. doc.cancel reverses all of it (in the same commit).
  *  - no other document can take stock reserved for another job (RRS.inventory.reservedElsewhere). Adjustments (AJ)
- *    are exempt – they record what is really there; an over-reserved warehouse then shows a flag in six().
+ *    are exempt – they record what is really there; an over-reserved warehouse then shows a flag in six(). A transfer
+ *    between bins of the same warehouse is not taking stock (reservations are per warehouse).
  *  - nothing is deleted: a released reservation stays with who/when/why; every use of a reservation is kept in
  *    `uses` (a cancelled document adds a negative entry that points at the document). Forcing the cancel of a job
  *    that still holds issued material is an exception that another person than the job's creator must do.
@@ -65,8 +67,10 @@
   const SIX_LABELS = { onHand: 'ของมีจริง', qcHold: 'รอตรวจ/กักกัน', reserved: 'ของจอง', free: 'ของพร้อมเบิก',
     wip: 'ของกำลังผลิต', incoming: 'ของคาดว่าจะเข้า' };
   const OPEN_JOB = { OPEN: true, IN_PROGRESS: true };
-  /** Document types that issue stock to a job (consume its reservations, add to issued). */
-  const ISSUE_TYPES = { PD: true, OU: true, DL: true };
+  /** Document types that issue stock to an open job (consume its reservations, add to issued, extra lines). */
+  const ISSUE_TYPES = { PD: true, OU: true };
+  /** Outgoing types that consume the job's reservations (ISSUE_TYPES + delivery to the customer). */
+  const CONSUME_TYPES = { PD: true, OU: true, DL: true };
   /** Document types that may take reserved stock (they record what is really there). */
   const EXEMPT_TYPES = { AJ: true };
   const HOLD = [STATUS.QC_HOLD, STATUS.QUARANTINE, STATUS.REWORK];
@@ -676,6 +680,14 @@
   // ---- stock kept for other jobs (inventory checks every outgoing AVAILABLE line with this) ---------------
   inv.reservedElsewhere(function reservedForOthers(tx, code, wh, doc, line) {
     if (EXEMPT_TYPES[doc && doc.type]) return 0;
+    if (doc && doc.type === 'TR') {
+      // reservations are per warehouse: moving stock between bins of the same warehouse keeps it for its jobs
+      const same = (doc.lines || []).filter((l) => {
+        const it = tx.item(l.code);
+        return it && it.id === code && util.normCode(l.wh) === wh;
+      });
+      if (same.length && same.every((l) => util.normCode(l.toWh) === wh)) return 0;
+    }
     const jn = jobOf(doc, line);
     const own = jn && tx.get('jobs', jn) ? jn : '';
     const rid = (line && line.reservationId) || '';
@@ -699,7 +711,7 @@
     if (line.reservationId) {
       const r = tx.get('reservations', line.reservationId);
       if (!r) return tx.error('NOT_FOUND', `บรรทัด ${n}: ไม่พบใบจอง ${line.reservationId}`, Object.assign({ field: 'reservationId' }, where));
-      if (!ISSUE_TYPES[doc.type]) return tx.error('BAD_INPUT', `บรรทัด ${n}: ใบจองใช้ได้กับใบเบิกเท่านั้น`, where);
+      if (!CONSUME_TYPES[doc.type]) return tx.error('BAD_INPUT', `บรรทัด ${n}: ใบจองใช้ได้กับใบเบิก/ส่งมอบเท่านั้น`, where);
       if (r.jobNo !== jn) return tx.error('WRONG_JOB', `บรรทัด ${n}: ใบจอง ${r.id} เป็นของใบงาน ${r.jobNo}${jn ? ' ไม่ใช่ ' + jn : ' – ระบุงานในเอกสาร'}`, where);
       if (r.code !== line.code) return tx.error('WRONG_ITEM', `บรรทัด ${n}: ใบจอง ${r.id} เป็นของ ${r.code} ไม่ใช่ ${line.code}`, where);
       if (r.wh !== line.wh) return tx.error('WRONG_WH', `บรรทัด ${n}: ใบจอง ${r.id} จองไว้ที่คลัง ${r.wh} ไม่ใช่ ${line.wh}`, where);
@@ -786,7 +798,7 @@
 
   RRS.hooks.on('doc.posted', function planningPosted(tx, doc, lines) {
     const t = doc.type;
-    if (!ISSUE_TYPES[t] && t !== 'FR' && t !== 'RT') return;
+    if (!CONSUME_TYPES[t] && t !== 'FR' && t !== 'RT') return;
     const jobs = {};
     const used = [];
     for (const ln of lines) {
@@ -798,16 +810,17 @@
         jobs[jn] = clone(j);
       }
       const job = jobs[jn];
-      if (ISSUE_TYPES[t]) {
+      if (CONSUME_TYPES[t]) {
         for (const u of consume(tx, jn, ln, doc)) used.push(u);
         let jl = compLine(job, ln.code);
+        if (!jl && !ISSUE_TYPES[t]) continue;
         if (!jl) {
           jl = { line: Math.max.apply(null, job.lines.map((l) => l.line).concat([0])) + 1, code: ln.code, per: 0, required: 0,
             issued: 0, toMake: 0, finished: 0, received: 0, note: 'เบิกนอกแผน', extra: true };
           job.lines.push(jl);
         }
         jl.issued = round(jl.issued + ln.base);
-        if (job.status === 'OPEN') job.status = 'IN_PROGRESS';
+        if (job.status === 'OPEN' && ISSUE_TYPES[t]) job.status = 'IN_PROGRESS';
       } else if (t === 'RT') {
         const jl = compLine(job, ln.code);
         if (jl) jl.issued = round(jl.issued - ln.base);
@@ -822,7 +835,7 @@
 
   RRS.hooks.on('doc.cancelled', function planningCancelled(tx, doc, lines) {
     const t = doc.type;
-    if (!ISSUE_TYPES[t] && t !== 'FR' && t !== 'RT') return;
+    if (!CONSUME_TYPES[t] && t !== 'FR' && t !== 'RT') return;
     const jobs = {};
     const jobFor = (jn) => {
       if (!jobs[jn]) {
@@ -832,7 +845,7 @@
       }
       return jobs[jn];
     };
-    if (ISSUE_TYPES[t]) {
+    if (CONSUME_TYPES[t]) {
       // give back what this document took from reservations (net of its uses), history kept as a negative use
       for (const r of tx.all('reservations', (x) => (x.uses || []).some((u) => u.docNo === doc.docNo && u.docType === doc.type))) {
         const net = round((r.uses || []).filter((u) => u.docNo === doc.docNo && u.docType === doc.type).reduce((s, u) => s + u.qty, 0));
@@ -856,7 +869,7 @@
       if (!jn) continue;
       const job = jobFor(jn);
       if (!job) continue;
-      if (ISSUE_TYPES[t]) {
+      if (CONSUME_TYPES[t]) {
         const jl = compLine(job, ln.code);
         if (!jl) continue;
         const next = round(jl.issued - ln.base);
@@ -879,7 +892,8 @@
 
   // ---- read helpers (pure functions of a state) ----------------------------------------------------------
   const P = (RRS.planning = RRS.planning || {});
-  Object.assign(P, { JOB_STATUS, RES_STATUS, READY, SIX_LABELS, ISSUE_TYPES, EXEMPT_TYPES, remaining, isOpen: isOpenRes });
+  Object.assign(P, { JOB_STATUS, RES_STATUS, READY, SIX_LABELS, ISSUE_TYPES, CONSUME_TYPES, EXEMPT_TYPES, remaining,
+    isOpen: isOpenRes });
 
   const rows = (state, t, f) => RRS.q.rows(state, t, f);
 

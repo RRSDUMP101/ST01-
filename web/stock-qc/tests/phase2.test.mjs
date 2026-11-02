@@ -832,6 +832,361 @@ test('เอกสารเดิมที่ใส่งานเป็นข�
   assert.equal(Object.keys(s.tables.jobs || {}).length, 0);
 });
 
+// ---------------------------------------------------------------------------------------------------------------
+// independent review: holes found after the first build (each test failed before the fix)
+// ---------------------------------------------------------------------------------------------------------------
+
+/** Numbers that must always agree after any sequence of commands. */
+function assertConsistent(s) {
+  assert.deepEqual(RRS.inventory.verifyBalances(s), [], 'ยอดคงเหลือ = ผลรวมประวัติ');
+  for (const r of Object.values(s.tables.reservations || {})) {
+    const used = RRS.util.round((r.uses || []).reduce((t, u) => t + u.qty, 0));
+    assert.equal(r.issued, used, `${r.id}: issued = Σ uses`);
+    assert.ok(r.issued >= 0 && r.issued <= r.qty, `${r.id}: 0 ≤ issued ${r.issued} ≤ qty ${r.qty}`);
+    if (r.status !== 'RELEASED') {
+      assert.equal(r.status, r.issued >= r.qty ? 'FILLED' : r.issued > 0 ? 'PARTIAL' : 'OPEN', `${r.id}: สถานะตรงกับยอด`);
+    }
+  }
+  // without adjustments no warehouse holds more open reservations than its AVAILABLE stock
+  const held = {};
+  for (const r of Object.values(s.tables.reservations || {})) {
+    if (P.remaining(r) > 0) held[r.code + '|' + r.wh] = RRS.util.round((held[r.code + '|' + r.wh] || 0) + P.remaining(r));
+  }
+  for (const k of Object.keys(held)) {
+    const [code, wh] = k.split('|');
+    assert.ok(held[k] <= RRS.q.qty(s, { code, wh, status: 'AVAILABLE' }) + 1e-9, `${k}: จอง ${held[k]} เกินของใช้ได้`);
+  }
+  for (const j of Object.values(s.tables.jobs || {})) {
+    for (const l of j.lines) {
+      assert.ok(l.issued >= 0 && l.received >= 0 && l.received <= l.finished && l.finished <= Math.max(l.toMake, l.finished), `${j.jobNo} บรรทัด ${l.line}`);
+    }
+    // an open job line never holds more reservations than it still needs (no stale reservation blocks other jobs)
+    if (j.status === 'OPEN' || j.status === 'IN_PROGRESS') {
+      for (const l of j.lines.filter((x) => !x.output)) {
+        const held = RRS.util.round(Object.values(s.tables.reservations || {})
+          .filter((r) => r.jobNo === j.jobNo && r.code === l.code).reduce((t, r) => t + P.remaining(r), 0));
+        assert.ok(held <= Math.max(0, l.required - l.issued) + 1e-9, `${j.jobNo} ${l.code}: จองค้าง ${held} เกินที่ยังต้องใช้ ${l.required - l.issued}`);
+      }
+    }
+  }
+}
+
+test('ทบทวน: เอกสารหลายบรรทัด (บรรทัดมี/ไม่มีใบจอง หรือหลายงาน) เบิกของที่จองให้งานอื่นไม่ได้', async () => {
+  const w = await plant();
+  await stockIn(w, 'TST-001', 'A', 'A-01', 12);
+  const j1 = await job(w, { soNo: 'SO-R01', lines: [{ code: 'TST-001', qty: 10 }] });
+  const j2 = await job(w, { soNo: 'SO-R02', lines: [{ code: 'TST-001', qty: 10 }] });
+  const k = await job(w, { soNo: 'SO-R03', lines: [{ code: 'TST-001', qty: 10 }] });
+  const r1 = await reserve(w, j1, 'TST-001', 'A', 4);
+  const rk = await reserve(w, k, 'TST-001', 'A', 6); // ไม่ได้จอง 2
+  const seq = (await w.state()).seq;
+  // line 1 uses j1's reservation (4), line 2 has none: 4 more than the 2 free pieces would take k's stock
+  const mixed = await w.exec('STORE1', 'doc.post', { type: 'PD', job: j1, lines: [
+    { code: 'TST-001', qty: 4, wh: 'A', bin: 'A-01', reservationId: r1 }, { code: 'TST-001', qty: 4, wh: 'A', bin: 'A-01' }] });
+  assert.equal(codeOf(mixed), 'RESERVED');
+  assert.match(mixed.errors[0].message, /จอง/);
+  // two jobs on one document: j1 5 (4 reserved + 1 free) and j2 2 (free) = 3 free pieces needed, only 2 are free
+  const twoJobs = await w.exec('STORE1', 'doc.post', { type: 'PD', lines: [
+    { code: 'TST-001', qty: 5, wh: 'A', bin: 'A-01', jobNo: j1 }, { code: 'TST-001', qty: 2, wh: 'A', bin: 'A-01', jobNo: j2 }] });
+  assert.equal(codeOf(twoJobs), 'RESERVED');
+  let s = await w.state();
+  assert.equal(s.seq, seq);
+  // within its own reservation + the free part the same shape is fine
+  await w.ok('STORE1', 'doc.post', { type: 'PD', job: j1, lines: [
+    { code: 'TST-001', qty: 4, wh: 'A', bin: 'A-01', reservationId: r1 }, { code: 'TST-001', qty: 2, wh: 'A', bin: 'A-01' }] });
+  s = await w.state();
+  assert.equal(res(s, r1).status, 'FILLED');
+  assert.equal(P.remaining(res(s, rk)), 6);
+  assert.equal(qty(s, { code: 'TST-001', wh: 'A', status: 'AVAILABLE' }), 6);
+  assert.equal(sixOf(s, 'TST-001').overReserved, 0);
+  // 2 new free pieces shared by two jobs on one document: at most 2 may go out in total
+  await stockIn(w, 'TST-001', 'A', 'A-02', 2);
+  const tooMuch = await w.exec('STORE1', 'doc.post', { type: 'PD', lines: [
+    { code: 'TST-001', qty: 2, wh: 'A', bin: 'A-02', jobNo: j1 }, { code: 'TST-001', qty: 2, wh: 'A', bin: 'A-01', jobNo: j2 }] });
+  assert.equal(codeOf(tooMuch), 'RESERVED');
+  await w.ok('STORE1', 'doc.post', { type: 'PD', lines: [
+    { code: 'TST-001', qty: 1, wh: 'A', bin: 'A-02', jobNo: j1 }, { code: 'TST-001', qty: 1, wh: 'A', bin: 'A-01', jobNo: j2 }] });
+  s = await w.state();
+  assert.equal(P.remaining(res(s, rk)), 6);
+  assert.equal(qty(s, { code: 'TST-001', wh: 'A', status: 'AVAILABLE' }), 6);
+  assertConsistent(s);
+});
+
+test('ทบทวน: ใบโอนหลายบรรทัด – ย้ายช่องเก็บในคลังเดียวกันไม่ถูกนับเป็นการเอาของจองออก', async () => {
+  const w = await plant();
+  await stockIn(w, 'TST-001', 'A', 'A-01', 5);
+  const j1 = await job(w, { soNo: 'SO-R11', lines: [{ code: 'TST-001', qty: 4 }] });
+  await reserve(w, j1, 'TST-001', 'A', 4);
+  // 4 reserved pieces move to another bin of A, the 1 free piece goes to B – nothing reserved leaves A
+  const tr = await w.exec('STORE1', 'doc.post', { type: 'TR', lines: [
+    { code: 'TST-001', qty: 4, wh: 'A', bin: 'A-01', toWh: 'A', toBin: 'A-02' }, { code: 'TST-001', qty: 1, wh: 'A', bin: 'A-01', toWh: 'B', toBin: 'B-01' }] });
+  assert.equal(tr.ok, true, JSON.stringify(tr.errors));
+  // but 2 pieces to B would take one reserved piece
+  await w.ok('STORE2', 'transfer.receive', { docNo: tr.result.docNo });
+  const bad = await w.exec('STORE1', 'doc.post', { type: 'TR', lines: [
+    { code: 'TST-001', qty: 2, wh: 'A', bin: 'A-02', toWh: 'A', toBin: 'A-01' }, { code: 'TST-001', qty: 1, wh: 'A', bin: 'A-02', toWh: 'B', toBin: 'B-01' }] });
+  assert.equal(codeOf(bad), 'RESERVED');
+  assertConsistent(await w.state());
+});
+
+test('ทบทวน: เลขใบงานที่ตั้งเองตรงกับเลขอัตโนมัติ – ใบงานใหม่ได้เลขถัดไป ไม่เขียนทับใบเดิม', async () => {
+  const w = await plant();
+  await w.ok('PLAN', 'job.create', { jobNo: 'JB6911-0001', soNo: 'SO-MANUAL', lines: [{ code: 'TST-001', qty: 1 }], dueDate: '2026-11-20' });
+  const r = await w.ok('PLAN', 'job.create', { soNo: 'SO-AUTO', lines: [{ code: 'TST-002', qty: 1 }], dueDate: '2026-11-20' });
+  assert.equal(r.result.jobNo, 'JB6911-0002');
+  const s = await w.state();
+  assert.equal(jobRow(s, 'JB6911-0001').soNo, 'SO-MANUAL');
+  assert.equal(jobRow(s, 'JB6911-0002').soNo, 'SO-AUTO');
+});
+
+test('ทบทวน: เบิกจากคลังอื่นจนงานได้ครบ – ใบจองที่เหลือไม่ค้างกันของงานอื่น และยกเลิกใบเบิกแล้วคืนการจอง', async () => {
+  const w = await plant();
+  await stockIn(w, 'TST-001', 'A', 'A-01', 5);
+  await stockIn(w, 'TST-001', 'B', 'B-01', 4);
+  const j = await job(w, { soNo: 'SO-R21', lines: [{ code: 'TST-001', qty: 4 }] });
+  const k = await job(w, { soNo: 'SO-R22', lines: [{ code: 'TST-001', qty: 4 }] });
+  const id = await reserve(w, j, 'TST-001', 'A', 4);
+  // 3 pieces come from B (not reserved there): j still needs only 1 – the reservation in A keeps 1
+  const pd = await w.ok('STORE1', 'doc.post', { type: 'PD', job: j, lines: [{ code: 'TST-001', qty: 3, wh: 'B', bin: 'B-01' }] });
+  let s = await w.state();
+  assert.equal(lineOf(s, j, 'TST-001').issued, 3);
+  assert.equal(res(s, id).qty, 1);
+  assert.equal(res(s, id).status, 'OPEN');
+  assert.ok(res(s, id).changes.some((c) => c.docNo === pd.result.docNo && c.fromQty === 4 && c.toQty === 1), 'เก็บประวัติการตัดยอดจอง');
+  assert.equal(sixOf(s, 'TST-001', { wh: 'A' }).free, 4);
+  assertConsistent(s);
+  // cancelling the issue gives the reservation back (the stock in A is still free)
+  await w.ok('LEAD', 'doc.cancel', { docNo: pd.result.docNo, reason: 'เบิกผิดคลัง' });
+  s = await w.state();
+  assert.equal(lineOf(s, j, 'TST-001').issued, 0);
+  assert.equal(res(s, id).qty, 4);
+  assert.equal(res(s, id).status, 'OPEN');
+  assertConsistent(s);
+  // the whole line from B: the reservation in A is let go (with who/when/why) and k can reserve A
+  const pd2 = await w.ok('STORE1', 'doc.post', { type: 'PD', job: j, lines: [{ code: 'TST-001', qty: 4, wh: 'B', bin: 'B-01' }] });
+  s = await w.state();
+  assert.equal(res(s, id).status, 'RELEASED');
+  assert.equal(res(s, id).releasedBy, 'STORE1');
+  assert.ok(res(s, id).releasedAt);
+  assert.match(res(s, id).reason, new RegExp(pd2.result.docNo));
+  await reserve(w, k, 'TST-001', 'A', 4);
+  assertConsistent(await w.state());
+  // cancelling now can give back only what is still free in A (1); the rest stays with k – with a warning
+  const c = await w.ok('LEAD', 'doc.cancel', { docNo: pd2.result.docNo, reason: 'เบิกผิดคลัง' });
+  s = await w.state();
+  assert.equal(P.remaining(res(s, id)), 1);
+  assert.notEqual(res(s, id).status, 'RELEASED');
+  assert.ok(c.warnings.some((x) => /คืนการจอง/.test(x)), JSON.stringify(c.warnings));
+  assert.equal(sixOf(s, 'TST-001', { wh: 'A' }).free, 0);
+  assert.equal(sixOf(s, 'TST-001', { wh: 'A' }).overReserved, 0);
+  assertConsistent(s);
+});
+
+test('ทบทวน: โอนของที่จองไว้ไปอีกคลัง แล้วเบิกจากคลังปลายทาง – ไม่เหลือยอดจองลอยที่คลังต้นทาง', async () => {
+  const w = await plant();
+  await stockIn(w, 'TST-001', 'A', 'A-01', 5);
+  const j = await job(w, { soNo: 'SO-R31', lines: [{ code: 'TST-001', qty: 4 }] });
+  const k = await job(w, { soNo: 'SO-R32', lines: [{ code: 'TST-001', qty: 4 }] });
+  await reserve(w, j, 'TST-001', 'A', 4);
+  const tr = await w.ok('STORE1', 'doc.post', { type: 'TR', job: j, lines: [{ code: 'TST-001', qty: 4, wh: 'A', bin: 'A-01', toWh: 'B', toBin: 'B-01' }] });
+  await w.ok('STORE2', 'transfer.receive', { docNo: tr.result.docNo });
+  await w.ok('STORE1', 'doc.post', { type: 'PD', job: j, lines: [{ code: 'TST-001', qty: 4, wh: 'B', bin: 'B-01' }] });
+  await stockIn(w, 'TST-001', 'A', 'A-01', 3);
+  const s = await w.state();
+  assert.equal(sixOf(s, 'TST-001', { wh: 'A' }).reserved, 0);
+  assert.equal(sixOf(s, 'TST-001', { wh: 'A' }).free, 4);
+  await reserve(w, k, 'TST-001', 'A', 4); // the stock left in A is free for the other SO
+  assertConsistent(await w.state());
+});
+
+test('ทบทวน: ใบโอนตามใบงาน – ยอดจองย้ายตามของ (ออกจากต้นทางทันที เข้าปลายทางเมื่อรับ) ยกเลิกใบโอนแล้วกลับที่เดิม', async () => {
+  const w = await plant();
+  await stockIn(w, 'TST-001', 'A', 'A-01', 6);
+  const j = await job(w, { soNo: 'SO-R35', lines: [{ code: 'TST-001', qty: 4 }] });
+  const k = await job(w, { soNo: 'SO-R36', lines: [{ code: 'TST-001', qty: 4 }] });
+  const id = await reserve(w, j, 'TST-001', 'A', 4, { needDate: '2026-11-12', priority: 2 });
+  // moving the job's reserved stock to the production warehouse B
+  const tr = await w.ok('STORE1', 'doc.post', { type: 'TR', job: j, lines: [{ code: 'TST-001', qty: 4, wh: 'A', bin: 'A-01', toWh: 'B', toBin: 'B-01' }] });
+  let s = await w.state();
+  assert.equal(res(s, id).status, 'RELEASED');
+  assert.equal(sixOf(s, 'TST-001', { wh: 'A' }).overReserved, 0); // no stale reservation left in A
+  assert.equal(sixOf(s, 'TST-001', { wh: 'A' }).free, 2);
+  assertConsistent(s);
+  // cancelling the transfer in transit puts the reservation back in A
+  await w.ok('LEAD', 'doc.cancel', { docNo: tr.result.docNo, reason: 'โอนผิด' });
+  s = await w.state();
+  assert.deepEqual([res(s, id).status, P.remaining(res(s, id)), res(s, id).wh], ['OPEN', 4, 'A']);
+  assertConsistent(s);
+  // transfer again, receive in two steps: each arrival is reserved for the job in B
+  const tr2 = await w.ok('STORE1', 'doc.post', { type: 'TR', job: j, lines: [{ code: 'TST-001', qty: 4, wh: 'A', bin: 'A-01', toWh: 'B', toBin: 'B-01' }] });
+  await w.ok('STORE2', 'transfer.receive', { docNo: tr2.result.docNo, lines: [{ line: 1, qty: 1 }] });
+  await w.ok('STORE2', 'transfer.receive', { docNo: tr2.result.docNo });
+  s = await w.state();
+  const inB = P.reservations(s, { jobNo: j, wh: 'B', open: true });
+  assert.deepEqual(inB.map((r) => r.qty), [1, 3]);
+  assert.ok(inB.every((r) => r.needDate === '2026-11-12' && r.priority === 2 && r.fromDoc === tr2.result.docNo));
+  assert.equal(sixOf(s, 'TST-001', { wh: 'B' }).free, 0);
+  // the other SO cannot take it in B, and may reserve what is left in A
+  assert.equal(codeOf(await w.exec('STORE1', 'doc.post', { type: 'PD', job: k, lines: [{ code: 'TST-001', qty: 1, wh: 'B', bin: 'B-01' }] })), 'RESERVED');
+  await reserve(w, k, 'TST-001', 'A', 2);
+  // the job picks in B against the moved reservations
+  const pl = P.pickList(await w.state(), j);
+  assert.deepEqual(pl.map((x) => [x.wh, x.remaining]), [['B', 1], ['B', 3]]);
+  await pick(w, j, pl.map((x) => ({ reservationId: x.reservationId, qty: x.remaining, wh: 'B', bin: 'B-01' })));
+  s = await w.state();
+  assert.equal(lineOf(s, j, 'TST-001').issued, 4);
+  assert.equal(P.reservations(s, { jobNo: j, open: true }).length, 0);
+  assertConsistent(s);
+});
+
+test('ทบทวน: ใบโอนตามใบงานของล็อตที่ถูกกักกันระหว่างทาง – รับปลายทางแล้วไม่จองต่อ', async () => {
+  const w = await plant();
+  await w.ok('LEAD', 'item.upsert', { code: 'TST-LOT', name: 'ชิ้นติดล็อต', baseUnit: 'ชิ้น', type: 'PART', trackLot: 'lot' });
+  await stockIn(w, 'TST-LOT', 'A', 'A-01', 3, { lot: 'L1' });
+  const j = await job(w, { soNo: 'SO-R37', lines: [{ code: 'TST-LOT', qty: 3 }] });
+  await reserve(w, j, 'TST-LOT', 'A', 3);
+  const tr = await w.ok('STORE1', 'doc.post', { type: 'TR', job: j, lines: [{ code: 'TST-LOT', qty: 3, wh: 'A', bin: 'A-01', lot: 'L1', toWh: 'B', toBin: 'B-01' }] });
+  const s = await w.state();
+  const receive = (state) => RRS.core.prepare(state, { kind: 'transfer.receive', payload: { docNo: tr.result.docNo } },
+    { now: '2026-11-03T03:00:00.000Z', user: 'STORE2' });
+  const newRes = (r) => r.commit.effects.filter((e) => e.t === 'reservations' && e.v && e.v.wh === 'B');
+  const normal = receive(s);
+  assert.equal(normal.ok, true, JSON.stringify(normal.errors));
+  assert.deepEqual(newRes(normal).map((e) => [e.v.jobNo, e.v.qty]), [[j, 3]]);
+  // the quality module's lots table (Phase 5) says the lot was quarantined in transit
+  const s2 = structuredClone(s);
+  s2.tables.lots = { 'TST-LOT|L1': { code: 'TST-LOT', lot: 'L1', kind: 'lot', status: 'QUARANTINED' } };
+  const held = receive(s2);
+  assert.equal(held.ok, true, JSON.stringify(held.errors));
+  assert.deepEqual(newRes(held), []);
+});
+
+test('ทบทวน: สิทธิ์คลังของใบหยิบใช้สิทธิ์ "หยิบ/เบิกให้งาน" (ไม่ใช่สิทธิ์บันทึกรับ–จ่ายทั่วไป); ล็อต/ช่องเก็บต้องตรง', async () => {
+  const w = await plant();
+  await w.ok('LEAD', 'item.upsert', { code: 'TST-LOT', name: 'ชิ้นติดล็อต', baseUnit: 'ชิ้น', type: 'PART', trackLot: 'lot' });
+  await stockIn(w, 'TST-LOT', 'A', 'A-01', 3, { lot: 'L1' });
+  await stockIn(w, 'TST-LOT', 'A', 'A-02', 3, { lot: 'L2' });
+  const j = await job(w, { soNo: 'SO-R81', lines: [{ code: 'TST-LOT', qty: 4 }] });
+  const id = await reserve(w, j, 'TST-LOT', 'A', 4);
+  const s = await w.state();
+  assert.deepEqual(P.pickList(s, j)[0].suggest, [{ bin: 'A-01', lot: 'L1', qty: 3 }, { bin: 'A-02', lot: 'L2', qty: 1 }]);
+  assert.equal(codeOf(await pick(w, j, [{ reservationId: id, qty: 1, wh: 'A', bin: 'A-01', lot: 'L2' }])), 'NOT_ENOUGH');
+  assert.equal(codeOf(await pick(w, j, [{ reservationId: id, qty: 1, wh: 'A', bin: 'A-01' }])), 'LOT_REQUIRED');
+  assert.equal(codeOf(await pick(w, j, [{ reservationId: id, qty: 1, wh: 'A', bin: 'B-01', lot: 'L1' }])), 'NOT_FOUND');
+  // a company that lets production pick: picking rights are enough, the general posting right is not needed
+  const orig = RRS.auth.PERMS['pick.post'].slice();
+  RRS.auth.definePerm('pick.post', orig.concat(['production']));
+  try {
+    const r = await pick(w, j, [{ reservationId: id, qty: 3, wh: 'A', bin: 'A-01', lot: 'L1' }, { reservationId: id, qty: 1, wh: 'A', bin: 'A-02', lot: 'L2' }], 'PROD');
+    assert.equal(r.ok, true, JSON.stringify(r.errors));
+    assert.equal(codeOf(await w.exec('PROD', 'doc.post', { type: 'PD', job: j, lines: [{ code: 'TST-LOT', qty: 1, wh: 'A', bin: 'A-02', lot: 'L2' }] })), 'NO_PERMISSION');
+  } finally {
+    RRS.auth.definePerm('pick.post', orig);
+  }
+  assertConsistent(await w.state());
+});
+
+test('ทบทวน: เปลี่ยนยอดจองระบุหน่วย (โหล) แปลงเป็นหน่วยหลัก ไม่ตีความเป็นชิ้น', async () => {
+  const w = await plant();
+  await stockIn(w, 'TST-001', 'A', 'A-01', 30);
+  const j = await job(w, { soNo: 'SO-R41', lines: [{ code: 'TST-001', qty: 2, unit: 'โหล' }] });
+  const id = await reserve(w, j, 'TST-001', 'A', 1, { unit: 'โหล' });
+  await w.ok('PLAN', 'reserve.change', { id, qty: 2, unit: 'โหล' });
+  let s = await w.state();
+  assert.equal(res(s, id).qty, 24);
+  assert.equal(codeOf(await w.exec('PLAN', 'reserve.change', { id, qty: 1, unit: 'กล่อง' })), 'NO_UNIT');
+  await pick(w, j, [{ reservationId: id, qty: 0.5, unit: 'โหล', wh: 'A', bin: 'A-01' }]);
+  s = await w.state();
+  assert.equal(res(s, id).issued, 6);
+  assert.equal(codeOf(await w.exec('PLAN', 'reserve.change', { id, qty: 0.25, unit: 'โหล' })), 'BELOW_ISSUED');
+  assertConsistent(s);
+});
+
+test('ทบทวน: ความพร้อม – ของกักกัน (NCR) ไม่ขึ้นว่า "รอตรวจ"; ใบงานที่ไม่มีรายการไม่ขึ้นว่าพร้อม', async () => {
+  const w = await plant();
+  const j = await job(w, { soNo: 'SO-R51', lines: [{ code: 'TST-002', qty: 2 }] });
+  await w.ok('LEAD', 'doc.post', { type: 'AJ', lines: [{ code: 'TST-002', qty: 2, wh: 'A', bin: 'A-01', status: 'QUARANTINE' }] });
+  let s = await w.state();
+  assert.equal(P.readiness(s, j).lines[0].status, 'ขาด');
+  assert.equal(sixOf(s, 'TST-002').qcHold, 2); // six() still counts it as not usable
+  await w.ok('LEAD', 'doc.post', { type: 'AJ', lines: [{ code: 'TST-002', qty: 2, wh: 'A', bin: 'A-02', status: 'QC_HOLD' }] });
+  s = await w.state();
+  assert.equal(P.readiness(s, j).lines[0].status, 'รอตรวจ');
+  // a job with no component lines (e.g. a Sales Office job not mapped yet) is not "ready"
+  const empty = structuredClone(s);
+  empty.tables.jobs['JB-EMPTY'] = { ...jobRow(s, j), jobNo: 'JB-EMPTY', lines: [] };
+  assert.equal(P.readiness(empty, 'JB-EMPTY').ready, false);
+});
+
+test('ทบทวน: ชิ้นส่วนที่งานผลิตเองรับเข้า (FR) ถูกจองให้งานนั้นทันที ไม่หลุดเป็นของพร้อมเบิกของงานอื่น', async () => {
+  const w = await plant();
+  const j = await job(w, { soNo: 'SO-R61', product: 'TST-FG', qty: 2 }); // TST-001 ต้องใช้ 4
+  const other = await job(w, { soNo: 'SO-R62', lines: [{ code: 'TST-001', qty: 4 }] });
+  await w.ok('PLAN', 'job.setMake', { jobNo: j, line: 1, toMake: 4 });
+  await w.ok('PROD', 'job.record', { jobNo: j, line: 1, qty: 3 });
+  const fr = await w.ok('STORE1', 'doc.post', { type: 'FR', job: j, lines: [{ code: 'TST-001', qty: 3, wh: 'A', bin: 'A-01' }] });
+  let s = await w.state();
+  const mine = P.reservations(s, { jobNo: j, open: true });
+  assert.deepEqual(mine.map((r) => [r.code, r.wh, r.qty]), [['TST-001', 'A', 3]]);
+  assert.equal(sixOf(s, 'TST-001').free, 0);
+  assert.equal(codeOf(await w.exec('PLAN', 'reserve.create', { jobNo: other, code: 'TST-001', wh: 'A', qty: 1 })), 'NO_FREE');
+  assert.equal(codeOf(await w.exec('STORE1', 'doc.post', { type: 'PD', job: other, lines: [{ code: 'TST-001', qty: 1, wh: 'A', bin: 'A-01' }] })), 'RESERVED');
+  // the job picks its own pieces against that reservation
+  await pick(w, j, [{ reservationId: mine[0].id, qty: 2, wh: 'A', bin: 'A-01' }]);
+  s = await w.state();
+  assert.equal(lineOf(s, j, 'TST-001').issued, 2);
+  assertConsistent(s);
+  // cancelling a receipt takes back what it reserved (the rest of it, never below what was issued)
+  await stockIn(w, 'TST-001', 'A', 'A-01', 2); // other stock so the receipt can be reversed
+  await w.ok('LEAD', 'doc.cancel', { docNo: fr.result.docNo, reason: 'รับซ้ำ' });
+  s = await w.state();
+  assert.equal(P.remaining(res(s, mine[0].id)), 0);
+  assert.equal(lineOf(s, j, 'TST-001').received, 0);
+  assertConsistent(s);
+});
+
+test('ทบทวน: ตัวเลขไม่เพี้ยนหลังจอง/หยิบบางส่วน/คืน/ยกเลิก/ทำซ้ำหลายรอบ', async () => {
+  const w = await plant();
+  await stockIn(w, 'TST-001', 'A', 'A-01', 12);
+  await stockIn(w, 'TST-001', 'B', 'B-01', 3);
+  const j = await job(w, { soNo: 'SO-R71', product: 'TST-FG', qty: 4 }); // TST-001 ต้องใช้ 8
+  const k = await job(w, { soNo: 'SO-R72', lines: [{ code: 'TST-001', qty: 6 }] });
+  const steps = [];
+  const step = async (name, fn) => { await fn(); steps.push(name); assertConsistent(await w.state()); };
+  let ra;
+  await step('จองบางส่วน', async () => { ra = (await w.ok('PLAN', 'reserve.create', { jobNo: j, code: 'TST-001', wh: 'A', qty: 10, allowPartial: true })).result.id; });
+  let rk;
+  await step('อีก SO จองที่เหลือ', async () => { rk = await reserve(w, k, 'TST-001', 'A', 4); });
+  let p1, p2, rt;
+  await step('หยิบ 5', async () => { p1 = (await w.ok('STORE1', 'pick.post', { jobNo: j, lines: [{ reservationId: ra, qty: 5, wh: 'A', bin: 'A-01' }] })).result.docNo; });
+  await step('หยิบซ้ำคำขอเดิม', async () => { await pick(w, j, [{ reservationId: ra, qty: 3, wh: 'A', bin: 'A-01' }], 'STORE1', 'same-scan'); await pick(w, j, [{ reservationId: ra, qty: 3, wh: 'A', bin: 'A-01' }], 'STORE1', 'same-scan'); });
+  let s = await w.state();
+  assert.equal(res(s, ra).issued, 8);
+  assert.equal(res(s, ra).status, 'FILLED');
+  p2 = RRS.inventory.history(s, { code: 'TST-001' }).find((m) => m.docType === 'PD' && m.docNo !== p1).docNo;
+  await step('คืนของเหลือ 2', async () => { rt = (await w.ok('STORE1', 'doc.post', { type: 'RT', job: j, lines: [{ code: 'TST-001', qty: 2, wh: 'A', bin: 'A-02' }] })).result.docNo; });
+  await step('ย้ายการจองของอีก SO ไปคลัง B', async () => { await w.ok('PLAN', 'reserve.change', { id: rk, qty: 3, wh: 'B', reason: 'ใช้ของคลัง B' }); });
+  await step('จองเพิ่มส่วนที่คืน', async () => { await w.ok('PLAN', 'reserve.auto', { jobNo: j }); });
+  await step('ยกเลิกใบคืน', async () => { await w.ok('LEAD', 'doc.cancel', { docNo: rt, reason: 'คืนผิด' }); });
+  await step('ยกเลิกใบเบิกแรก', async () => { await w.ok('LEAD', 'doc.cancel', { docNo: p1, reason: 'หยิบผิด' }); });
+  await step('ยกเลิกซ้ำไม่ได้', async () => {
+    assert.equal(codeOf(await w.exec('LEAD', 'doc.cancel', { docNo: p1, reason: 'ซ้ำ' })), 'ALREADY_CANCELLED');
+  });
+  s = await w.state();
+  assert.equal(lineOf(s, j, 'TST-001').issued, 3);
+  assert.equal(qty(s, { code: 'TST-001' }), 12);
+  const six = sixOf(s, 'TST-001');
+  assert.equal(six.reserved, RRS.util.round(P.reservations(s, { open: true, code: 'TST-001' }).reduce((t, r) => t + P.remaining(r), 0)));
+  assert.equal(six.demand, 8 - 3 + 6);
+  await step('ปิดงาน', async () => { await w.ok('PLAN', 'job.status', { jobNo: j, status: 'DONE' }); });
+  await step('ยกเลิกใบเบิกหลังปิดงาน', async () => { await w.ok('LEAD', 'doc.cancel', { docNo: p2, reason: 'ยกเลิกหลังปิด' }); });
+  s = await w.state();
+  assert.equal(lineOf(s, j, 'TST-001').issued, 0);
+  assert.equal(P.reservations(s, { jobNo: j, open: true }).length, 0);
+  assert.equal(qty(s, { code: 'TST-001' }), 15);
+  assert.equal(steps.length, 12);
+});
+
 test('ตารางใหม่มีคำอธิบายภาษาไทยครบ (พจนานุกรมข้อมูล / แท็บ Google Sheet) และมีช่องตามสัญญากลาง', () => {
   const need = {
     jobs: ['jobNo', 'soNo', 'product', 'bomRev', 'qty', 'dueDate', 'priority', 'status', 'lines', 'createdBy', 'createdAt'],

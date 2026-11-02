@@ -79,8 +79,28 @@ export const tempDir = (name) => fs.mkdtempSync(path.join(os.tmpdir(), `sq-${nam
 export const rid = (p = 'rq') => `${p}-${randomBytes(8).toString('hex')}`;
 
 /**
+ * Every outbound fetch of the Worker goes to `handler(request)` (the local fake Google / Sales Office servers) – never
+ * to the network. Requests nobody handles get 599 and are counted in `blocked` (tests assert there are none).
+ */
+export function outboundRouter(handlers = {}) {
+  const r = { requests: [], blocked: [] };
+  r.fn = async (request) => {
+    const url = new URL(request.url);
+    r.requests.push({ method: request.method, host: url.host, path: url.pathname });
+    const h = handlers[url.host];
+    if (!h) {
+      r.blocked.push(`${request.method} ${url.host}${url.pathname}`);
+      return new Response('blocked by the test outbound router', { status: 599 });
+    }
+    return h(request);
+  };
+  return r;
+}
+
+/**
  * Starts the Worker. opts: {isolates: 1|2 (separate isolates on the same D1/R2), persist: dir, migrate (default true),
- * snapshotEvery, bindings, assetsDir, secrets}. → server {mf, d1, r2, secrets, a, b, call, …}
+ * snapshotEvery, bindings, assetsDir, secrets, outbound: outboundRouter(...)}. → server {mf, d1, r2, secrets, a, b, call, …}
+ * Without opts.outbound every outbound request is refused (599) and counted in server.outbound.blocked.
  */
 export async function startServer(opts = {}) {
   const script = await buildWorker();
@@ -90,9 +110,10 @@ export async function startServer(opts = {}) {
     SQ_ENV: 'test', SQ_SALES_BRIDGE: 'off', SQ_DRIVE_BACKUP_ENABLED: 'false', SQ_SNAPSHOT_EVERY: String(opts.snapshotEvery || 500),
   }, opts.bindings || {});
   const names = opts.isolates === 2 ? ['a', 'b'] : ['a'];
+  const outbound = opts.outbound || outboundRouter({});
   const workers = names.map((name, i) => {
     const w = { name, modules: true, script, compatibilityDate: COMPAT_DATE, compatibilityFlags: ['nodejs_compat'],
-      d1Databases: { DB: 'stockqc-test-db' }, r2Buckets: { BUCKET: 'stockqc-test-files' }, bindings };
+      d1Databases: { DB: 'stockqc-test-db' }, r2Buckets: { BUCKET: 'stockqc-test-files' }, bindings, outboundService: outbound.fn };
     if (opts.assetsDir && i === 0) {
       w.assets = { directory: opts.assetsDir, binding: 'ASSETS', routerConfig: { has_user_worker: true, invoke_user_worker_ahead_of_assets: true } };
     }
@@ -162,7 +183,12 @@ export async function startServer(opts = {}) {
     return { username, password, cookie: await login(username, password) };
   }
   const env = () => ({ DB: d1, BUCKET: r2 });
-  return { mf, d1, r2, secrets, bindings, call, callJson, login, ownerLogin, cmd, ok, account, env, dispose: () => mf.dispose() };
+  /** Runs the Worker's scheduled() handler for `cron` on isolate `on` (default a) and waits for it. */
+  async function scheduled(cron, on = 'a') {
+    const worker = await mf.getWorker(on);
+    return worker.scheduled({ cron, scheduledTime: new Date() });
+  }
+  return { mf, d1, r2, secrets, bindings, outbound, call, callJson, login, ownerLogin, cmd, ok, account, env, scheduled, dispose: () => mf.dispose() };
 }
 
 /** Owner logs in and starts the system; masters for stock tests. → owner cookie */

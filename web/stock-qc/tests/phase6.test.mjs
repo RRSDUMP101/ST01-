@@ -54,7 +54,7 @@ test('P6-1 ไม่มีข้อผิดพลาดรุนแรงที
   const rr2 = await w.ok('LEAD', 'doc.post', { type: 'RR', lines: [{ code: 'TST-PLATE', qty: 1, wh: 'A', bin: 'A-02', lot: 'H2' }] });
   await w.ok('LEAD', 'doc.cancel', { docNo: rr2.result.docNo, reason: 'รับผิดใบ' });
 
-  const s = await w.state();
+  const s = clone(await w.state());
   assert.equal(RRS.q.qty(s, { code: 'TST-001', wh: 'A' }), 12);
   assert.equal(RRS.q.qty(s, { code: 'TST-001', wh: 'B' }), 4);
   const chk = R.dailyCheck(s);
@@ -204,7 +204,7 @@ test('P6-3 กู้ข้อมูลได้: เล่นซ้ำไฟล�
   await stockIn(w, 'TST-001', 'A', 'A-01', 10);
   const tr = await w.ok('STORE1', 'doc.post', { type: 'TR', lines: [{ code: 'TST-001', qty: 3, wh: 'A', bin: 'A-01', toWh: 'B' }] });
   await w.ok('STORE2', 'transfer.receive', { docNo: tr.result.docNo, lines: [{ line: 1, qty: 1 }] });
-  const live = await w.state();
+  const live = clone(await w.state());
   const file = JSON.stringify({ commits: w.store.commits });
   const v = R.verifyBackup(file, { compare: live, keepState: true });
   assert.deepEqual(v.problems, []);
@@ -245,7 +245,7 @@ test('P6-3 กู้ข้อมูลได้: ไฟล์สำรองท�
   await w.ok('STORE1', 'doc.post', { type: 'PD', lines: [{ code: 'TST-001', qty: 4, wh: 'A', bin: 'A-01' }] });
   const commits = clone(w.store.commits);
   const n = commits.length;
-  const live = await w.state();
+  const live = clone(await w.state());
   // แก้ยอดในไฟล์
   const t = clone(commits);
   const ci = t.findIndex((c) => c.effects.some((e) => e.t === 'balances'));
@@ -262,8 +262,10 @@ test('P6-3 กู้ข้อมูลได้: ไฟล์สำรองท�
   // คนละประวัติ: commit ลำดับเดียวกันจากอีกระบบ
   const w2 = await world();
   await stockIn(w2, 'TST-001', 'A', 'A-01', 7);
-  const mixed = commits.slice(0, n - 2).concat([clone(w2.store.commits[n - 2])]);
-  assert.notEqual(mixed[n - 2].hash, commits[n - 2].hash);
+  await stockIn(w2, 'TST-001', 'A', 'A-01', 1);
+  const mixed = commits.slice(0, n - 1).concat([clone(w2.store.commits[n - 1])]);
+  assert.equal(mixed[n - 1].seq, n);
+  assert.notEqual(mixed[n - 1].prev, commits[n - 2].hash);
   assert.match(R.verifyBackup(mixed).problems[0], /คนละประวัติ/);
   // อ่านไม่ได้ / ว่าง / ไม่ใช่ commit
   assert.equal(R.verifyBackup('not json').ok, false);
@@ -493,10 +495,10 @@ test('ของไม่เคลื่อนไหวตามจำนวน�
   const nm30 = R.nonMoving(s, { today: '2026-06-30', days: 30 });
   assert.deepEqual(nm30.rows.map((r) => [r.code, r.lastMoveDate, r.idleDays, r.qty]), [['TST-001', '2026-05-01', 60, 7], ['TST-002', '2026-05-01', 60, 4]]);
   assert.deepEqual(R.nonMoving(s, { today: '2026-06-30', days: 30, wh: 'A' }).rows.map((r) => [r.code, r.lastMoveDate]), [['TST-001', '2026-01-01'], ['TST-002', '2026-05-01']]);
-  await w.ok('ADMIN', 'settings.update', { patch: { policies: { nonMovingDays: 170 } } });
+  await w.ok('ADMIN', 'settings.update', { patch: { policies: { nonMovingDays: 200 } } });
   s = await w.state();
   const pol = R.nonMoving(s, { today: '2026-10-20', wh: 'A' });
-  assert.equal(pol.days, 170);
+  assert.equal(pol.days, 200);
   assert.deepEqual(pol.rows.map((r) => [r.code, r.idleDays]), [['TST-001', 292]]);
   assert.ok(pol.cols.every((c) => THAI.test(c.label)));
 
@@ -513,7 +515,9 @@ test('ของไม่เคลื่อนไหวตามจำนวน�
   assert.equal(ag.totals.buckets['>180'].rows, 1);
   assert.equal(ag.rows[0].code, 'TST-PLATE');
   // ไม่มีข้อมูลล็อต ใช้วันรับเข้าล่าสุดของยอด
-  assert.equal(R.aging(s, { today: '2026-06-30', code: 'TST-PLATE' }).rows[0].sinceFrom, 'lastIn');
+  const noLots = clone(s);
+  delete noLots.tables.lots; // the quality module (when loaded) creates lot rows on receipt
+  assert.equal(R.aging(noLots, { today: '2026-06-30', code: 'TST-PLATE' }).rows[0].sinceFrom, 'lastIn');
 });
 
 test('ความแม่นยำการนับจากรอบนับที่อนุมัติ: บรรทัดในเกณฑ์ (|ต่าง| ≤ max(จำนวน, % ของยอดระบบ)) ต่อบรรทัดที่นับ', async () => {
@@ -571,7 +575,8 @@ test('งานรอ QC: ของรอตรวจ/กักกัน/รอ�
     'NCR-1': { ncrNo: 'NCR-1', code: 'TST-001', wh: 'A', bin: 'A-02', qty: 2, defect: 'สนิม', status: 'OPEN', createdAt: '2026-11-05T02:00:00.000Z' },
     'NCR-2': { ncrNo: 'NCR-2', code: 'TST-001', wh: 'A', qty: 1, defect: 'สนิม', status: 'CLOSED', createdAt: '2026-11-01T02:00:00.000Z' },
   };
-  const r = R.qcPending(s, { today: '2026-11-10', now: '2026-11-10T01:01:00.000Z' });
+  const firstIn = RRS.inventory.history(s, { code: 'TST-PLATE', wh: 'A' }).slice(-1)[0].at;
+  const r = R.qcPending(s, { today: '2026-11-10', now: new Date(Date.parse(firstIn) + 216 * 3600e3).toISOString() });
   assert.deepEqual(r.rows.map((x) => [x.status, x.code, x.wh, x.qty, x.sinceDate, x.ageDays]), [
     ['QUARANTINE', 'TST-001', 'A', 2, '2026-11-05', 5],
     ['QC_HOLD', 'TST-PLATE', 'A', 5, '2026-11-01', 9],
@@ -607,7 +612,7 @@ test('อัตราผ่าน QC ครั้งแรก (FPY) ต่อข
   };
   const f = R.fpy(s);
   assert.deepEqual(f.rows.map((r) => [r.stage, r.code, r.first, r.pass, r.fpy]), [
-    ['FINAL', 'TST-FG', 1, 1, 100], ['INCOMING', 'TST-PLATE', 2, 1, 50], ['IN_PROCESS', 'TST-001', 1, 1, 100]]);
+    ['INCOMING', 'TST-PLATE', 2, 1, 50], ['IN_PROCESS', 'TST-001', 1, 1, 100], ['FINAL', 'TST-FG', 1, 1, 100]]);
   assert.deepEqual([f.totals.first, f.totals.pass, f.totals.fpy, f.totals.byStage.INCOMING.fpy], [4, 3, 75, 50]);
   assert.equal(f.totals.qcWaitHours, 7);
   const q = R.qcWait(s);
@@ -853,7 +858,7 @@ test('UAT: เกณฑ์ตรวจรับ Phase 0–6 ครบทุก�
   assert.equal(sum.byPhase[6].total, 6);
   assert.equal(byId(sum.rows, 'id', 'P6-X1').custom, true);
   assert.equal(R.uatSummary(s, { phases: [6] }).rows.length, 6);
-  assert.ok(sum.cols.every((c) => THAI.test(c.label) || c.label === 'Phase'));
+  assert.ok(sum.cols.every((c) => THAI.test(c.label)));
 });
 
 test('อบรมตามบทบาท: บันทึกผู้อบรม/วันที่ ผู้อบรมต้องไม่ใช่ผู้รับการอบรม และบทบาทต้องตรงกับผู้ใช้', async () => {
@@ -938,6 +943,7 @@ test('ส่งออกทุกตารางเป็นแท็บ Google 
   assert.equal(oc[1][ix('offcuts', 'remark')], '\'=HYPERLINK("http://x")');
   assert.equal(R.exportTables(s, { safeText: false }).offcuts[1][ix('offcuts', 'remark')], '=HYPERLINK("http://x")');
   assert.equal(oc[1][ix('offcuts', 'width')], 600);
+  assert.deepEqual(R.exportTables(s, { header: 'name' }).offcuts[0].slice(0, 3), ['id', 'code', 'material']);
   // fields outside the dictionary are kept in the last column
   const items = exp.items;
   const sheetRow = items.find((r) => r[0] === 'TST-SHEET');

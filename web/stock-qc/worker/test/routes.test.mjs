@@ -26,8 +26,10 @@ test('health says which features are configured, never a value; every flag is of
   assert.equal(f.database, 'ready');
   assert.equal(f.files, true);
   assert.equal(f.page, true);
-  assert.deepEqual(f.driveBackup, { enabled: false, configured: false, built: false });
+  assert.deepEqual(f.driveBackup, { enabled: false, configured: false, built: true });
   assert.equal(f.salesBridge.mode, 'off');
+  assert.equal(f.salesBridge.built, true);
+  assert.ok(r.body.engine.files.includes('sales.js'));
   assert.equal(f.salesBridge.configured, false, 'only some connector values present');
   assert.ok(r.body.engine.files.includes('core.js') && r.body.engine.files.includes('inventory.js'));
   for (const v of [s.secrets.ownerUsername, s.secrets.ownerHash, s.secrets.sessionSecret, 'sales.invalid', 'x'.repeat(40)]) assert.ok(!r.text.includes(v), 'health leaks ' + v.slice(0, 6));

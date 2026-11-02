@@ -9,15 +9,22 @@ ADMIN_USERNAME=
 ADMIN_PASSWORD_HASH=
 SESSION_SECRET=
 
-# Google Drive backup (later step; off unless SQ_DRIVE_BACKUP_ENABLED=true).
+# Google Drive backup of the commits (src/backup.js): off unless SQ_DRIVE_BACKUP_ENABLED=true – manual runs too.
+# OAuth client of a Google account that owns a PRIVATE folder (not shared, not in a shared drive); the refresh token
+# needs the drive.file scope. SQ_DRIVE_BACKUP_FOLDER_ID: id of that folder. Use a staging folder for a copied deployment.
 GOOGLE_DRIVE_CLIENT_ID=
 GOOGLE_DRIVE_CLIENT_SECRET=
 GOOGLE_DRIVE_REFRESH_TOKEN=
 SQ_DRIVE_BACKUP_FOLDER_ID=
 SQ_DRIVE_BACKUP_ENABLED=
+# Optional, tests only: smaller JSONL parts (bytes, 1024 … 4194304; default 4 MB).
+SQ_BACKUP_PART_BYTES=
 
-# Sales Office connector (later step; off by default). Domestic and Export secrets must be different values.
-# SQ_SALES_BRIDGE: off (default) | pull | pull_push. Staging only – never production Sales Office.
+# Sales Office connector (src/sales-bridge.js): off by default. SQ_SALES_URL = https origin of a STAGING Sales Office
+# only (no path). Each workspace has its own secret (Sales Office RRS_PARTLIST_DOMESTIC_SECRET / RRS_PARTLIST_EXPORT_SECRET),
+# at least 32 characters, and the two must be different values. SQ_SALES_BRIDGE: off (default) | pull | pull_push.
+# pull_push only when the ST01 desktop connector is off for that workspace (decision ค-10: one connector per workspace).
+# The connector writes jobs as the engine user bound to the owner account (ADMIN_USERNAME).
 SQ_SALES_URL=
 SQ_SALES_CONNECTOR_ID=
 SQ_SALES_DOMESTIC_SECRET=

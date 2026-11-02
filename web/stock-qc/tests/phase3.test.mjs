@@ -812,3 +812,30 @@ test('Express: adjust, cancel, cancel again, adjust again – the difference is 
   await w.ok('ACC', 'express.close', { batchId: b });
   assert.deepEqual(RRS.inventory.verifyBalances(await w.state()), []);
 });
+
+test('Freeze and stale checks trust no document `source` typed by the caller', async () => {
+  const w = await expressWorld('Express');
+  await stockIn(w, 'TST-001', 'A', 'A-01', 10);
+  const b = (await w.ok('LEAD', 'express.import', fileOf('spoof.xlsx', w.clock.peek(), [{ code: 'TST-001', wh: '01', qty: 12 }]))).result.batchId;
+  const ct = (await w.ok('LEAD', 'count.create', { wh: 'A', bins: ['A-01'], mode: 'freeze' })).result.id;
+  const seq = (await w.state()).seq;
+  // a document claiming to be the count's own adjustment is still a document in a frozen bin
+  const pd = await w.exec('STORE1', 'doc.post', { type: 'PD', source: 'count:' + ct, lines: [{ code: 'TST-001', qty: 1, wh: 'A', bin: 'A-01' }] });
+  assert.equal(pd.ok, false);
+  assert.equal(pd.errors[0].code, 'COUNT_FREEZE');
+  assert.equal((await w.state()).seq, seq);
+  await w.ok('LEAD', 'count.cancel', { id: ct, reason: 'ทดสอบเสร็จ' });
+  // a hand-made AJ claiming a count / another Express batch as its source does not make the file stale
+  const fake = await w.ok('LEAD', 'doc.post', { type: 'AJ', source: 'count:CT-00009', lines: [{ code: 'TST-001', qty: 1, wh: 'A', bin: 'A-01' }] });
+  await w.ok('LEAD', 'doc.post', { type: 'AJ', source: 'express:' + b, lines: [{ code: 'TST-001', qty: -1, wh: 'A', bin: 'A-01' }] });
+  let s = await w.state();
+  assert.deepEqual(RRS.reconcile.reconcile(s, b).rows[0].staleBy, []);
+  const r = await w.ok('ACC', 'express.resolve', { batchId: b, lines: [adjust('TST-001', 'A', 'A-01')] });
+  assert.equal(qty(await w.state(), { code: 'TST-001' }), 12);
+  // cancelling the fake one does not reopen the batch's real decision
+  await w.ok('LEAD', 'doc.cancel', { docNo: fake.result.docNo, reason: 'ทดสอบ' });
+  s = await w.state();
+  assert.equal(s.tables.express_batches[b].resolutions[0].cancelledAt, '');
+  assert.equal(RRS.reconcile.reconcile(s, b).rows[0].resolution.docNo, r.result.docNo);
+  assert.deepEqual(RRS.inventory.verifyBalances(s), []);
+});

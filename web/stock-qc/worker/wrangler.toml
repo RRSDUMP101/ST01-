@@ -40,4 +40,9 @@ SQ_DRIVE_BACKUP_ENABLED = "false"
 # A state snapshot goes to R2 every this many commits (fast cold start).
 SQ_SNAPSHOT_EVERY = "500"
 
-# No [triggers] cron yet: the Drive backup and Sales Office sync come in later steps, also off by default.
+# Cron triggers (UTC). Each job checks its own flag first, so with the defaults above a tick does nothing and sends
+# nothing: "40 18 * * *" = Drive backup at 01:40 Asia/Bangkok (only when SQ_DRIVE_BACKUP_ENABLED = "true" and the four
+# Google values are set); "*/15 * * * *" = Sales Office sync (only when SQ_SALES_BRIDGE is pull / pull_push and the
+# connector is configured). The strings must match BACKUP_CRON in src/backup.js and SYNC_CRON in src/sales-bridge.js.
+[triggers]
+crons = ["40 18 * * *", "*/15 * * * *"]

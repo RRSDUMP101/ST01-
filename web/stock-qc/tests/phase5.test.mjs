@@ -748,3 +748,201 @@ test('ตรวจระหว่างผลิต: ผูกใบงาน �
   assert.deepEqual(tj.inspections.map((i) => i.result), ['PASS', 'FAIL', 'PASS']);
   assert.deepEqual(tj.ncrs.map((n) => n.ncrNo), [ncr.ncrNo]);
 });
+
+// ---------------------------------------------------------------------------------------------------------------
+// independent review: gaps found after the first build (each test failed before the fix)
+// ---------------------------------------------------------------------------------------------------------------
+const BOLT_CHARS = [{ name: 'ความยาว', kind: 'measure', nominal: 50, min: 49.5, max: 50.5, unit: 'มม.' }];
+const boltOk = [{ char: 'C1', value: 50 }];
+const boltBad = [{ char: 'C1', value: 52 }];
+/** A lot-tracked bought part that is inspected on receipt (no material certificate), with a box of 50. */
+async function boltWorld() {
+  const w = await world();
+  await w.ok('ENG', 'item.upsert', { code: 'QC-BOLT', name: 'สลักทดสอบ', baseUnit: 'ตัว', type: 'BUY', trackLot: 'lot', qcIncoming: true });
+  await w.ok('ENG', 'item.unit', { code: 'QC-BOLT', unit: 'กล่อง', factor: 50 });
+  const plan = await approvedPlan(w, 'QC-BOLT', 'INCOMING', BOLT_CHARS);
+  return { w, plan };
+}
+async function rrBolt(w, lot, qty, extra = {}, user = 'LEAD') {
+  return (await w.ok(user, 'doc.post', { type: 'RR', lines: [{ code: 'QC-BOLT', qty, wh: 'A', bin: 'A-01', lot, ...extra }] })).result.docNo;
+}
+function inspBolt(w, plan, lot, n, results, extra = {}, user = 'QC1') {
+  return w.exec(user, 'qc.inspect', { stage: 'INCOMING', code: 'QC-BOLT', wh: 'A', bin: 'A-01', lot, qty: n, planId: plan, results, ...extra });
+}
+
+test('รีวิว: ล็อตที่ถูกกักระหว่างโอน รับปลายทางแล้วเป็นกักกัน (ปลดระหว่างทาง = รอตรวจ)', async () => {
+  const { w } = await boltWorld();
+  await stockIn(w, 'QC-BOLT', 'A', 'A-01', 10, { lot: 'T1', status: 'AVAILABLE' });
+  const tr = (await w.ok('STORE1', 'doc.post', { type: 'TR', lines: [{ code: 'QC-BOLT', qty: 4, wh: 'A', bin: 'A-01', lot: 'T1', toWh: 'B', toBin: 'B-01' }] })).result.docNo;
+  const q = await w.ok('QC1', 'lot.quarantine', { code: 'QC-BOLT', lot: 'T1', reason: 'ผู้ขายแจ้งเรียกคืนล็อต' });
+  assert.deepEqual([q.result.moved, q.result.inTransit], [6, 4]);
+  const rec = await w.ok('STORE2', 'transfer.receive', { docNo: tr });
+  assert.ok(rec.warnings.some((x) => x.includes('กักกัน')));
+  let s = await w.state();
+  assert.equal(qty(s, { code: 'QC-BOLT', lot: 'T1', status: 'AVAILABLE' }), 0, 'nothing of a quarantined lot is free to reserve');
+  assert.equal(qty(s, { code: 'QC-BOLT', wh: 'B', lot: 'T1', status: 'QUARANTINE' }), 4);
+  // quarantined and released while in transit: the arriving stock must be inspected again like the rest of the lot
+  await stockIn(w, 'QC-BOLT', 'A', 'A-01', 10, { lot: 'T2', status: 'AVAILABLE' });
+  const tr2 = (await w.ok('STORE1', 'doc.post', { type: 'TR', lines: [{ code: 'QC-BOLT', qty: 3, wh: 'A', bin: 'A-01', lot: 'T2', toWh: 'B', toBin: 'B-01' }] })).result.docNo;
+  await w.ok('QC1', 'lot.quarantine', { code: 'QC-BOLT', lot: 'T2', reason: 'สงสัยผิดสเปก' });
+  await w.ok('QCLEAD', 'lot.release', { code: 'QC-BOLT', lot: 'T2', reason: 'ผู้ขายยืนยันว่าไม่ใช่ล็อตที่มีปัญหา' });
+  await w.ok('STORE2', 'transfer.receive', { docNo: tr2 });
+  s = await w.state();
+  assert.deepEqual([qty(s, { code: 'QC-BOLT', lot: 'T2', status: 'QC_HOLD' }), qty(s, { code: 'QC-BOLT', lot: 'T2', status: 'AVAILABLE' })], [10, 0]);
+  assert.deepEqual(RRS.inventory.verifyBalances(s), []);
+});
+
+test('รีวิว: ยกเลิกเอกสารไม่ปลดของกักกัน ไม่ทำให้ NCR ลอย และผลตรวจที่ไม่มีของรองรับเป็นโมฆะ', async () => {
+  const { w, plan } = await boltWorld();
+  // a cancelled issue of a lot quarantined afterwards comes back quarantined
+  await stockIn(w, 'QC-BOLT', 'A', 'A-01', 10, { lot: 'K1', status: 'AVAILABLE' });
+  const pd = (await w.ok('STORE1', 'doc.post', { type: 'PD', job: 'JOB-1', lines: [{ code: 'QC-BOLT', qty: 4, wh: 'A', bin: 'A-01', lot: 'K1' }] })).result.docNo;
+  await w.ok('QC1', 'lot.quarantine', { code: 'QC-BOLT', lot: 'K1', reason: 'ผู้ขายแจ้งเรียกคืนล็อต' });
+  const c = await w.ok('LEAD', 'doc.cancel', { docNo: pd, reason: 'เบิกผิดงาน' });
+  let s = await w.state();
+  assert.deepEqual([qty(s, { code: 'QC-BOLT', lot: 'K1', status: 'AVAILABLE' }), qty(s, { code: 'QC-BOLT', lot: 'K1', status: 'QUARANTINE' })], [0, 10]);
+  assert.ok(c.warnings.some((x) => x.includes('กักกัน')));
+  assert.equal(docsOf(s, 'QS').length, 2, 'the way back into quarantine is a status-change document');
+  // a receipt cannot be cancelled while an open NCR holds its quarantined stock
+  const rr = await rrBolt(w, 'K1', 2, { wh: 'B', bin: 'B-01' });
+  const ncr = await w.ok('QC1', 'ncr.open', { code: 'QC-BOLT', wh: 'B', bin: 'B-01', lot: 'K1', qty: 2, defect: 'ล็อตเรียกคืน' });
+  s = await w.state();
+  const seq = s.seq;
+  assert.equal(codeOf(await w.exec('LEAD', 'doc.cancel', { docNo: rr, reason: 'รับผิด' })), 'NCR_HELD');
+  s = await w.state();
+  assert.equal(s.seq, seq);
+  assert.equal(s.tables.ncrs[ncr.result.ncrNo].status, 'OPEN');
+  // a PASS without a source document loses its stock when the receipt is cancelled: void, never released on new stock
+  const rr1 = await rrBolt(w, 'K2', 6);
+  const pass = await inspBolt(w, plan, 'K2', 6, boltOk);
+  assert.equal(pass.ok, true, JSON.stringify(pass.errors));
+  await w.ok('LEAD', 'doc.cancel', { docNo: rr1, reason: 'คีย์ซ้ำ' });
+  s = await w.state();
+  assert.equal(s.tables.inspections[pass.result.id].status, 'VOID');
+  await rrBolt(w, 'K2', 6); // a new delivery of the same lot number
+  assert.equal(codeOf(await w.exec('QCLEAD', 'qc.release', { id: pass.result.id })), 'BAD_STATE');
+  s = await w.state();
+  assert.deepEqual([qty(s, { code: 'QC-BOLT', lot: 'K2', status: 'QC_HOLD' }), qty(s, { code: 'QC-BOLT', lot: 'K2', status: 'AVAILABLE' })], [6, 0]);
+  assert.deepEqual(RRS.inventory.verifyBalances(s), []);
+});
+
+test('รีวิว: ตรวจซ้ำต้องตรวจของที่แก้ไขตาม NCR นั้นจริง และปิด NCR ได้เมื่อตรวจซ้ำครบ', async () => {
+  const { w, plan } = await boltWorld();
+  const rr = await rrBolt(w, 'R1', 10);
+  const f1 = await inspBolt(w, plan, 'R1', 3, boltBad, { sourceDoc: rr });
+  const f2 = await inspBolt(w, plan, 'R1', 2, boltBad, { sourceDoc: rr });
+  const n1 = f1.result.ncrNo;
+  const n2 = f2.result.ncrNo;
+  await w.ok('QCLEAD', 'ncr.disposition', { ncrNo: n1, disposition: 'REWORK', reason: 'ตัดความยาวใหม่' });
+  // the re-inspection must look at the reworked pieces, not at the 5 still waiting for their first inspection
+  assert.equal(codeOf(await inspBolt(w, plan, 'R1', 3, boltOk, { reinspectionOf: f1.result.id })), 'REINSPECT_STATE');
+  // NCR 2 is not decided yet: its pieces are in quarantine – the reworked pieces of NCR 1 cannot be booked to it
+  assert.equal(codeOf(await inspBolt(w, plan, 'R1', 2, boltOk, { fromStatus: 'REWORK', reinspectionOf: n2 })), 'REINSPECT_STATE');
+  await w.ok('QCLEAD', 'ncr.disposition', { ncrNo: n2, disposition: 'REWORK', reason: 'ตัดความยาวใหม่' });
+  let s = await w.state();
+  assert.equal(qty(s, { code: 'QC-BOLT', status: 'REWORK' }), 5);
+  // no more than the NCR holds
+  assert.equal(codeOf(await inspBolt(w, plan, 'R1', 5, boltOk, { fromStatus: 'REWORK', reinspectionOf: n1 })), 'TOO_MUCH');
+  const r1 = await inspBolt(w, plan, 'R1', 1, boltOk, { fromStatus: 'REWORK', reinspectionOf: n1 });
+  assert.equal(r1.ok, true, JSON.stringify(r1.errors));
+  assert.equal(codeOf(await w.exec('QCLEAD', 'ncr.close', { ncrNo: n1 })), 'REINSPECTION_PENDING', '2 of 3 reworked pieces not re-inspected');
+  await inspBolt(w, plan, 'R1', 2, boltOk, { fromStatus: 'REWORK', reinspectionOf: n1 });
+  await w.ok('QCLEAD', 'ncr.close', { ncrNo: n1 });
+  const r2 = await inspBolt(w, plan, 'R1', 2, boltOk, { fromStatus: 'REWORK', reinspectionOf: f2.result.id });
+  assert.equal(r2.ok, true, JSON.stringify(r2.errors));
+  await w.ok('QCLEAD', 'ncr.close', { ncrNo: n2 });
+  s = await w.state();
+  assert.deepEqual(s.tables.ncrs[n1].reinspections.map((x) => x.result), ['PASS', 'PASS']);
+  // in-process: the re-inspection belongs to the same job
+  const ip = await approvedPlan(w, 'TST-FG', 'IN_PROCESS', [{ name: 'แนวเชื่อม', kind: 'check' }]);
+  const bad = await w.ok('QC1', 'qc.inspect', { stage: 'IN_PROCESS', code: 'TST-FG', qty: 1, planId: ip, jobNo: 'JOB-5', results: [{ char: 'C1', value: 'ไม่ผ่าน' }] });
+  await w.ok('ENG', 'ncr.disposition', { ncrNo: bad.result.ncrNo, disposition: 'REWORK', reason: 'เชื่อมซ่อม' });
+  assert.equal(codeOf(await w.exec('QC1', 'qc.inspect', { stage: 'IN_PROCESS', code: 'TST-FG', qty: 1, planId: ip, jobNo: 'JOB-6',
+    reinspectionOf: bad.result.id, results: [{ char: 'C1', value: 'ผ่าน' }] })), 'JOB_MISMATCH');
+  assert.equal(codeOf(await w.exec('ENG', 'ncr.close', { ncrNo: bad.result.ncrNo })), 'REINSPECTION_PENDING');
+  // a stock NCR is not re-inspected as in-process work (no stock would be looked at)
+  const f3 = await inspBolt(w, plan, 'R1', 1, boltBad);
+  await w.ok('QCLEAD', 'ncr.disposition', { ncrNo: f3.result.ncrNo, disposition: 'REWORK', reason: 'แก้เกลียว' });
+  const ipBolt = await approvedPlan(w, 'QC-BOLT', 'IN_PROCESS', BOLT_CHARS);
+  assert.equal(codeOf(await w.exec('QC1', 'qc.inspect', { stage: 'IN_PROCESS', code: 'QC-BOLT', lot: 'R1', qty: 1, planId: ipBolt, jobNo: 'JOB-5',
+    reinspectionOf: f3.result.ncrNo, results: boltOk })), 'REINSPECT_MISMATCH');
+  s = await w.state();
+  assert.deepEqual(RRS.inventory.verifyBalances(s), []);
+});
+
+test('รีวิว: ของรอแก้ไขของ NCR ออกจากคลังได้ทางตรวจซ้ำเท่านั้น', async () => {
+  const { w, plan } = await boltWorld();
+  await rrBolt(w, 'W1', 4);
+  const f = await inspBolt(w, plan, 'W1', 4, boltBad);
+  await w.ok('QCLEAD', 'ncr.disposition', { ncrNo: f.result.ncrNo, disposition: 'REWORK', reason: 'แก้ไขความยาว' });
+  const s0 = await w.state();
+  const line = { code: 'QC-BOLT', qty: 1, wh: 'A', bin: 'A-01', lot: 'W1', status: 'REWORK' };
+  assert.equal(codeOf(await w.exec('STORE1', 'doc.post', { type: 'RV', remark: 'คืนผู้ขาย', lines: [line] })), 'NCR_HELD');
+  assert.equal(codeOf(await w.exec('ADMIN', 'doc.post', { type: 'SC', remark: 'ตัดทิ้ง', lines: [line] })), 'NCR_HELD');
+  const s = await w.state();
+  assert.equal(s.seq, s0.seq);
+  assert.equal(qty(s, { code: 'QC-BOLT', status: 'REWORK' }), 4);
+});
+
+test('รีวิว: หน่วยที่มีตัวคูณในการตรวจ ปล่อยผ่าน และเปิด NCR', async () => {
+  const { w, plan } = await boltWorld();
+  await rrBolt(w, 'U1', 2, { unit: 'กล่อง' });
+  let s = await w.state();
+  assert.equal(qty(s, { code: 'QC-BOLT', status: 'QC_HOLD' }), 100);
+  assert.equal(codeOf(await inspBolt(w, plan, 'U1', 1, boltOk, { unit: 'ลัง' })), 'NO_UNIT');
+  const i = await inspBolt(w, plan, 'U1', 1, boltOk, { unit: 'กล่อง' });
+  assert.equal(i.ok, true, JSON.stringify(i.errors));
+  s = await w.state();
+  assert.equal(s.tables.inspections[i.result.id].qty, 50, 'stored in the base unit');
+  const r = await w.ok('QCLEAD', 'qc.release', { id: i.result.id, qty: 0.5, unit: 'กล่อง' });
+  assert.equal(r.result.qty, 25);
+  await w.ok('QCLEAD', 'qc.release', { id: i.result.id });
+  const f = await inspBolt(w, plan, 'U1', 1, boltBad, { unit: 'กล่อง' });
+  s = await w.state();
+  assert.deepEqual([qty(s, { code: 'QC-BOLT', status: 'AVAILABLE' }), qty(s, { code: 'QC-BOLT', status: 'QUARANTINE' }),
+    qty(s, { code: 'QC-BOLT', status: 'QC_HOLD' }), s.tables.ncrs[f.result.ncrNo].qty], [50, 50, 0, 50]);
+  await w.ok('QC1', 'lot.quarantine', { code: 'QC-BOLT', lot: 'U1', reason: 'ทั้งล็อตต้องคัดแยก' });
+  assert.equal(codeOf(await w.exec('QC1', 'ncr.open', { code: 'QC-BOLT', wh: 'A', bin: 'A-01', lot: 'U1', qty: 2, unit: 'กล่อง', defect: 'ทั้งกล่อง' })), 'NOT_ENOUGH');
+  const o = await w.ok('QC1', 'ncr.open', { code: 'QC-BOLT', wh: 'A', bin: 'A-01', lot: 'U1', qty: 1, unit: 'กล่อง', defect: 'ทั้งกล่อง' });
+  s = await w.state();
+  assert.equal(s.tables.ncrs[o.result.ncrNo].qty, 50);
+  assert.deepEqual(RRS.inventory.verifyBalances(s), []);
+});
+
+test('รีวิว: แยกหน้าที่ – ผู้เปิด NCR ตัดสินเองไม่ได้ ผู้รับเข้าตรวจ/ปล่อยของตัวเองไม่ได้แม้ไม่อ้างเอกสาร', async () => {
+  const { w, plan } = await boltWorld();
+  await w.ok('ADMIN', 'user.upsert', { id: 'DUAL', name: 'หัวหน้าสโตร์ที่เป็น QC ด้วย', roles: ['store_lead', 'qc'] });
+  // the person who raised the NCR does not decide it
+  await rrBolt(w, 'D1', 5);
+  const f = await inspBolt(w, plan, 'D1', 2, boltBad, {}, 'QCLEAD');
+  assert.equal(codeOf(await w.exec('QCLEAD', 'ncr.disposition', { ncrNo: f.result.ncrNo, disposition: 'SCRAP', reason: 'ยาวเกิน' })), 'SAME_PERSON');
+  await w.ok('ENG', 'ncr.disposition', { ncrNo: f.result.ncrNo, disposition: 'SCRAP', reason: 'ยาวเกิน' });
+  // receipt poster ≠ inspector even when no source document is given; the source document must be the one at that place
+  const lead = await rrBolt(w, 'D2', 3);
+  const own = await rrBolt(w, 'D2', 4, { bin: 'A-02' }, 'DUAL');
+  const at02 = { bin: 'A-02' };
+  assert.equal(codeOf(await inspBolt(w, plan, 'D2', 4, boltOk, at02, 'DUAL')), 'SAME_PERSON');
+  assert.equal(codeOf(await inspBolt(w, plan, 'D2', 4, boltOk, { ...at02, sourceDoc: lead }, 'DUAL')), 'NOT_IN_DOC');
+  // the stage follows the document: a receipt is inspected on receipt
+  const fin = await approvedPlan(w, 'QC-BOLT', 'FINAL', BOLT_CHARS);
+  assert.equal(codeOf(await w.exec('QC1', 'qc.inspect', { stage: 'FINAL', code: 'QC-BOLT', wh: 'A', bin: 'A-02', lot: 'D2', qty: 4, planId: fin,
+    results: boltOk, sourceDoc: own })), 'STAGE_MISMATCH');
+  // inspected by someone else without naming the receipt: its poster still cannot release it
+  const p = await inspBolt(w, plan, 'D2', 4, boltOk, at02);
+  assert.equal(p.ok, true, JSON.stringify(p.errors));
+  await w.ok('ADMIN', 'user.upsert', { id: 'DUAL', name: 'หัวหน้าสโตร์ที่เป็น QC ด้วย', roles: ['store_lead', 'qc_lead'] });
+  assert.equal(codeOf(await w.exec('DUAL', 'qc.release', { id: p.result.id })), 'SAME_PERSON');
+  const s = await w.state();
+  assert.equal(Q.releaseCheck(s, p.result.id, 'DUAL')[0].code, 'SAME_PERSON');
+  await w.ok('QCLEAD', 'qc.release', { id: p.result.id });
+});
+
+test('รีวิว: ปลดกักกันล็อตต้องมีสิทธิ์ทุกคลังที่มีของล็อตนั้น', async () => {
+  const { w, plan } = await boltWorld();
+  await rrBolt(w, 'Q1', 3);
+  await inspBolt(w, plan, 'Q1', 3, boltBad); // all 3 in quarantine under an open NCR
+  await w.ok('LEAD', 'lot.quarantine', { code: 'QC-BOLT', lot: 'Q1', reason: 'กักทั้งล็อตระหว่างสอบสวน' });
+  await w.ok('ADMIN', 'user.upsert', { id: 'QCLB', name: 'หัวหน้า QC คลัง B', roles: ['qc_lead'], warehouses: ['B'] });
+  assert.equal(codeOf(await w.exec('QCLB', 'lot.release', { code: 'QC-BOLT', lot: 'Q1', reason: 'สอบสวนแล้ว' })), 'NO_PERMISSION');
+  await w.ok('QCLEAD', 'lot.release', { code: 'QC-BOLT', lot: 'Q1', reason: 'สอบสวนแล้ว' });
+});

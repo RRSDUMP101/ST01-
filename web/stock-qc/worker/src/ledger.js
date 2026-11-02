@@ -26,7 +26,7 @@ export const MAX_COMMAND_BYTES = 2 * 1024 * 1024;
 export const REQUEST_ID_RE = /^[A-Za-z0-9._:-]{8,100}$/;
 const KIND_RE = /^[a-z][A-Za-z0-9_.-]{0,63}$/;
 const SNAPSHOT_FORMAT = 'rrs-stockqc-snapshot';
-const COLUMNS = 'seq,request_id,kind,at,"by",via,summary,payload_hash,prev,hash,effects';
+export const COLUMNS = 'seq,request_id,kind,at,"by",via,summary,payload_hash,prev,hash,effects';
 
 const cache = {
   state: null,
@@ -44,12 +44,12 @@ export function snapshotEvery(env) {
   return Number.isFinite(n) && n >= 1 ? n : 500;
 }
 
-function rowToCommit(r) {
+export function rowToCommit(r) {
   return { seq: Number(r.seq), id: r.request_id || '', kind: r.kind, at: r.at, by: r.by, via: r.via, summary: r.summary,
     payloadHash: r.payload_hash, effects: JSON.parse(r.effects), prev: r.prev, hash: r.hash };
 }
 /** Commit as JSON text without parsing its effects again (they are stored as JSON). */
-function commitJson(r) {
+export function commitJson(r) {
   const head = JSON.stringify({ seq: Number(r.seq), id: r.request_id || '', kind: r.kind, at: r.at, by: r.by, via: r.via,
     summary: r.summary, payloadHash: r.payload_hash, prev: r.prev, hash: r.hash });
   return head.slice(0, -1) + ',"effects":' + r.effects + '}';
@@ -257,15 +257,17 @@ const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 /**
  * POST /api/command body → the engine's result: {ok, commit, warnings, result} | {ok:true, duplicate:true, seq} |
  * {ok:false, errors}. session: {username, owner}. The client never says who it is or what time it is.
+ * opts.via: the commit's `via` instead of the session username – only the server's own jobs set it (the Sales Office
+ * connector runs as the owner account's engine user with via 'sales-bridge:<workspace>').
  */
-export async function execute(env, input, session) {
+export async function execute(env, input, session, opts) {
   const command = normalizeCommand(input);
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     const state = await catchUp(env);
     const actor = actorFor(state, session, command);
     const payload = actor.bootstrap ? Object.assign({}, command.payload, { accountId: session.username }) : command.payload;
     const r = core.prepare(state, { kind: command.kind, payload, requestId: command.requestId },
-      { now: new Date().toISOString(), user: actor.userId, via: session.username });
+      { now: new Date().toISOString(), user: actor.userId, via: (opts && opts.via) || session.username });
     if (!r.ok || r.duplicate) return r;
     const effectsText = JSON.stringify(r.commit.effects);
     const size = byteLength(effectsText);

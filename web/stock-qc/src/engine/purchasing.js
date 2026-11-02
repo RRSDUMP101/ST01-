@@ -9,8 +9,10 @@
  *    PR quantities are in the base unit; PO quantities are in the buy unit (item_suppliers.buyUnit, else an item unit,
  *    else the base unit) and every PO line keeps factor + base. An unknown unit is an error, never a guess. A PO line
  *    needs a price (given, or the item–supplier price of that buy unit) and a due date (given, or the PR need date).
- *  - The same person may not approve or reject their own PR (tx.different). Every step keeps who/when in the row
- *    and in `log`. Nothing is deleted: cancelling cancels the outstanding part (cancelled qty) and keeps the lines.
+ *  - Only the requester edits or submits a draft PR; neither the requester nor the submitter may approve or reject it
+ *    (tx.different). Approvals (pr.approve/reject, po.close, po.allowOverReceive) need the perm in every warehouse of
+ *    the document's lines. Every step keeps who/when in the row and in `log`. Nothing is deleted: cancelling cancels
+ *    the outstanding part (cancelled qty) and keeps the lines.
  *  - outstanding = base − received − cancelled (never below 0). A PR line is "ordered" by Σ (base − cancelled) of the
  *    PO lines that point at it, so a cancelled PO gives the quantity back to its PR (the PR can be ordered again).
  *  - Receiving: RR lines may carry poNo + poLine (doc.post or po.receive). The PO must be ISSUED/PARTIAL, the item must
@@ -19,13 +21,18 @@
  *    the RR takes it back (same commit as the stock movements). Items with qcIncoming land in QC_HOLD (inventory) and
  *    are never counted as available here.
  *  - Return to vendor: document type RV (dir −1, AVAILABLE/QUARANTINE/REWORK). A line with poNo/poLine adds to the PO
- *    line's returned (at most what the PO delivered and was not returned yet). po.return lines with replace:true also
- *    reopen that quantity as outstanding (received −= qty, replaced += qty). Cancelling the RV undoes it.
+ *    line's returned (at most what the PO delivered and was not returned yet). RV lines with replace:true (po.return,
+ *    doc.post or a saved draft) also reopen that quantity as outstanding (received −= qty, replaced += qty); a
+ *    replacement needs a PO link. Cancelling the RV undoes it – including a cancel/close of the reopened part.
  *  - Suggestion (RRS.purchasing.suggest): per active item (per warehouse when asked) – AVAILABLE − open reservations
  *    + stock in transit + PO outstanding due within the lead time (late lines only when policies.lateIsUncertain is
  *    false) − open job demand not covered by reservations = projected. projected ≤ Min → Max − projected, less what is
- *    already asked for in open PRs / draft POs, rounded up to whole buy units, at least MOQ, a multiple of the pack.
- *    Every number has a Thai reason. QC_HOLD / QUARANTINE / REWORK stock is shown but never counted.
+ *    already asked for in open PRs / draft POs and less QC_HOLD stock (already received, waiting for QC – not bought
+ *    twice; policies.qcHoldIsSupply = false switches this off), rounded up to whole buy units, at least MOQ, a
+ *    multiple of the pack. Job demand = required − issued − pieces still to be made in-house (toMake − received).
+ *    Every number has a Thai reason. QC_HOLD / QUARANTINE / REWORK stock is never available, free or projected.
+ *  - affectedJobs: a late PO line hurts a job only when free stock (after reservations, given out by priority) does
+ *    not cover the job's unreserved need.
  * Read helpers are pure functions of a state; they take an explicit `today` (YYYY-MM-DD).
  */
 (function (root) {
@@ -133,6 +140,10 @@
     return s;
   }
   const at = (n) => (n ? `บรรทัด ${n}: ` : '');
+  /** Thai names of the input fields that appear in error messages (never show the raw key to people). */
+  const FIELD_TH = { price: 'ราคา', moq: 'สั่งขั้นต่ำ (MOQ)', pack: 'จำนวนต่อแพ็ก', leadDays: 'Lead time (วัน)', min: 'Min',
+    max: 'Max', coverDays: 'จำนวนวันที่ Max ครอบคลุม', usageDays: 'ช่วงวันของสถิติยอดใช้', factor: 'ตัวคูณหน่วยซื้อ' };
+  const th = (k) => FIELD_TH[k] || k;
   const w = (n, field) => Object.assign(n ? { line: n } : {}, field ? { field } : {});
   function lineOut(l) {
     return pos0((l.base || 0) - (l.received || 0) - (l.cancelled || 0));
@@ -232,7 +243,18 @@
   }
   function needDays(tx, v, field, n) {
     if (v == null) return true;
-    if (isNaN(v) || v < 0 || !Number.isInteger(v)) return tx.error('BAD_VALUE', `${at(n)}${field} ต้องเป็นจำนวนวันเต็ม 0 ขึ้นไป`, w(n, field));
+    if (isNaN(v) || v < 0 || !Number.isInteger(v)) return tx.error('BAD_VALUE', `${at(n)}${th(field)} ต้องเป็นจำนวนวันเต็ม 0 ขึ้นไป`, w(n, field));
+    return true;
+  }
+  /** An approval covers every warehouse of the document: the perm is needed in each line's warehouse (users may be
+   *  limited to some warehouses, as in pr.create / po.create). */
+  function needOnLines(tx, perm, lines) {
+    const seen = {};
+    for (const l of lines || []) {
+      if (!l || !l.wh || seen[l.wh]) continue;
+      seen[l.wh] = true;
+      if (!tx.can(perm, l.wh)) return tx.need(perm, l.wh, { line: l.line });
+    }
     return true;
   }
   function itemSupplierOf(tx, code, supplier) {
@@ -250,6 +272,7 @@
       if (!id) return tx.error('REQUIRED', 'กรอกรหัสผู้ขาย', { field: 'id' });
       if (!/^[A-Z0-9][A-Z0-9._-]*$/.test(id) || id.length > 30) return tx.error('BAD_CODE', 'รหัสผู้ขายใช้ A-Z 0-9 . _ - ไม่เกิน 30 ตัว', { field: 'id' });
       const prev = tx.get('suppliers', id);
+      if (p.create === true && prev) return tx.error('DUPLICATE', `ผู้ขาย ${id} มีอยู่แล้ว (${prev.name}) – เปิดรายการเดิมเพื่อแก้ไขแทน`, { field: 'id' });
       const keep = (k, d) => (p[k] === undefined ? (prev ? prev[k] : d) : p[k]);
       const name = util.trim(keep('name', ''));
       if (!name) return tx.error('REQUIRED', 'กรอกชื่อผู้ขาย', { field: 'name' });
@@ -300,7 +323,7 @@
       for (const k of ['price', 'moq', 'pack', 'leadDays']) {
         let v = numIn(p[k]);
         if (v === undefined) v = prev ? prev[k] : null;
-        if (v != null && (isNaN(v) || v < 0)) return tx.error('BAD_VALUE', `ค่า ${k} ต้องเป็นตัวเลขไม่ติดลบ`, { field: k });
+        if (v != null && (isNaN(v) || v < 0)) return tx.error('BAD_VALUE', `${th(k)} ต้องเป็นตัวเลขไม่ติดลบ`, { field: k });
         nums[k] = v == null ? null : round(v, 6);
       }
       if (!needDays(tx, nums.leadDays, 'leadDays')) return;
@@ -335,12 +358,12 @@
       for (const k of ['min', 'max', 'leadDays', 'coverDays', 'usageDays']) {
         let x = numIn(p[k]);
         if (x === undefined) x = prev ? prev[k] : null;
-        if (x != null && (isNaN(x) || x < 0)) return tx.error('BAD_VALUE', `ค่า ${k} ต้องเป็นตัวเลขไม่ติดลบ`, { field: k });
+        if (x != null && (isNaN(x) || x < 0)) return tx.error('BAD_VALUE', `${th(k)} ต้องเป็นตัวเลขไม่ติดลบ`, { field: k });
         v[k] = x == null ? null : round(x);
       }
       if (v.min != null && v.max != null && v.min > v.max) return tx.error('BAD_VALUE', 'Min ต้องไม่มากกว่า Max', { field: 'min' });
       for (const k of ['leadDays', 'coverDays']) if (!needDays(tx, v[k], k)) return;
-      if (v.usageDays != null && !(Number.isInteger(v.usageDays) && v.usageDays >= 1)) return tx.error('BAD_VALUE', 'usageDays ต้องเป็นจำนวนวันเต็ม 1 ขึ้นไป', { field: 'usageDays' });
+      if (v.usageDays != null && !(Number.isInteger(v.usageDays) && v.usageDays >= 1)) return tx.error('BAD_VALUE', `${th('usageDays')} ต้องเป็นจำนวนวันเต็ม 1 ขึ้นไป`, { field: 'usageDays' });
       let supplier = p.supplier === undefined ? (prev ? prev.supplier : '') : util.normCode(p.supplier);
       if (supplier) {
         const sup = getSupplier(tx, supplier, 0, true);
@@ -359,7 +382,7 @@
   // purchase requests
   // ---------------------------------------------------------------------------------------------------------
   function readPrLines(tx, p, draft) {
-    if (p.lines != null && !Array.isArray(p.lines)) return tx.error('BAD_INPUT', 'lines ต้องเป็นรายการ', { field: 'lines' }) && null;
+    if (p.lines != null && !Array.isArray(p.lines)) return tx.error('BAD_INPUT', 'บรรทัดของใบขอซื้อต้องส่งมาเป็นรายการ', { field: 'lines' }) && null;
     const raws = p.lines || [];
     if (!raws.length) return tx.error('REQUIRED', 'ใบขอซื้อต้องมีอย่างน้อย 1 บรรทัด', { field: 'lines' }) && null;
     const lines = [];
@@ -430,6 +453,8 @@
       const pr = getPr(tx, p.prNo);
       if (!pr) return;
       if (pr.status !== 'DRAFT') return tx.error('BAD_STATE', `${pr.prNo} ${PR_STATUS[pr.status]} – ส่งได้เฉพาะร่าง`);
+      // the request is the requester's: someone else sending it would be both requester and (possibly) approver
+      if (pr.requestedBy !== tx.userId) return tx.error('NOT_OWNER', `ร่าง ${pr.prNo} เป็นของ ${pr.requestedBy} – ผู้ขอเท่านั้นที่ส่งขออนุมัติได้`);
       for (const l of pr.lines) {
         if (!l.needDate) tx.error('REQUIRED', `บรรทัด ${l.line}: ระบุวันต้องใช้ก่อนส่งอนุมัติ`, { line: l.line, field: 'needDate' });
         const it = tx.get('items', l.code);
@@ -450,6 +475,8 @@
       if (!pr) return;
       if (pr.status !== 'SUBMITTED') return tx.error('BAD_STATE', `${pr.prNo} ${PR_STATUS[pr.status]} – อนุมัติได้เฉพาะใบที่รออนุมัติ`);
       if (!tx.different(pr.requestedBy, 'ผู้อนุมัติใบขอซื้อ')) return;
+      if (!tx.different(pr.submittedBy, 'ผู้อนุมัติใบขอซื้อ')) return;
+      if (!needOnLines(tx, 'pr.approve', pr.lines)) return;
       Object.assign(pr, { status: 'APPROVED', approvedBy: tx.userId, approvedAt: tx.now });
       addLog(pr, tx, 'approve', { remark: util.trim(p.remark).slice(0, 300) });
       tx.put('prs', pr.prNo, pr);
@@ -466,6 +493,8 @@
       const reason = needReason(tx, p);
       if (!reason) return;
       if (!tx.different(pr.requestedBy, 'ผู้พิจารณาใบขอซื้อ')) return;
+      if (!tx.different(pr.submittedBy, 'ผู้พิจารณาใบขอซื้อ')) return;
+      if (!needOnLines(tx, 'pr.approve', pr.lines)) return;
       Object.assign(pr, { status: 'REJECTED', rejectedBy: tx.userId, rejectedAt: tx.now, rejectReason: reason });
       addLog(pr, tx, 'reject', { reason });
       tx.put('prs', pr.prNo, pr);
@@ -482,6 +511,7 @@
       const pr = getPr(tx, p.prNo);
       if (!pr) return;
       if (!tx.can('pr.approve') && pr.requestedBy !== tx.userId) return tx.error('NOT_OWNER', `${pr.prNo} เป็นของ ${pr.requestedBy} – ยกเลิกได้โดยผู้ขอหรือผู้อนุมัติ`);
+      if (pr.requestedBy !== tx.userId && !needOnLines(tx, 'pr.approve', pr.lines)) return;
       const reason = needReason(tx, p);
       if (!reason) return;
       if (pr.status === 'CONVERTED') {
@@ -538,7 +568,7 @@
         const t = buyTerms(tx, it, sup.id);
         const q = roundBuy(open, t.factor, t.moq, t.pack);
         used[prNo + '|' + prl.line] = round((used[prNo + '|' + prl.line] || 0) + open);
-        out.push({ code: it.id, qty: q, unit: t.unit, dueDate: prl.needDate, wh: prl.wh, prNo, prLine: prl.line, fromPr: true });
+        out.push({ code: it.id, qty: q, unit: t.unit, dueDate: '', wh: prl.wh, prNo, prLine: prl.line, fromPr: true });
       }
     }
     return out;
@@ -594,17 +624,22 @@
     if (price == null) return tx.error('PRICE_REQUIRED', `${at(n)}${it.id} ยังไม่มีราคาต่อ${unit}กับผู้ขาย ${sup.id} – ระบุราคา (ระบบไม่เดาราคา)`, w(n, 'price')) && null;
     if (isNaN(price) || price < 0) return tx.error('BAD_VALUE', `${at(n)}ราคาต้องเป็นตัวเลขไม่ติดลบ`, w(n, 'price')) && null;
     let dueDate = '';
+    let dueFrom = '';
     if (util.trim(raw.dueDate)) {
       dueDate = parseDate(raw.dueDate);
       if (!dueDate) return tx.error('BAD_DATE', `${at(n)}วันกำหนดรับต้องเป็นวันที่จริงแบบ YYYY-MM-DD`, w(n, 'dueDate')) && null;
+    } else if (ctx.dueDate) {
+      dueDate = ctx.dueDate;
     } else if (prl && prl.needDate) {
       dueDate = prl.needDate;
+      dueFrom = ` (วันต้องใช้ของ ${pr.prNo} – ระบุวันกำหนดรับของบรรทัดหรือของทั้งใบแทนได้)`;
     } else {
       return tx.error('REQUIRED', `${at(n)}ระบุวันกำหนดรับ`, w(n, 'dueDate')) && null;
     }
-    if (dueDate < ctx.date) return tx.error('BAD_DATE', `${at(n)}วันกำหนดรับ ${dueDate} อยู่ก่อนวันที่ใบสั่งซื้อ ${ctx.date}`, w(n, 'dueDate')) && null;
+    if (dueDate < ctx.date) return tx.error('BAD_DATE', `${at(n)}วันกำหนดรับ ${dueDate} อยู่ก่อนวันที่ใบสั่งซื้อ ${ctx.date}${dueFrom}`, w(n, 'dueDate')) && null;
     const wh = checkWh(tx, wantWh || (prl && prl.wh), 'po.manage', n);
     if (!wh) return null;
+    if (prl && prl.wh && wh !== prl.wh) tx.warn(`${at(n)}${pr.prNo} บรรทัด ${prl.line} ขอเข้าคลัง ${prl.wh} แต่สั่งเข้าคลัง ${wh} – คลัง ${prl.wh} ยังขาดอยู่`);
     const base = round(qty * factor);
     if (!t.is) tx.warn(`${at(n)}ยังไม่ได้ตั้ง ${it.id} กับผู้ขาย ${sup.id} (ราคา/หน่วยซื้อ/Lead time)`);
     else if (unit === t.is.buyUnit) {
@@ -634,8 +669,13 @@
         date = parseDate(p.date);
         if (!date) return tx.error('BAD_DATE', 'วันที่ต้องเป็นวันที่จริงแบบ YYYY-MM-DD', { field: 'date' });
       }
-      if (p.lines != null && !Array.isArray(p.lines)) return tx.error('BAD_INPUT', 'lines ต้องเป็นรายการ', { field: 'lines' });
-      if (p.prNos != null && !Array.isArray(p.prNos)) return tx.error('BAD_INPUT', 'prNos ต้องเป็นรายการ', { field: 'prNos' });
+      if (p.lines != null && !Array.isArray(p.lines)) return tx.error('BAD_INPUT', 'บรรทัดของใบสั่งซื้อต้องส่งมาเป็นรายการ', { field: 'lines' });
+      if (p.prNos != null && !Array.isArray(p.prNos)) return tx.error('BAD_INPUT', 'เลขที่ใบขอซื้อต้องส่งมาเป็นรายการ', { field: 'prNos' });
+      let dueDefault = '';
+      if (util.trim(p.dueDate)) {
+        dueDefault = parseDate(p.dueDate);
+        if (!dueDefault) return tx.error('BAD_DATE', 'วันกำหนดรับของใบสั่งซื้อต้องเป็นวันที่จริงแบบ YYYY-MM-DD', { field: 'dueDate' });
+      }
       const listed = [];
       const prs = {};
       for (const x of p.prNos || []) {
@@ -652,7 +692,7 @@
         raws = linesFromPrs(tx, prs, sup);
         if (!raws.length) return tx.error('NOTHING', 'ใบขอซื้อที่เลือกไม่มีบรรทัดค้างออก PO สำหรับผู้ขายนี้', { field: 'prNos' });
       }
-      const ctx = { sup, date, prs, listed, used: {} };
+      const ctx = { sup, date, dueDate: dueDefault, prs, listed, used: {} };
       const lines = [];
       raws.forEach((raw, i) => {
         const l = buildPoLine(tx, raw, i, ctx);
@@ -700,6 +740,7 @@
       const po = getPo(tx, p.poNo);
       if (!po) return;
       if (po.status !== 'DRAFT') return tx.error('BAD_STATE', `${po.poNo} ${PO_STATUS[po.status]} – ออกได้เฉพาะร่าง`);
+      if (!needOnLines(tx, 'po.manage', po.lines)) return;
       const sup = tx.get('suppliers', po.supplier);
       if (!sup || sup.active === false) return tx.error('INACTIVE', `ผู้ขาย ${po.supplier} ปิดใช้งาน – ออกใบสั่งซื้อไม่ได้`);
       if (!po.lines.some((l) => lineOut(l) > 0)) return tx.error('NOTHING', `${po.poNo} ไม่มีบรรทัดที่ต้องสั่ง`);
@@ -718,6 +759,7 @@
       if (po.status !== 'DRAFT' && !OPEN_PO[po.status]) return tx.error('BAD_STATE', `${po.poNo} ${PO_STATUS[po.status]} – ไม่มีของค้างรับ`);
       const pl = poLineOf(tx, po, p.line);
       if (!pl) return;
+      if (!needOnLines(tx, 'po.manage', [pl])) return;
       if (lineOut(pl) <= 0) return tx.error('NOTHING', `บรรทัด ${pl.line} ไม่มีของค้างรับ`);
       const due = parseDate(p.dueDate);
       if (!due) return tx.error('BAD_DATE', 'กำหนดเข้าต้องเป็นวันที่จริงแบบ YYYY-MM-DD', { field: 'dueDate' });
@@ -740,6 +782,7 @@
       if (po.status !== 'DRAFT' && !OPEN_PO[po.status]) return tx.error('BAD_STATE', `${po.poNo} ${PO_STATUS[po.status]} – ไม่มียอดค้างให้ยกเลิก`);
       const pl = poLineOf(tx, po, p.line);
       if (!pl) return;
+      if (!needOnLines(tx, 'po.manage', [pl])) return;
       const out = lineOut(pl);
       if (out <= 0) return tx.error('NOTHING', `บรรทัด ${pl.line} ไม่มียอดค้าง`);
       let base = out;
@@ -770,6 +813,7 @@
       if (po.lines.some((l) => (l.received || 0) > 0 || (l.returned || 0) > 0)) {
         return tx.error('HAS_RECEIPTS', `${po.poNo} รับของแล้ว – ใช้ ยกเลิกยอดค้างรายบรรทัด หรือ ปิดยอดค้าง แทน`);
       }
+      if (!needOnLines(tx, 'po.manage', po.lines)) return;
       const reason = needReason(tx, p);
       if (!reason) return;
       for (const l of po.lines) l.cancelled = round((l.cancelled || 0) + lineOut(l));
@@ -786,6 +830,7 @@
       const po = getPo(tx, p.poNo);
       if (!po) return;
       if (!OPEN_PO[po.status] && po.status !== 'RECEIVED') return tx.error('BAD_STATE', `${po.poNo} ${PO_STATUS[po.status]} – ปิดยอดค้างได้เมื่อส่งผู้ขายแล้ว`);
+      if (!needOnLines(tx, 'po.close', po.lines)) return;
       const reason = needReason(tx, p);
       if (!reason) return;
       const closed = [];
@@ -812,6 +857,7 @@
       if (!OPEN_PO[po.status]) return tx.error('BAD_STATE', `${po.poNo} ${PO_STATUS[po.status]} – อนุมัติรับเกินได้เมื่อยังรับไม่ครบ`);
       const pl = poLineOf(tx, po, p.line);
       if (!pl) return;
+      if (!needOnLines(tx, 'po.overReceive', [pl])) return;
       const q = util.num(p.qty);
       if (!(q > 0)) return tx.error('BAD_QTY', `จำนวนที่อนุมัติรับเกินต้องเป็นตัวเลขมากกว่า 0 (${pl.unit})`, { field: 'qty' });
       const reason = needReason(tx, p);
@@ -889,7 +935,6 @@
       const replaceLines = [];
       lines.forEach((l, i) => {
         if (l.replace) replaceLines.push(i + 1);
-        delete l.replace;
       });
       const d = newDoc(tx, 'RV', po, p, lines, `คืนผู้ขาย ${po.supplier}: ${reason}`);
       d.replaceLines = replaceLines;
@@ -913,7 +958,7 @@
     if (sum <= tol + EPS) return { ok: true, overUse: 0, byPerm: 0, out, tol, allowed, pct };
     const excess = round(sum - tol);
     if (excess <= allowed + EPS) return { ok: true, overUse: excess, byPerm: 0, out, tol, allowed, pct };
-    if (tx.can('po.overReceive')) return { ok: true, overUse: allowed, byPerm: round(excess - allowed), out, tol, allowed, pct };
+    if (tx.can('po.overReceive', pl.wh || undefined)) return { ok: true, overUse: allowed, byPerm: round(excess - allowed), out, tol, allowed, pct };
     return { ok: false, out, tol, allowed, pct, limit: round(tol + allowed) };
   }
   /** Lines of a document grouped per PO line: [{poNo, poLine, sum, replace, lines}] */
@@ -931,13 +976,16 @@
       }
       const q = Math.abs(ln.base || 0);
       g[k].sum = round(g[k].sum + q);
-      if (rep[ln.line]) g[k].replace = round(g[k].replace + q);
+      if (rep[ln.line] || ln.replace === true) g[k].replace = round(g[k].replace + q);
       g[k].lines.push(ln.line);
     }
     return order.map((k) => g[k]);
   }
 
   RRS.hooks.on('doc.lineCheck', function purchasingLineCheck(tx, doc, line) {
+    if (doc.type === 'RV' && line.replace === true && !line.poNo) {
+      return tx.error('REQUIRED', `บรรทัด ${line.line}: คืนแบบขอของทดแทนต้องระบุใบสั่งซื้อและบรรทัด – ไม่งั้นติดตามของทดแทนไม่ได้ (คืนแบบลดหนี้ไม่ต้องระบุ)`, w(line.line, 'poNo'));
+    }
     if (!line.poNo && !line.poLine) return;
     const n = line.line;
     if (!PO_DOC[doc.type]) {
@@ -1056,12 +1104,20 @@
           closedAgain: reopened, reason: doc.cancelReason || '' });
       } else {
         pl.returned = round((pl.returned || 0) - g.sum);
+        let uncancelled = 0;
         if (g.replace > 0) {
           pl.replaced = round((pl.replaced || 0) - g.replace);
           pl.received = round((pl.received || 0) + g.replace);
+          // the goods are back, so the vendor no longer owes the replacement: when the reopened part was cancelled or
+          // closed meanwhile, that cancellation goes too (else the PR would show it as not ordered and buy it again)
+          uncancelled = Math.min(g.replace, pl.cancelled || 0, pos0(pl.received + (pl.cancelled || 0) - pl.base));
+          if (uncancelled > 0) pl.cancelled = round(pl.cancelled - uncancelled);
+          if (pl.received > pl.base + EPS) {
+            tx.warn(`${po.poNo} บรรทัด ${pl.line}: ยกเลิก ${doc.docNo} แล้วยอดรับรวม ${pl.received} ${pl.baseUnit || ''} เกินที่สั่ง ${pl.base} (รับของทดแทนไปแล้ว) – ตรวจสอบกับผู้ขาย`);
+          }
         }
         addLog(po, tx, 'returnUndo', { docNo: doc.docNo, docType: doc.type, line: pl.line, qty: g.sum, replace: g.replace,
-          reason: doc.cancelReason || '' });
+          uncancelled, reason: doc.cancelReason || '' });
       }
     }
     for (const k in cache) savePo(tx, cache[k], before[k]);
@@ -1174,15 +1230,20 @@
     const links = rows(state, 'item_suppliers', (x) => x.code === code && x.active !== false);
     const sups = state.tables.suppliers || {};
     const ok = (l) => l && (sups[l.supplier] || {}).active !== false;
+    let note = '';
     if (ruleSupplier) {
-      const l = links.find((x) => x.supplier === ruleSupplier);
-      return { link: ok(l) ? l : null, supplier: ruleSupplier, from: 'เงื่อนไขเติมสต็อก' };
+      const rs = sups[ruleSupplier];
+      if (rs && rs.active !== false) {
+        const l = links.find((x) => x.supplier === ruleSupplier);
+        return { link: l || null, supplier: ruleSupplier, from: 'เงื่อนไขเติมสต็อก' };
+      }
+      note = `ผู้ขายในเงื่อนไขเติมสต็อก ${ruleSupplier} ${rs ? 'ปิดใช้งาน' : 'ไม่มีในระบบ'} – `;
     }
     const pref = links.find((x) => x.preferred && ok(x));
-    if (pref) return { link: pref, supplier: pref.supplier, from: 'ผู้ขายหลัก' };
+    if (pref) return { link: pref, supplier: pref.supplier, from: note + 'ผู้ขายหลัก' };
     const act = links.filter(ok);
-    if (act.length === 1) return { link: act[0], supplier: act[0].supplier, from: 'ผู้ขายรายเดียวที่ตั้งไว้' };
-    return { link: null, supplier: '', from: act.length ? `มีผู้ขาย ${act.length} รายแต่ยังไม่เลือกผู้ขายหลัก` : 'ยังไม่ได้ตั้งผู้ขาย' };
+    if (act.length === 1) return { link: act[0], supplier: act[0].supplier, from: note + 'ผู้ขายรายเดียวที่ตั้งไว้' };
+    return { link: null, supplier: '', from: note + (act.length ? `มีผู้ขาย ${act.length} รายแต่ยังไม่เลือกผู้ขายหลัก` : 'ยังไม่ได้ตั้งผู้ขาย') };
   }
   P.preferredSupplier = function preferredSupplier(state, code) {
     const id = codeFilter(state, code);
@@ -1190,6 +1251,12 @@
     const s = supplierFor(state, id, '');
     return s.link ? Object.assign({}, s.link, { from: s.from }) : null;
   };
+
+  /** What a job line still needs from stock or purchase: required − issued − pieces still to be made in-house. */
+  function jobLineNeed(l) {
+    if (!l || l.output) return 0;
+    return pos0((l.required || 0) - (l.issued || 0) - pos0((l.toMake || 0) - (l.received || 0)));
+  }
 
   /** Everything suggest() needs, indexed by item once. */
   function buildIndex(state, today, wh) {
@@ -1225,7 +1292,7 @@
       const per = {};
       for (const l of j.lines || []) {
         if (l.output) continue;
-        per[l.code] = round((per[l.code] || 0) + pos0((l.required || 0) - (l.issued || 0)));
+        per[l.code] = round((per[l.code] || 0) + jobLineNeed(l));
       }
       for (const code in per) {
         if (!per[code]) continue;
@@ -1262,7 +1329,8 @@
    * onlyOrder?}. Row: {code, name, baseUnit, wh, available, qcHold, quarantine, transit, reserved, free, incomingSure,
    * incomingLate, lateCounted, incomingLater, demand (not covered by reservations), demandTotal, projected, min, max,
    * minMaxFrom, leadDays, leadFrom, supplier, supplierName, buyUnit, factor, moq, pack, price, usage, need, pendingPr,
-   * draftPo, orderQty (base), orderBuyQty, amount, needDate, status ORDER/COVERED/OK/OFF, poLines, prLines, reasons[]}.
+   * draftPo, qcCovered (QC_HOLD stock deducted from the order, policies.qcHoldIsSupply !== false), orderQty (base),
+   * orderBuyQty, amount, needDate, status ORDER/COVERED/OK/OFF, poLines, prLines, reasons[]}.
    */
   P.suggest = function suggest(state, opts) {
     opts = opts || {};
@@ -1272,6 +1340,7 @@
     if (only === null) return [];
     const settings = RRS.q.get(state, 'settings', 'main') || RRS.defaultSettings();
     const countLate = (settings.policies || {}).lateIsUncertain === false;
+    const qcIsSupply = (settings.policies || {}).qcHoldIsSupply !== false;
     const items = state.tables.items || {};
     const sups = state.tables.suppliers || {};
     const rules = state.tables.reorder_rules || {};
@@ -1379,6 +1448,7 @@
       let need = 0;
       let orderBuyQty = 0;
       let orderQty = 0;
+      let qcCovered = 0;
       let status = 'OK';
       const off = rule && rule.active === false;
       if (off) {
@@ -1388,9 +1458,18 @@
         need = pos0(max - projected);
         if (need > 0) {
           reasons.push(`คาดการณ์ ${fmt(projected)} ≤ Min ${fmt(min)} → ต้องเติม = Max ${fmt(max)} − ${fmt(projected)} = ${u(need)}`);
-          const left = round(need - pendingPr - draftPo);
+          let left = round(need - pendingPr - draftPo);
           if (pendingPr > 0 || draftPo > 0) {
             reasons.push(`หักที่ขอซื้อ/สั่งไว้แล้วแต่ยังไม่ออก PO ${fmt(pendingPr + draftPo)}${pendingPr ? ' (PR ' + pendingPrLines.map((e) => e.prNo + '/' + e.line + ' ' + fmt(e.qty)).join(', ') + ')' : ''}${draftPo ? ' (PO ร่าง ' + draftLines.map((e) => e.poNo + '/' + e.line + ' ' + fmt(e.qty)).join(', ') + ')' : ''} → เหลือ ${u(Math.max(0, left))}`);
+          }
+          if (left > 0 && b.qcHold > 0) {
+            if (qcIsSupply) {
+              qcCovered = round(Math.min(b.qcHold, left));
+              left = round(left - qcCovered);
+              reasons.push(`หักของรอตรวจ ${u(qcCovered)} (รับเข้าแล้ว รอ QC – ไม่ซื้อซ้ำ; ถ้าไม่ผ่านจะถูกกักกันและแนะนำสั่งใหม่) → เหลือ ${u(Math.max(0, left))}`);
+            } else {
+              reasons.push(`ของรอตรวจ ${u(b.qcHold)} ไม่หัก (นโยบาย: นับเฉพาะของที่ผ่าน QC แล้ว)`);
+            }
           }
           if (left > 0) {
             orderBuyQty = roundBuy(left, factor, moq, pack);
@@ -1399,7 +1478,9 @@
             reasons.push(`สั่ง ${fmt(orderBuyQty)} ${buyUnit}${factor !== 1 ? ` × ${fmt(factor)} = ${u(orderQty)}` : ''} (ปัดขึ้นเป็นหน่วยซื้อเต็ม${moq ? `, ขั้นต่ำ ${fmt(moq)} ${buyUnit}` : ''}${pack ? `, แพ็กละ ${fmt(pack)} ${buyUnit}` : ''})`);
           } else {
             status = 'COVERED';
-            reasons.push('ใบขอซื้อ/PO ร่างที่มีอยู่ครอบคลุมแล้ว – ไม่ต้องสร้างใหม่ (ให้ออก PO จากใบขอซื้อเดิม)');
+            reasons.push(pendingPr > 0 || draftPo > 0
+              ? 'ใบขอซื้อ/PO ร่าง/ของรอตรวจที่มีอยู่ครอบคลุมแล้ว – ไม่ต้องสร้างใหม่ (ให้ออก PO จากใบขอซื้อเดิม)'
+              : 'ของรอตรวจครอบคลุมแล้ว – ยังไม่ต้องสั่ง (รอผล QC)');
           }
         } else {
           reasons.push(`คาดการณ์ ${fmt(projected)} ไม่ต่ำกว่า Max ${fmt(max)} – ยังไม่ต้องสั่ง`);
@@ -1413,7 +1494,7 @@
         quarantine: b.quarantine, transit, reserved, free, incomingSure: sure, incomingLate: late, lateCounted: countLate,
         incomingLater: later, demand, demandTotal, projected, min, max, minMaxFrom, leadDays, leadFrom,
         supplier: sf.supplier, supplierName: sup ? sup.name : '', supplierFrom: sf.from, buyUnit, factor, moq, pack, price,
-        usage: { avgDay: us.avgDay, sd: us.sd, days: us.days, total: us.total }, need, pendingPr, draftPo, orderQty,
+        usage: { avgDay: us.avgDay, sd: us.sd, days: us.days, total: us.total }, need, pendingPr, draftPo, qcCovered, orderQty,
         orderBuyQty, amount: price != null ? round(orderBuyQty * price, 2) : null, needDate: horizon, status, poLines,
         prLines: pendingPrLines, reasons,
       };
@@ -1461,37 +1542,59 @@
   /**
    * Late PO lines (dueDate < today, still outstanding) with the open jobs and reservations needing that item.
    * opts {today, atRisk?}: atRisk also lists lines not late yet that are due after a job's due date.
-   * Row: {poNo, line, supplier, code, dueDate, daysLate, outstanding, late, jobs:[{jobNo, soNo, dueDate, priority, need,
-   * reserved, uncovered, affected}], reservations:[{id, jobNo, wh, remaining, needDate, priority}], message}.
+   * A job is affected only when the late goods are really missing: its need (required − issued − still to be made
+   * in-house) less its own reservations is covered first from free stock (AVAILABLE incl. in transit − every open
+   * reservation), given out by priority then due date; what is left is `short`.
+   * Row: {poNo, line, supplier, code, dueDate, daysLate, outstanding, late, freeStock, jobs:[{jobNo, soNo, dueDate,
+   * priority, need, reserved, uncovered, fromStock, short, affected}], reservations:[{id, jobNo, wh, remaining, needDate,
+   * priority}], message}.
    */
   P.affectedJobs = function affectedJobs(state, opts) {
     opts = opts || {};
     const today = needToday(opts);
-    const jobs = rows(state, 'jobs', (j) => OPEN_JOB[j.status]);
+    const jobOrder = (a, b) => ((a.priority || 9) - (b.priority || 9)) || String(a.dueDate || '').localeCompare(String(b.dueDate || ''))
+      || String(a.jobNo).localeCompare(String(b.jobNo));
+    const jobs = rows(state, 'jobs', (j) => OPEN_JOB[j.status]).sort(jobOrder);
     const open = rows(state, 'reservations', (r) => (r.status === 'OPEN' || r.status === 'PARTIAL') && pos0((r.qty || 0) - (r.issued || 0)) > 0);
     const resOf = (jobNo, code) => round(open.filter((r) => r.jobNo === jobNo && r.code === code).reduce((s, r) => s + pos0(r.qty - (r.issued || 0)), 0));
+    const freeCache = {};
+    const freeOf = (code) => {
+      if (freeCache[code] == null) {
+        const avail = rows(state, 'balances', (b) => b.code === code && b.status === STATUS.AVAILABLE).reduce((s, b) => s + b.qty, 0);
+        const kept = open.filter((r) => r.code === code).reduce((s, r) => s + pos0(r.qty - (r.issued || 0)), 0);
+        freeCache[code] = pos0(avail - kept);
+      }
+      return freeCache[code];
+    };
     const out = [];
     for (const l of P.outstanding(state, { today })) {
       const js = [];
+      const freeStock = freeOf(l.code);
+      let left = freeStock;
       for (const j of jobs) {
         let need = 0;
-        for (const jl of j.lines || []) if (!jl.output && jl.code === l.code) need += pos0((jl.required || 0) - (jl.issued || 0));
+        for (const jl of j.lines || []) if (jl.code === l.code) need += jobLineNeed(jl);
         need = round(need);
         if (!(need > 0)) continue;
         if (!l.late && !(opts.atRisk && j.dueDate && j.dueDate < l.dueDate)) continue;
         const reserved = resOf(j.jobNo, l.code);
         const uncovered = pos0(need - reserved);
+        const fromStock = round(Math.min(uncovered, left));
+        left = round(left - fromStock);
+        const short = pos0(uncovered - fromStock);
         js.push({ jobNo: j.jobNo, soNo: j.soNo || '', dueDate: j.dueDate || '', priority: j.priority, need, reserved, uncovered,
-          affected: uncovered > 0 });
+          fromStock, short, affected: short > 0 });
       }
       const rs = l.late ? open.filter((r) => r.code === l.code).map((r) => ({ id: r.id, jobNo: r.jobNo, wh: r.wh,
         remaining: pos0(r.qty - (r.issued || 0)), needDate: r.needDate || '', priority: r.priority })) : [];
       if (!js.length && !rs.length) continue;
-      js.sort((a, b) => (a.priority - b.priority) || String(a.dueDate).localeCompare(String(b.dueDate)) || a.jobNo.localeCompare(b.jobNo));
       const hit = js.filter((j) => j.affected);
+      const head = `${l.poNo}/${l.line} ${l.code} ค้าง ${fmt(l.outstanding)} ${l.baseUnit} ${l.late ? `เลยกำหนด ${l.daysLate} วัน (กำหนด ${l.dueDate})` : `กำหนด ${l.dueDate} หลังวันต้องใช้ของงาน`}`;
       out.push(Object.assign({}, l, {
-        jobs: js, reservations: rs,
-        message: `${l.poNo}/${l.line} ${l.code} ค้าง ${fmt(l.outstanding)} ${l.baseUnit} ${l.late ? `เลยกำหนด ${l.daysLate} วัน (กำหนด ${l.dueDate})` : `กำหนด ${l.dueDate} หลังวันต้องใช้ของงาน`}${hit.length ? ` – กระทบใบงาน ${hit.map((j) => j.jobNo + ' (ต้องใช้ ' + j.dueDate + ', ขาด ' + fmt(j.uncovered) + ')').join(', ')}` : ''}`,
+        freeStock, jobs: js, reservations: rs,
+        message: head + (hit.length
+          ? ` – กระทบใบงาน ${hit.map((j) => j.jobNo + ' (ต้องใช้ ' + j.dueDate + ', ขาด ' + fmt(j.short) + ')').join(', ')}`
+          : (js.length ? ` – ของในคลังที่ว่าง ${fmt(freeStock)} ${l.baseUnit} ยังพอให้ใบงานที่รอ` : '')),
       }));
     }
     return out.sort((a, b) => (b.daysLate - a.daysLate) || String(a.dueDate).localeCompare(String(b.dueDate)) || a.poNo.localeCompare(b.poNo));

@@ -60,7 +60,7 @@
   schema.define('uat', {
     label: 'ผลทดสอบรับงาน (UAT)', phase: 6, key: 'id',
     note: 'รหัสเกณฑ์คงที่ เช่น P1-2 (RRS.reports.UAT_CRITERIA); บันทึกผลใหม่ เก็บผลเดิมไว้ใน history ไม่ลบ',
-    fields: [['id', 'text', 'รหัสเกณฑ์'], ['phase', 'number', 'Phase'], ['criterion', 'text', 'เกณฑ์ผ่าน'],
+    fields: [['id', 'text', 'รหัสเกณฑ์'], ['phase', 'number', 'ระยะ (Phase)'], ['criterion', 'text', 'เกณฑ์ผ่าน'],
       ['status', 'enum', 'ผล', 'PASS/FAIL/NOT_RUN'], ['tester', 'text', 'ผู้ทดสอบ'], ['testedOn', 'date', 'วันที่ทดสอบ'],
       ['evidence', 'text', 'หลักฐาน (เลขเอกสาร/ไฟล์/ชื่อการทดสอบ)'], ['note', 'text', 'หมายเหตุ'], ['at', 'datetime', 'บันทึกเมื่อ'],
       ['history', 'json', 'ผลก่อนหน้า {status, tester, testedOn, evidence, note, at}']],
@@ -135,6 +135,7 @@
   const SHORT_STATUS = { SHORT: 'ขาด', BELOW_MIN: 'ต่ำกว่า Min', OVER_MAX: 'เกิน Max', OK: 'พอ' };
   const AGE_BUCKETS = ['0-30', '31-90', '91-180', '>180'];
   const STAGE_LABEL = { INCOMING: 'ตรวจรับ', IN_PROCESS: 'ระหว่างผลิต', FINAL: 'ก่อนส่งมอบ' };
+  const STAGE_ORDER = { INCOMING: 1, IN_PROCESS: 2, FINAL: 3 };
   /** KPI direction: up = higher is better. */
   const KPI_BETTER = { count_accuracy: 'up', fpy: 'up', qc_wait: 'down', repeat_ncr: 'down', shortage: 'down', issue_lead: 'down' };
   const DEFAULT_BACKUP_DAYS = 30;
@@ -172,6 +173,7 @@
     ['RESERVED', 'ของถูกจองให้งานอื่น', 'ของใช้ได้มีพอแต่จองให้ใบงานอื่นแล้ว (หรือใช้รหัส/คลังที่สงวนไว้)', 'เบิกโดยอ้างใบงาน/ใบจองของตัวเอง หรือให้ฝ่ายวางแผนปรับการจอง', 'สโตร์ + วางแผน'],
     ['BAD_STATUS', 'ของยังไม่ผ่าน QC', 'ของรอตรวจ/กักกัน/รอแก้ไข เบิกหรือส่งมอบไม่ได้', 'ให้ QC ตรวจและหัวหน้า QC ปล่อยผ่านก่อน หรือดำเนินการตาม NCR', 'QC'],
     ['LOT_REQUIRED', 'ต้องระบุล็อต/Heat', 'สินค้านี้ตั้งให้ติดตามล็อต/Heat/Serial', 'อ่านเลขจากป้าย/ใบรับรองวัสดุแล้วกรอกให้ตรง', 'สโตร์'],
+    ['BAD_LOT', 'เลขล็อตใช้ไม่ได้', 'เลขล็อต/Heat มีอักขระ | หรืออักขระควบคุม', 'พิมพ์เลขล็อตใหม่ตามป้าย/ใบรับรอง', 'สโตร์'],
     ['LOT_NOT_TRACKED', 'สินค้านี้ไม่ติดตามล็อต', 'กรอกล็อตให้สินค้าที่ไม่ได้ตั้งติดตาม', 'ลบล็อตออก หรือให้ผู้ดูแลข้อมูลหลักแก้ทะเบียนสินค้า', 'สโตร์'],
     ['SERIAL_QTY', 'Serial ทีละ 1', 'สินค้าติดตาม Serial บันทึกได้ครั้งละ 1 หน่วยต่อบรรทัด', 'แยกบรรทัดละ 1 หน่วย', 'สโตร์'],
     ['NO_UNIT', 'หน่วยไม่มีตัวคูณ', 'หน่วยที่กรอกไม่มีตัวคูณไปหน่วยหลัก', 'ใช้หน่วยหลัก หรือให้ผู้ดูแลข้อมูลหลักเพิ่มตัวคูณ (ค-4)', 'ข้อมูลหลัก'],
@@ -650,7 +652,7 @@
       } else g.fail += 1;
     }
     const rows = Object.values(groups).map((g) => Object.assign(g, { fpy: pct(g.pass, g.first) }))
-      .sort((a, b) => a.stage.localeCompare(b.stage) || a.code.localeCompare(b.code));
+      .sort((a, b) => (STAGE_ORDER[a.stage] || 9) - (STAGE_ORDER[b.stage] || 9) || a.code.localeCompare(b.code));
     for (const k in byStage) byStage[k].fpy = pct(byStage[k].pass, byStage[k].first);
     const w = reports.qcWait(state, opts).totals;
     return {
@@ -860,7 +862,7 @@
     const cnt = (s) => rows.filter((r) => r.status === s).length;
     return {
       rows, byPhase,
-      cols: [C('id', 'รหัส'), N('phase', 'Phase'), C('criterion', 'เกณฑ์ผ่าน'), C('statusLabel', 'ผล'), C('tester', 'ผู้ทดสอบ'),
+      cols: [C('id', 'รหัส'), N('phase', 'ระยะ (Phase)'), C('criterion', 'เกณฑ์ผ่าน'), C('statusLabel', 'ผล'), C('tester', 'ผู้ทดสอบ'),
         C('testedOn', 'วันที่'), C('evidence', 'หลักฐาน'), C('auto', 'ทดสอบอัตโนมัติ')],
       totals: { total: rows.length, pass: cnt('PASS'), fail: cnt('FAIL'), notRun: cnt('NOT_RUN'), allPass: rows.length > 0 && cnt('PASS') === rows.length },
     };
@@ -934,10 +936,14 @@
     rows.sort((a, b) => a.area - b.area || a.id.localeCompare(b.id));
     // new plates of the same material family and thickness that are in stock (fallback)
     const plates = [];
+    const free = {};
+    for (const b of T(state, 'balances')) {
+      if (b.status !== STATUS.AVAILABLE || b.wh === TRANSIT || (q.wh && b.wh !== q.wh) || lotQuarantined(get, b.code, b.lot)) continue;
+      free[b.code] = (free[b.code] || 0) + b.qty;
+    }
     for (const p of T(state, 'items')) {
       if (p.active === false || familyOf(pol, p.material) !== fam || !sameThk(p.thickness, thickness)) continue;
-      const avail = RRS.q.rows(state, 'balances', (b) => b.code === p.id && b.status === STATUS.AVAILABLE && b.wh !== TRANSIT
-        && (!q.wh || b.wh === q.wh) && !lotQuarantined(get, b.code, b.lot)).reduce((s, b) => s + b.qty, 0);
+      const avail = free[p.id] || 0;
       if (!(avail > 0)) continue;
       const known = p.width > 0 && p.length > 0;
       const f = known ? fitOf(p.width, p.length, width, length) : { fit: true, rotated: false };
@@ -1035,6 +1041,7 @@
       const sourceLot = util.trim(p.sourceLot);
       if (it.trackLot && it.trackLot !== 'none') {
         if (!sourceLot) return tx.error('LOT_REQUIRED', `${it.id} ติดตาม${RRS.master.TRACK[it.trackLot]} – ระบุล็อตต้นทางของเศษ`, { field: 'sourceLot' });
+        if (/[|\u0000-\u001f]/.test(sourceLot)) return tx.error('BAD_LOT', 'เลขล็อตต้นทางห้ามมี | หรืออักขระควบคุม', { field: 'sourceLot' });
         if (!tx.get('lots', it.id + '|' + sourceLot) && !tx.all('movements', (m) => m.code === it.id && m.lot === sourceLot).length) {
           return tx.error('LOT_UNKNOWN', `ไม่พบ ${RRS.master.TRACK[it.trackLot]} ${sourceLot} ในประวัติของ ${it.id}`, { field: 'sourceLot' });
         }
@@ -1399,6 +1406,7 @@
    * Every schema table as a Google Sheet tab: {table: [header row (Thai labels), ...rows]}. JSON/list columns are
    * JSON text; fields a row has outside the dictionary go to the last column as JSON (nothing is dropped). Text that a
    * sheet would run as a formula is kept as text with a leading ' (opts.safeText = false to turn it off).
+   * opts.header = 'name' puts the field names in the header row instead of the Thai labels.
    */
   reports.exportTables = function exportTables(state, opts) {
     opts = opts || {};
@@ -1407,7 +1415,7 @@
     for (const name of Object.keys(schema.tables)) {
       const tb = schema.tables[name];
       const names = tb.fields.map((f) => f.name);
-      const header = tb.fields.map((f) => f.label || f.name).concat([EXTRA_LABEL]);
+      const header = (opts.header === 'name' ? names : tb.fields.map((f) => f.label || f.name)).concat([opts.header === 'name' ? '_extra' : EXTRA_LABEL]);
       const tbl = tablesOf(state)[name] || {};
       const rows = Object.keys(tbl).sort(keyCmp).map((k) => {
         const r = tbl[k] || {};

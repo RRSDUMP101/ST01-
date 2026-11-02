@@ -16,9 +16,16 @@
  *    the job becomes an extra line, required 0). The job must be open. A delivery DL (defined by a later module)
  *    with a job only consumes that job's reservations and adds to an existing line – it may follow a finished job. RT with a job lowers issued (never below 0). FR with a job may receive at most
  *    finished − received of the job line. doc.cancel reverses all of it (in the same commit).
- *  - no other document can take stock reserved for another job (RRS.inventory.reservedElsewhere). Adjustments (AJ)
- *    are exempt – they record what is really there; an over-reserved warehouse then shows a flag in six(). A transfer
- *    between bins of the same warehouse is not taking stock (reservations are per warehouse).
+ *  - no other document can take stock reserved for another job (RRS.inventory.reservedElsewhere per group of lines, and
+ *    the 'doc.check' guard over the whole document: what it takes beyond its own jobs' open reservations must fit in
+ *    the unreserved stock – also when lines with and without a reservation, or of several jobs, are mixed). Adjustments
+ *    (AJ) are exempt – they record what is really there; an over-reserved warehouse then shows a flag in six(). A
+ *    transfer between bins of the same warehouse is not taking stock (reservations are per warehouse).
+ *  - no stale reservations: when a job line has what it needs (issued from another warehouse or from free stock) its
+ *    open reservations beyond that are trimmed (newest first, `changes` keeps the document; cancelling it gives them
+ *    back while the stock is still free). A transfer (TR) with a job moves the job's reservation with the stock: out of
+ *    the source when posted, into the destination as it is received; a cancelled transfer puts it back. Pieces a job
+ *    makes itself (job.setMake) are reserved for it when they are received AVAILABLE (FR) – a cancelled FR takes that back.
  *  - nothing is deleted: a released reservation stays with who/when/why; every use of a reservation is kept in
  *    `uses` (a cancelled document adds a negative entry that points at the document). Forcing the cancel of a job
  *    that still holds issued material is an exception that another person than the job's creator must do.
@@ -57,8 +64,10 @@
       ['createdBy', 'text', 'ผู้จอง'], ['createdAt', 'datetime', 'จองเมื่อ'], ['updatedBy', 'text', 'ผู้เปลี่ยนล่าสุด'],
       ['updatedAt', 'datetime', 'เปลี่ยนล่าสุดเมื่อ'], ['releasedBy', 'text', 'ผู้ปล่อยการจอง'], ['releasedAt', 'datetime', 'ปล่อยเมื่อ'],
       ['releasedQty', 'number', 'ยอดที่ปล่อยคืน'], ['reason', 'text', 'เหตุผลการปล่อย'],
-      ['changes', 'json', 'ประวัติการเปลี่ยนจัดสรร {at, by, fromQty, toQty, fromWh, toWh}'],
-      ['uses', 'json', 'การตัดใช้จากเอกสาร {docNo, docType, line, qty (+ เบิก / − ยกเลิก), at, by}']],
+      ['changes', 'json', 'ประวัติการเปลี่ยนจัดสรร {at, by, fromQty, toQty, fromWh, toWh, reason, docNo?, trimmed? (ตัดส่วนเกินเมื่องานเบิกครบ), restored? (คืนเมื่อยกเลิกเอกสาร)}'],
+      ['uses', 'json', 'การตัดใช้จากเอกสาร {docNo, docType, line, qty (+ เบิก / − ยกเลิก), at, by}'],
+      ['fromDoc', 'text', 'สร้างจากเอกสาร (รับชิ้นส่วนที่งานผลิตเอง FR)'],
+      ['releasedDoc', 'text', 'ปล่อยเพราะเอกสาร (งานเบิกครบจากที่อื่น)']],
   });
 
   const JOB_STATUS = { OPEN: 'เปิด', IN_PROGRESS: 'กำลังทำ', DONE: 'ผลิตเสร็จ', DELIVERED: 'ส่งมอบแล้ว', CANCELLED: 'ยกเลิก' };
@@ -155,6 +164,18 @@
   function freeAt(tx, code, wh, exceptId) {
     return round(tx.qty({ code, wh, status: STATUS.AVAILABLE }) - reservedAt(tx, code, wh, exceptId));
   }
+  /** Open reservations of one job for code in one warehouse. */
+  function jobReservedAt(tx, jobNo, code, wh) {
+    let s = 0;
+    for (const r of tx.all('reservations', (x) => x.jobNo === jobNo && x.code === code && x.wh === wh && isOpenRes(x))) s += remaining(r);
+    return round(s);
+  }
+  /** Does this resolved line take AVAILABLE stock out of its warehouse? (a bin move inside one warehouse does not) */
+  function leavesWh(doc, ln) {
+    const td = inv.DOC_TYPES[doc.type];
+    if (!td || !ln || ln.status !== STATUS.AVAILABLE) return false;
+    return td.dir === -1 || (td.dir === 'T' && ln.toWh !== ln.wh) || (td.dir === 0 && ln.base < 0);
+  }
   function jobReserved(tx, jobNo, code, exceptId) {
     let s = 0;
     for (const r of tx.all('reservations', (x) => x.jobNo === jobNo && x.code === code && isOpenRes(x) && x.id !== exceptId)) s += remaining(r);
@@ -182,6 +203,7 @@
       requested: round(extra.requested == null ? qty : extra.requested), needDate: extra.needDate || job.dueDate,
       priority: extra.priority || job.priority, status: 'OPEN', auto: !!extra.auto, createdBy: tx.userId, createdAt: tx.now,
       updatedBy: '', updatedAt: '', releasedBy: '', releasedAt: '', releasedQty: 0, reason: '', changes: [], uses: [],
+      fromDoc: extra.fromDoc || '', releasedDoc: '',
     };
     tx.put('reservations', id, row);
     return row;
@@ -201,12 +223,9 @@
     return out;
   }
   function newPickDoc(tx, job, lines, remark) {
-    return {
-      docNo: '', type: 'PD', date: tx.date, status: 'DRAFT', job: job.jobNo, department: '', ref: job.soNo,
-      remark: remark || `จัดชุดตามใบจอง ${job.jobNo}`, lines, createdBy: tx.userId, createdAt: tx.now, postedBy: '',
-      postedAt: '', cancelledBy: '', cancelledAt: '', cancelReason: '', override: null, expressStatus: '', expressNo: '',
-      source: 'pick',
-    };
+    const d = inv.newDocRow(tx, { job: job.jobNo, ref: job.soNo, remark: remark || `จัดชุดตามใบจอง ${job.jobNo}`, source: 'pick' }, 'PD');
+    d.lines = lines;
+    return d;
   }
 
   // ---- jobs -----------------------------------------------------------------------------------------------
@@ -284,7 +303,8 @@
       }
       const dup = tx.all('jobs', (j) => j.soNo === soNo && OPEN_JOB[j.status] && j.product === product && !!product);
       if (dup.length) tx.warn(`SO ${soNo} มีใบงานของ ${product} เปิดอยู่แล้ว: ${dup.map((j) => j.jobNo).join(', ')}`);
-      jobNo = jobNo || tx.nextNo('JB');
+      // a number typed by hand may already use the next running number: skip it, never overwrite a job
+      while (!jobNo || tx.get('jobs', jobNo)) jobNo = tx.nextNo('JB');
       const row = {
         jobNo, soNo, product, bomRev, qty, dueDate, priority, status: 'OPEN', remark: util.trim(p.remark), lines,
         createdBy: tx.userId, createdAt: tx.now, updatedBy: '', updatedAt: '', doneBy: '', doneAt: '', deliveredBy: '',
@@ -514,9 +534,11 @@
       const it = tx.get('items', r0.code) || { id: r0.code, baseUnit: '' };
       let qty = r0.qty;
       if (p.qty != null && p.qty !== '') {
-        qty = util.num(p.qty);
-        if (isNaN(qty) || qty <= 0) return tx.error('BAD_QTY', 'จำนวนจองต้องมากกว่า 0 (ถ้าไม่ต้องการแล้วให้ปล่อยการจอง)', { field: 'qty' });
-        qty = round(qty);
+        const q = util.num(p.qty);
+        if (isNaN(q) || q <= 0) return tx.error('BAD_QTY', 'จำนวนจองต้องมากกว่า 0 (ถ้าไม่ต้องการแล้วให้ปล่อยการจอง)', { field: 'qty' });
+        const f = RRS.unitFactor((t, k) => tx.get(t, k), it, p.unit);
+        if (f == null) return tx.error('NO_UNIT', `${r0.code} ไม่มีตัวคูณของหน่วย "${p.unit}" (หน่วยหลัก ${it.baseUnit})`, { field: 'unit' });
+        qty = round(q * f);
       }
       if (qty < r0.issued) return tx.error('BELOW_ISSUED', `${r0.id} เบิกไปแล้ว ${r0.issued} – ลดยอดจองต่ำกว่านี้ไม่ได้`, { field: 'qty' });
       let wh = r0.wh;
@@ -670,7 +692,8 @@
           reservationId: r.id, remark: util.trim(l.remark) });
       });
       if (!tx.ok) return;
-      const row = inv.post(tx, newPickDoc(tx, job, lines, util.trim(p.remark)));
+      // the warehouse rights of this posting are the picking rights (not the general doc.post)
+      const row = inv.post(tx, newPickDoc(tx, job, lines, util.trim(p.remark)), { perm: 'pick.post' });
       if (!row) return;
       tx.result.docNo = row.docNo;
       tx.summary = `หยิบตามใบจัดชุด ${job.jobNo} → ${row.docNo} ${lines.length} บรรทัด`;
@@ -680,14 +703,6 @@
   // ---- stock kept for other jobs (inventory checks every outgoing AVAILABLE line with this) ---------------
   inv.reservedElsewhere(function reservedForOthers(tx, code, wh, doc, line) {
     if (EXEMPT_TYPES[doc && doc.type]) return 0;
-    if (doc && doc.type === 'TR') {
-      // reservations are per warehouse: moving stock between bins of the same warehouse keeps it for its jobs
-      const same = (doc.lines || []).filter((l) => {
-        const it = tx.item(l.code);
-        return it && it.id === code && util.normCode(l.wh) === wh;
-      });
-      if (same.length && same.every((l) => util.normCode(l.toWh) === wh)) return 0;
-    }
     const jn = jobOf(doc, line);
     const own = jn && tx.get('jobs', jn) ? jn : '';
     const rid = (line && line.reservationId) || '';
@@ -697,7 +712,65 @@
       if (rid && r.id === rid) continue;
       s += remaining(r);
     }
-    return round(s);
+    if (doc && doc.type === 'TR') {
+      // reservations are per warehouse: what moves between bins of the same warehouse stays there for its jobs, so
+      // inventory's need (which counts those lines too) is offset by it. The whole document is checked exactly in
+      // the 'doc.check' guard below.
+      let same = 0;
+      for (const l of doc.lines || []) {
+        const it = tx.item(l.code);
+        if (!it || it.id !== code || util.normCode(l.wh) !== wh || util.normCode(l.toWh) !== wh) continue;
+        if (l.status && l.status !== STATUS.AVAILABLE) continue;
+        const f = RRS.unitFactor((t, k) => tx.get(t, k), it, l.unit);
+        const q = util.num(l.qty);
+        if (f != null && q > 0) same += q * f;
+      }
+      s -= same;
+    }
+    return pos0(s);
+  });
+
+  /**
+   * The whole document against the reservations of each code + warehouse (inventory checks one group of lines at a
+   * time, so lines with and without a reservation, or of several jobs, could together take stock kept for another
+   * job). What the document takes beyond the open reservations of its own jobs must fit in the stock nobody reserved.
+   * AJ records what is there; an approved negative-stock exception (WAIT_APPROVAL) is decided by its approver.
+   */
+  RRS.hooks.on('doc.check', function reservationGuard(tx, doc, lines) {
+    if (EXEMPT_TYPES[doc.type] || doc.status === 'WAIT_APPROVAL') return;
+    const groups = {};
+    for (const ln of lines) {
+      if (!leavesWh(doc, ln)) continue;
+      const k = ln.code + '|' + ln.wh;
+      const g = groups[k] || (groups[k] = { code: ln.code, wh: ln.wh, unit: ln.baseUnit || '', need: 0, byJob: {}, lines: [] });
+      const q = Math.abs(ln.base);
+      const jn = jobOf(doc, ln);
+      const j = jn && tx.get('jobs', jn) ? jn : '';
+      g.need += q;
+      g.byJob[j] = (g.byJob[j] || 0) + q;
+      g.lines.push(ln.line);
+    }
+    for (const k in groups) {
+      const g = groups[k];
+      const reserved = reservedAt(tx, g.code, g.wh);
+      if (!(reserved > 0)) continue;
+      const avail = tx.qty({ code: g.code, wh: g.wh, status: STATUS.AVAILABLE });
+      if (round(g.need) > avail) continue; // plain shortage – inventory names the location
+      let unreserved = 0;
+      let ownRes = 0;
+      for (const j in g.byJob) {
+        const o = j ? jobReservedAt(tx, j, g.code, g.wh) : 0;
+        ownRes += o;
+        unreserved += Math.max(0, g.byJob[j] - o);
+      }
+      unreserved = round(unreserved);
+      const free = round(avail - reserved);
+      if (unreserved > 0 && unreserved > free) {
+        tx.error('RESERVED', `บรรทัด ${g.lines.join(', ')}: ${g.code} คลัง ${g.wh} ใช้ได้ ${avail} ${g.unit} จองให้งานอื่น ${round(reserved - ownRes)}`
+          + `${ownRes > 0 ? ' (ของงานในเอกสารนี้ ' + round(ownRes) + ')' : ''} – ส่วนที่ไม่ได้จองเหลือ ${Math.max(0, free)} แต่เอกสารนี้ต้องใช้นอกยอดจอง ${unreserved}`,
+        { line: g.lines[0] });
+      }
+    }
   });
 
   // ---- document hooks --------------------------------------------------------------------------------------
@@ -796,11 +869,143 @@
     return use;
   }
 
+  /**
+   * After an issue (or a cancelled return) a job line may hold more open reservations than it still needs – the stock
+   * came from another warehouse or from free stock. The excess is let go (newest reservation first) so it does not keep
+   * stock from other jobs; `changes` records it with the document, and cancelling that document gives it back as far as
+   * the stock is still free.
+   */
+  function trimExcess(tx, job, jl, doc) {
+    if (!OPEN_JOB[job.status] || jl.output) return;
+    const rs = tx.all('reservations', (x) => x.jobNo === job.jobNo && x.code === jl.code && isOpenRes(x)).sort(byCreated).reverse();
+    let excess = round(rs.reduce((sum, r) => sum + remaining(r), 0) - pos0(jl.required - jl.issued));
+    for (const r of rs) {
+      if (excess <= 0) break;
+      const t = round(Math.min(excess, remaining(r)));
+      if (!(t > 0)) continue;
+      const why = `ใบงาน ${job.jobNo} ได้ ${jl.code} ครบแล้ว (${doc.docNo}) – ตัดยอดจองส่วนเกิน`;
+      const nr = clone(r);
+      nr.changes = (nr.changes || []).concat([{ at: tx.now, by: tx.userId, fromQty: r.qty, toQty: round(r.qty - t), fromWh: r.wh,
+        toWh: r.wh, docNo: doc.docNo, docType: doc.type, trimmed: t, reason: why }]);
+      Object.assign(nr, { qty: round(r.qty - t), updatedBy: tx.userId, updatedAt: tx.now });
+      if (!(nr.issued > 0) && nr.qty <= 0) {
+        Object.assign(nr, { status: 'RELEASED', releasedBy: tx.userId, releasedAt: tx.now, releasedQty: t, reason: why, releasedDoc: doc.docNo });
+      } else {
+        nr.status = resStatus(nr);
+      }
+      tx.put('reservations', nr.id, nr);
+      excess = round(excess - t);
+    }
+  }
+  /**
+   * Cancelling a document gives back the reservations it trimmed (or a transfer in transit moved away), as far as the
+   * job still needs them and the stock is free.
+   */
+  function restoreTrimmed(tx, doc, jobs) {
+    const mine = (c) => c.docNo === doc.docNo && c.docType === doc.type;
+    for (const r of tx.all('reservations', (x) => (x.changes || []).some((c) => mine(c) && (c.trimmed > 0 || c.moved > 0)))) {
+      const t = round((r.changes || []).filter(mine).reduce((sum, c) => sum + (c.trimmed || 0) + (c.moved || 0) - (c.restored || 0)
+        - (c.landed || 0), 0));
+      if (!(t > 0)) continue;
+      const job = jobs[r.jobNo] || tx.get('jobs', r.jobNo);
+      if (!job || !OPEN_JOB[job.status]) continue;
+      if (r.status === 'RELEASED' && r.releasedDoc !== doc.docNo) continue; // released since by a person or by closing the job
+      const jl = compLine(job, r.code);
+      const want = round(Math.min(t, jl ? lineNeed(tx, job, jl) : 0)); // what the job still needs of it
+      const q = round(Math.min(want, Math.max(0, freeAt(tx, r.code, r.wh))));
+      if (q < want) tx.warn(`คืนการจอง ${r.id} ${r.code} คลัง ${r.wh} ได้ ${q} จาก ${want} – ส่วนที่เหลือมีงานอื่นจองหรือใช้ไปแล้ว ให้จองใหม่`);
+      if (!(q > 0)) continue;
+      const moved = (r.changes || []).some((c) => mine(c) && c.moved > 0);
+      const nr = clone(r);
+      nr.changes = nr.changes.concat([{ at: tx.now, by: tx.userId, fromQty: r.qty, toQty: round(r.qty + q), fromWh: r.wh, toWh: r.wh,
+        docNo: doc.docNo, docType: doc.type, restored: q, reason: `ยกเลิก ${doc.docNo}: คืนการจอง${moved ? 'ที่ย้ายตามใบโอน' : 'ที่ตัดไว้'}` }]);
+      Object.assign(nr, { qty: round(r.qty + q), updatedBy: tx.userId, updatedAt: tx.now });
+      if (r.status === 'RELEASED') Object.assign(nr, { status: 'OPEN', releasedBy: '', releasedAt: '', releasedQty: 0, reason: '', releasedDoc: '' });
+      nr.status = resStatus(nr);
+      tx.put('reservations', nr.id, nr);
+    }
+  }
+  /** Pieces a job makes itself for one of its lines are kept for it when they arrive (they were never planned from stock). */
+  function reserveMade(tx, job, jl, ln, doc) {
+    if (!OPEN_JOB[job.status]) return;
+    const q = round(Math.min(ln.base, lineNeed(tx, job, jl), Math.max(0, freeAt(tx, jl.code, ln.wh))));
+    if (!(q > 0)) return;
+    const r = newReservation(tx, job, jl, ln.wh, q, { auto: true, fromDoc: doc.docNo });
+    (tx.result.reserved || (tx.result.reserved = [])).push({ id: r.id, code: r.code, wh: r.wh, qty: r.qty });
+  }
+
+  /**
+   * A transfer of a job's reserved stock to another warehouse takes the reservation along: it leaves the source at
+   * once (the stock is no longer there – nothing stale keeps other jobs out), and is made again for the job in the
+   * destination as the stock is received ('transfer.receiveLine'). Cancelling the transfer in transit puts it back.
+   * The source reservation's `changes` keep {docNo, line, moved, landed}.
+   */
+  function moveWithTransfer(tx, doc, lines) {
+    for (const ln of lines) {
+      if (!leavesWh(doc, ln)) continue;
+      const jn = jobOf(doc, ln);
+      const job = jn && tx.get('jobs', jn);
+      if (!job || !OPEN_JOB[job.status]) continue;
+      let q = round(ln.base);
+      for (const r of tx.all('reservations', (x) => x.jobNo === jn && x.code === ln.code && x.wh === ln.wh && isOpenRes(x)).sort(byCreated)) {
+        if (q <= 0) break;
+        const t = round(Math.min(q, remaining(r)));
+        if (!(t > 0)) continue;
+        const why = `ย้ายไปคลัง ${ln.toWh} ตามใบโอน ${doc.docNo}`;
+        const nr = clone(r);
+        nr.changes = (nr.changes || []).concat([{ at: tx.now, by: tx.userId, fromQty: r.qty, toQty: round(r.qty - t), fromWh: r.wh,
+          toWh: ln.toWh, docNo: doc.docNo, docType: doc.type, line: ln.line, moved: t, reason: why }]);
+        Object.assign(nr, { qty: round(r.qty - t), updatedBy: tx.userId, updatedAt: tx.now });
+        if (!(nr.issued > 0) && nr.qty <= 0) {
+          Object.assign(nr, { status: 'RELEASED', releasedBy: tx.userId, releasedAt: tx.now, releasedQty: t, reason: why, releasedDoc: doc.docNo });
+        } else {
+          nr.status = resStatus(nr);
+        }
+        tx.put('reservations', nr.id, nr);
+        q = round(q - t);
+      }
+    }
+  }
+  RRS.hooks.on('transfer.receiveLine', function reservationArrives(tx, doc, line, info) {
+    const status = info.status && STATUS[info.status] ? info.status : line.status;
+    if (status !== STATUS.AVAILABLE) return; // landed in quarantine: nothing to keep
+    // a lot quarantined while in transit lands in QUARANTINE (the quality module sets info.status in its own hook,
+    // which may run after this one) – read the shared lots table too
+    const lot = line.lot ? tx.get('lots', line.code + '|' + line.lot) : null;
+    if (lot && lot.status === 'QUARANTINED') return;
+    const jn = jobOf(doc, line);
+    const job = jn && tx.get('jobs', jn);
+    if (!job || !OPEN_JOB[job.status]) return;
+    const mine = (c) => c.docNo === doc.docNo && c.docType === doc.type && c.line === line.line;
+    let q = round(info.qty);
+    for (const r of tx.all('reservations', (x) => x.jobNo === jn && (x.changes || []).some((c) => mine(c) && c.moved > 0)).sort(byCreated)) {
+      if (q <= 0) break;
+      const pending = round((r.changes || []).filter(mine).reduce((sum, c) => sum + (c.moved || 0) - (c.landed || 0) - (c.restored || 0), 0));
+      const t = round(Math.min(q, pending));
+      if (!(t > 0)) continue;
+      const jl = compLine(job, r.code);
+      const keep = jl ? round(Math.min(t, lineNeed(tx, job, jl))) : 0;
+      let note = `รับโอน ${doc.docNo} ที่คลัง ${info.toWh}`;
+      if (keep > 0) {
+        const created = newReservation(tx, job, jl, info.toWh, keep, { fromDoc: doc.docNo, needDate: r.needDate, priority: r.priority });
+        note += ` – จองต่อ ${created.id} ${keep}`;
+      }
+      const nr = clone(r);
+      nr.changes = (nr.changes || []).concat([{ at: tx.now, by: tx.userId, docNo: doc.docNo, docType: doc.type, line: line.line,
+        landed: t, toWh: info.toWh, reason: note }]);
+      tx.put('reservations', nr.id, nr);
+      q = round(q - t);
+    }
+  });
+
   RRS.hooks.on('doc.posted', function planningPosted(tx, doc, lines) {
     const t = doc.type;
+    if (inv.DOC_TYPES[t] && inv.DOC_TYPES[t].dir === 'T') return moveWithTransfer(tx, doc, lines);
     if (!CONSUME_TYPES[t] && t !== 'FR' && t !== 'RT') return;
     const jobs = {};
     const used = [];
+    const touched = new Map(); // job line whose issued went up -> its job
+    const made = [];
     for (const ln of lines) {
       const jn = jobOf(doc, ln);
       if (!jn) continue;
@@ -820,21 +1025,28 @@
           job.lines.push(jl);
         }
         jl.issued = round(jl.issued + ln.base);
+        touched.set(jl, job);
         if (job.status === 'OPEN' && ISSUE_TYPES[t]) job.status = 'IN_PROGRESS';
       } else if (t === 'RT') {
         const jl = compLine(job, ln.code);
         if (jl) jl.issued = round(jl.issued - ln.base);
       } else {
         const jl = madeLine(job, ln.code);
-        if (jl) jl.received = round(jl.received + ln.base);
+        if (jl) {
+          jl.received = round(jl.received + ln.base);
+          if (!jl.output && ln.status === STATUS.AVAILABLE) made.push({ job, jl, ln });
+        }
       }
     }
+    for (const [jl, job] of touched) trimExcess(tx, job, jl, doc);
+    for (const m of made) reserveMade(tx, m.job, m.jl, m.ln, doc);
     for (const jn in jobs) tx.put('jobs', jn, jobs[jn]);
     if (used.length) tx.result.reservationsUsed = used;
   });
 
   RRS.hooks.on('doc.cancelled', function planningCancelled(tx, doc, lines) {
     const t = doc.type;
+    if (inv.DOC_TYPES[t] && inv.DOC_TYPES[t].dir === 'T') return restoreTrimmed(tx, doc, {}); // only in transit (inventory)
     if (!CONSUME_TYPES[t] && t !== 'FR' && t !== 'RT') return;
     const jobs = {};
     const jobFor = (jn) => {
@@ -845,6 +1057,34 @@
       }
       return jobs[jn];
     };
+    const touched = new Map();
+    for (const ln of lines) {
+      const jn = jobOf(doc, ln);
+      if (!jn) continue;
+      const job = jobFor(jn);
+      if (!job) continue;
+      if (CONSUME_TYPES[t]) {
+        const jl = compLine(job, ln.code);
+        if (!jl) continue;
+        const next = round(jl.issued - ln.base);
+        if (next < 0) {
+          tx.error('RETURNED', `ยกเลิก ${doc.docNo} ไม่ได้: ใบงาน ${jn} ${ln.code} คืนของ (RT) ไปแล้ว – ยกเลิกใบคืนก่อน`, { line: ln.line });
+          continue;
+        }
+        jl.issued = next;
+      } else if (t === 'RT') {
+        const jl = compLine(job, ln.code);
+        if (jl) {
+          jl.issued = round(jl.issued + ln.base);
+          touched.set(jl, job);
+        }
+      } else {
+        const jl = madeLine(job, ln.code);
+        if (!jl) continue;
+        jl.received = pos0(jl.received - ln.base);
+      }
+    }
+    if (!tx.ok) return;
     if (CONSUME_TYPES[t]) {
       // give back what this document took from reservations (net of its uses), history kept as a negative use
       for (const r of tx.all('reservations', (x) => (x.uses || []).some((u) => u.docNo === doc.docNo && u.docType === doc.type))) {
@@ -863,28 +1103,22 @@
         }
         tx.put('reservations', nr.id, nr);
       }
-    }
-    for (const ln of lines) {
-      const jn = jobOf(doc, ln);
-      if (!jn) continue;
-      const job = jobFor(jn);
-      if (!job) continue;
-      if (CONSUME_TYPES[t]) {
-        const jl = compLine(job, ln.code);
-        if (!jl) continue;
-        const next = round(jl.issued - ln.base);
-        if (next < 0) {
-          tx.error('RETURNED', `ยกเลิก ${doc.docNo} ไม่ได้: ใบงาน ${jn} ${ln.code} คืนของ (RT) ไปแล้ว – ยกเลิกใบคืนก่อน`, { line: ln.line });
-          continue;
-        }
-        jl.issued = next;
-      } else if (t === 'RT') {
-        const jl = compLine(job, ln.code);
-        if (jl) jl.issued = round(jl.issued + ln.base);
-      } else {
-        const jl = madeLine(job, ln.code);
-        if (!jl) continue;
-        jl.received = pos0(jl.received - ln.base);
+      restoreTrimmed(tx, doc, jobs);
+    } else if (t === 'RT') {
+      for (const [jl, job] of touched) trimExcess(tx, job, jl, doc);
+    } else {
+      // a cancelled receipt of pieces the job made itself takes back the reservation it made (never below what was issued)
+      for (const r of tx.all('reservations', (x) => x.fromDoc === doc.docNo && isOpenRes(x))) {
+        const left = round(Math.min(remaining(r), r.requested || r.qty));
+        if (!(left > 0)) continue;
+        const why = `ยกเลิก ${doc.docNo}: ของที่รับเข้าและจองไว้ถูกกลับรายการ`;
+        const nr = clone(r);
+        nr.changes = (nr.changes || []).concat([{ at: tx.now, by: tx.userId, fromQty: r.qty, toQty: round(r.qty - left), fromWh: r.wh,
+          toWh: r.wh, docNo: doc.docNo, docType: doc.type, reason: why }]);
+        Object.assign(nr, { qty: round(r.qty - left), updatedBy: tx.userId, updatedAt: tx.now });
+        if (!(nr.issued > 0) && nr.qty <= 0) Object.assign(nr, { status: 'RELEASED', releasedBy: tx.userId, releasedAt: tx.now, releasedQty: left, reason: why });
+        else nr.status = resStatus(nr);
+        tx.put('reservations', nr.id, nr);
       }
     }
     for (const jn in jobs) tx.put('jobs', jn, jobs[jn]);
@@ -910,7 +1144,7 @@
 
   function emptyRow(items, code) {
     const it = items[code] || {};
-    return { code, name: it.name || '', baseUnit: it.baseUnit || '', onHand: 0, available: 0, qcHold: 0, transit: 0,
+    return { code, name: it.name || '', baseUnit: it.baseUnit || '', onHand: 0, available: 0, qcHold: 0, qcWaiting: 0, transit: 0,
       reserved: 0, free: 0, overReserved: 0, wip: 0, waitingReceipt: 0, incoming: 0, lateIncoming: 0, nextIncomingDate: '',
       demand: 0, short: 0, flags: [] };
   }
@@ -938,6 +1172,7 @@
         w.available = round(w.available + b.qty);
       } else if (HOLD.indexOf(b.status) >= 0) {
         r.qcHold = round(r.qcHold + b.qty);
+        if (b.status === STATUS.QC_HOLD) r.qcWaiting = round(r.qcWaiting + b.qty);
       }
     }
     for (const rs of rows(state, 'reservations', isOpenRes)) {
@@ -1039,7 +1274,8 @@
    * (six(): all open jobs, toMake − finished), waitingReceipt, qcHold, incoming, nextIncomingDate, makeLeft (this line's
    * own toMake − finished), inProduction (this line's own toMake − received + what other open jobs make of the code as
    * their product; pieces other jobs make for their own lines are theirs) and status พร้อม / รอตรวจ / ระหว่างผลิต / ขาด
-   * (statusCode READY / QC / WIP / SHORT). Returns null for an unknown job.
+   * (statusCode READY / QC / WIP / SHORT). รอตรวจ counts only QC_HOLD stock (qcWaiting) – quarantined (NCR) or rework
+   * stock may never come back, so it is ขาด. A job without component lines is not ready. Returns null for an unknown job.
    */
   P.readiness = function readiness(state, jobNo, opts) {
     opts = opts || {};
@@ -1075,15 +1311,16 @@
       const allocated = OPEN_JOB[job.status] ? Math.min(unreserved, allocFor(jl.code)) : 0;
       const missing = round(unreserved - allocated);
       const qcHold = a.qcHold || 0;
+      const qcWaiting = a.qcWaiting || 0; // QC_HOLD only: quarantined (NCR) or rework stock may never come back
       const making = round(pos0(jl.toMake - jl.received) + otherOutput(jl.code));
       let statusCode = 'SHORT';
       if (missing <= 0) statusCode = 'READY';
-      else if (missing <= qcHold) statusCode = 'QC';
-      else if (making > 0 && missing <= qcHold + making) statusCode = 'WIP';
+      else if (missing <= qcWaiting) statusCode = 'QC';
+      else if (making > 0 && missing <= qcWaiting + making) statusCode = 'WIP';
       lines.push({
         line: jl.line, code: jl.code, name: (items[jl.code] || {}).name || '', baseUnit: (items[jl.code] || {}).baseUnit || '',
         required: jl.required, issued: jl.issued, reservedRemaining, unreserved, freeNow, allocated, toReserve: allocated,
-        missing, wip: a.wip || 0, waitingReceipt: a.waitingReceipt || 0, qcHold, incoming: a.incoming || 0,
+        missing, wip: a.wip || 0, waitingReceipt: a.waitingReceipt || 0, qcHold, qcWaiting, incoming: a.incoming || 0,
         nextIncomingDate: a.nextIncomingDate || '', makeLeft: pos0(jl.toMake - jl.finished), inProduction: making,
         extra: !!jl.extra, statusCode, status: READY[statusCode],
       });
@@ -1096,7 +1333,7 @@
       status: job.status, statusLabel: JOB_STATUS[job.status], dueDate: job.dueDate, priority: job.priority, lines,
       output: out ? { code: out.code, toMake: out.toMake, finished: out.finished, received: out.received,
         wip: pos0(out.toMake - out.finished), waitingReceipt: pos0(out.finished - out.received) } : null,
-      ready: lines.every((l) => l.statusCode === 'READY'),
+      ready: lines.length > 0 && lines.every((l) => l.statusCode === 'READY'),
       missing: lines.filter((l) => l.missing > 0).map((l) => ({ code: l.code, name: l.name, missing: l.missing, status: l.status })),
     };
   };

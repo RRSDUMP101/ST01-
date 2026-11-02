@@ -261,14 +261,22 @@ test('ของรอตรวจยังไม่เพิ่มยอดพ�
   assert.equal(qty(s, { code: 'TST-PLATE', status: 'QC_HOLD' }), 20);
   assert.equal(qty(s, { code: 'TST-PLATE', status: 'AVAILABLE' }), 0);
   const r = row(s, 'TST-PLATE');
+  // waiting for QC: not available, not free, not in the projected balance (stock you can issue)
   assert.deepEqual([r.available, r.qcHold, r.free, r.incomingSure, r.projected, r.min, r.max], [0, 20, 0, 0, 0, 10, 20]);
-  assert.equal(r.orderQty, 20, 'stock waiting for QC is not counted as available');
   assert.ok(has(r.reasons, /รอตรวจ 20 แผ่น – ยังไม่นับเป็นของพร้อมเบิก/));
+  // ... but the same 20 plates are not bought a second time just because they arrived: before the receipt the PO
+  // covered the need, after it the goods in QC still do (a failed lot goes to QUARANTINE and is suggested again)
+  assert.deepEqual([r.need, r.qcCovered, r.orderQty, r.status], [20, 20, 0, 'COVERED'], JSON.stringify(r.reasons));
+  assert.ok(has(r.reasons, /หักของรอตรวจ 20 แผ่น/));
   // nobody can issue it, and it cannot go back to the vendor before QC decides
   const issue = await w.exec('STORE1', 'doc.post', { type: 'PD', lines: [{ code: 'TST-PLATE', qty: 1, wh: 'A', bin: 'A-02', lot: 'H-001' }] });
   assert.equal(issue.errors[0].code, 'NOT_ENOUGH');
   const back = await w.exec('STORE1', 'po.return', { poNo, reason: 'ผิวมีรอย', lines: [{ line: 1, qty: 1, bin: 'A-02', lot: 'H-001', status: 'QC_HOLD' }] });
   assert.equal(back.errors[0].code, 'BAD_STATUS');
+  // a company that only trusts released stock can switch the deduction off (policies.qcHoldIsSupply = false)
+  await w.ok('MGR', 'settings.update', { patch: { policies: { qcHoldIsSupply: false } } });
+  const off = row(await w.state(), 'TST-PLATE');
+  assert.deepEqual([off.available, off.projected, off.qcCovered, off.orderQty, off.status], [0, 0, 0, 20, 'ORDER']);
 });
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -646,13 +654,20 @@ test('แนะนำสั่งซื้อหักของจองแล�
   // ... but the day-9 PO arrives after both jobs need it
   const risk = P().affectedJobs(s, { today: TODAY, atRisk: true });
   assert.deepEqual(risk.map((x) => [x.poNo, x.jobs.map((j) => j.jobNo)]), [[later, ['JB-2', 'JB-1']]]);
-  // seen on day 10 both PO lines are late; the jobs that still need the item are listed (highest priority first)
+  // with 150 on hand (110 free after JB-1's reservation) the unreserved 50 + 60 are covered from stock: a late PO
+  // hurts nobody yet – listed for information, not flagged
+  const calm = P().affectedJobs(s, { today: day(10) });
+  assert.deepEqual(calm[0].jobs.map((j) => [j.jobNo, j.fromStock, j.short, j.affected]), [['JB-2', 50, 0, false], ['JB-1', 60, 0, false]]);
+  assert.doesNotMatch(calm[0].message, /กระทบใบงาน/);
+  // only 80 on hand (40 free): free stock goes to the highest priority first, the rest waits for the late PO
+  s.tables.balances['BUY-BOLT|A|A-01|AVAILABLE|'].qty = 80;
   const hit = P().affectedJobs(s, { today: day(10) });
   assert.deepEqual(hit.map((x) => [x.poNo, x.daysLate]), [[poNo, 6], [later, 1]]);
-  assert.deepEqual(hit[0].jobs.map((j) => [j.jobNo, j.need, j.reserved, j.uncovered, j.affected]), [['JB-2', 50, 0, 50, true], ['JB-1', 100, 40, 60, true]]);
+  assert.deepEqual(hit[0].jobs.map((j) => [j.jobNo, j.need, j.reserved, j.uncovered, j.fromStock, j.short, j.affected]),
+    [['JB-2', 50, 0, 50, 40, 10, true], ['JB-1', 100, 40, 60, 0, 60, true]]);
   assert.deepEqual(hit[0].reservations.map((x) => [x.id, x.remaining]), [['RS-00001', 40]]);
   assert.match(hit[0].message, /เลยกำหนด 6 วัน/);
-  assert.match(hit[0].message, /JB-2/);
+  assert.match(hit[0].message, /กระทบใบงาน JB-2 \(ต้องใช้ 2026-11-10, ขาด 10\)/);
 });
 
 test('แนะนำสั่งซื้อรายคลัง: เงื่อนไขของคลัง, PO ของคลังอื่นไม่นับ, ของระหว่างโอนเข้าคลังนับ, ปิดการแนะนำได้', async () => {
@@ -692,4 +707,321 @@ test('ตารางของ Phase 4 อยู่ในพจนานุก�
   assert.deepEqual(RRS.schema.tables.item_suppliers.key, ['code', 'supplier']);
   const rv = RRS.inventory.DOC_TYPES.RV;
   assert.deepEqual([rv.name, rv.dir, rv.express, rv.outStatuses], ['คืนสินค้าผู้ขาย', -1, false, ['AVAILABLE', 'QUARANTINE', 'REWORK']]);
+});
+
+// ---------------------------------------------------------------------------------------------------------------
+// review round: defects found by an independent reviewer (each test failed before the fix)
+// ---------------------------------------------------------------------------------------------------------------
+/** Every PO line agrees with the posted (not cancelled) RR/RV documents that point at it, and stock = its history. */
+function checkPoLines(s) {
+  const round = RRS.util.round;
+  const docs = Object.values(s.tables.documents || {}).filter((d) => d.status === 'POSTED' && (d.type === 'RR' || d.type === 'RV'));
+  for (const po of Object.values(s.tables.pos || {})) {
+    for (const l of po.lines) {
+      let rr = 0;
+      let rv = 0;
+      let rep = 0;
+      for (const d of docs) {
+        for (const dl of d.lines) {
+          if (dl.poNo !== po.poNo || dl.poLine !== l.line) continue;
+          if (d.type === 'RR') rr += dl.base;
+          else {
+            rv += dl.base;
+            if (dl.replace || (d.replaceLines || []).indexOf(dl.line) >= 0) rep += dl.base;
+          }
+        }
+      }
+      const where = `${po.poNo}/${l.line}`;
+      assert.equal(l.received, round(rr - rep), `${where} received`);
+      assert.equal(l.returned, round(rv), `${where} returned`);
+      assert.equal(l.replaced, round(rep), `${where} replaced`);
+      assert.ok(l.cancelled >= 0 && l.cancelled <= l.base, `${where} cancelled ${l.cancelled} of ${l.base}`);
+      assert.equal(P().lineOutstanding(l), Math.max(0, round(l.base - l.received - l.cancelled)), `${where} outstanding`);
+    }
+    assert.equal(po.status, P().statusOf(po), `${po.poNo} status`);
+  }
+  assert.deepEqual(RRS.inventory.verifyBalances(s), []);
+}
+
+test('คืนผู้ขายผ่าน doc.post พร้อม replace:true เปิดยอดค้างรับใหม่เหมือน po.return และยกเลิกแล้วกลับ', async () => {
+  const w = await buyWorld();
+  const poNo = await issuedPo(w, [bolt(4)]); // 200
+  await w.ok('STORE1', 'po.receive', { poNo, lines: [{ line: 1, qty: 4, bin: 'A-01' }] });
+  // the store keys an RV by hand (or saves a draft first) and asks the vendor for a replacement
+  const draft = await w.ok('STORE1', 'doc.saveDraft', { type: 'RV', remark: 'ขนาดผิด ขอเปลี่ยน',
+    lines: [{ code: 'BUY-BOLT', qty: 50, wh: 'A', bin: 'A-01', poNo, poLine: 1, replace: true }] });
+  await w.ok('STORE1', 'doc.post', { docNo: draft.result.docNo });
+  let s = await w.state();
+  let pl = s.tables.pos[poNo].lines[0];
+  assert.deepEqual([pl.received, pl.returned, pl.replaced, P().lineOutstanding(pl), s.tables.pos[poNo].status], [150, 50, 50, 50, 'PARTIAL']);
+  assert.equal(P().outstanding(s, { today: TODAY })[0].outstanding, 50);
+  checkPoLines(s);
+  // the replacement arrives against the same PO line
+  await w.ok('STORE1', 'po.receive', { poNo, lines: [{ line: 1, qty: 1, bin: 'A-01' }] });
+  s = await w.state();
+  assert.equal(s.tables.pos[poNo].status, 'RECEIVED');
+  checkPoLines(s);
+  // a replacement on a closed PO is refused for a hand-keyed RV too (only a credit return is possible)
+  await w.ok('PURLEAD', 'po.close', { poNo, reason: 'ปิดยอด' });
+  const closed = await w.exec('STORE1', 'doc.post', { type: 'RV', lines: [{ code: 'BUY-BOLT', qty: 10, wh: 'A', bin: 'A-01', poNo, poLine: 1, replace: true }] });
+  assert.equal(closed.errors[0].code, 'BAD_STATE');
+});
+
+test('แยกหน้าที่: ส่งร่างใบขอซื้อของคนอื่นไม่ได้ – คนที่ส่งขออนุมัติจะอนุมัติเองไม่ได้', async () => {
+  const w = await buyWorld();
+  // one person holding both the request and the approval role (store + purchasing lead)
+  await w.ok('ADMIN', 'user.upsert', { id: 'BOTH', name: 'สองบทบาท', roles: ['store', 'purchasing_lead'] });
+  const d = await w.ok('STORE1', 'pr.create', { draft: true, lines: [{ code: 'BUY-BOLT', qty: 10, wh: 'A', needDate: day(3) }] });
+  const seq = (await w.state()).seq;
+  const submit = await w.exec('BOTH', 'pr.submit', { prNo: d.result.prNo });
+  assert.equal(submit.ok, false, 'someone else submitted the draft');
+  assert.equal(submit.errors[0].code, 'NOT_OWNER');
+  assert.equal((await w.state()).seq, seq);
+  await w.ok('STORE1', 'pr.submit', { prNo: d.result.prNo });
+  await w.ok('BOTH', 'pr.approve', { prNo: d.result.prNo });
+  // the person who sends a PR for approval cannot approve it, whatever roles they hold
+  const own = await w.ok('BOTH', 'pr.create', { lines: [{ code: 'BUY-BOLT', qty: 10, wh: 'A', needDate: day(3) }] });
+  const self = await w.exec('BOTH', 'pr.approve', { prNo: own.result.prNo });
+  assert.equal(self.errors[0].code, 'SAME_PERSON');
+  const s = await w.state();
+  assert.deepEqual([s.tables.prs[d.result.prNo].submittedBy, s.tables.prs[d.result.prNo].approvedBy], ['STORE1', 'BOTH']);
+});
+
+test('ความต้องการของใบงาน: ส่วนที่ตั้งผลิตเองไม่นับเป็นความต้องการซื้อ', async () => {
+  const w = await buyWorld();
+  await w.ok('PUR', 'itemSupplier.upsert', { code: 'TST-002', supplier: 'SUP-B', price: 10, preferred: true });
+  const late = await issuedPo(w, [{ code: 'TST-002', qty: 5, dueDate: day(1), wh: 'A' }], 'SUP-B');
+  const s = structuredClone(await w.state());
+  s.tables.jobs = {
+    'JB-7': { jobNo: 'JB-7', soNo: 'SO-7', status: 'OPEN', dueDate: day(9), priority: 3, lines: [
+      { line: 0, code: 'TST-FG', required: 0, issued: 0, toMake: 1, finished: 0, received: 0, output: true },
+      // TST-001: all 100 are made in-house for this job – nothing to buy
+      { line: 1, code: 'TST-001', required: 100, issued: 0, toMake: 100, finished: 0, received: 0 },
+      // TST-002: 30 needed, 10 made in-house of which 4 already received into stock → 24 still to come from stock/purchase
+      { line: 2, code: 'TST-002', required: 30, issued: 0, toMake: 10, finished: 4, received: 4 },
+    ] },
+  };
+  const t1 = row(s, 'TST-001');
+  assert.deepEqual([t1.demandTotal, t1.demand, t1.projected, t1.orderQty], [0, 0, 0, 0], JSON.stringify(t1.reasons));
+  // seen on day 3 the 5 on order are late (not counted by default): 24 still to buy
+  const t2 = row(s, 'TST-002', { today: day(3) });
+  assert.deepEqual([t2.demandTotal, t2.demand, t2.incomingLate, t2.projected, t2.orderQty], [24, 24, 5, -24, 24]);
+  const hit = P().affectedJobs(s, { today: day(3) });
+  assert.deepEqual(hit.map((x) => [x.poNo, x.code, x.jobs.map((j) => [j.jobNo, j.need, j.short])]), [[late, 'TST-002', [['JB-7', 24, 24]]]]);
+});
+
+test('ยกเลิกใบคืนแบบขอของทดแทนหลังปิด PO: ยอดยกเลิกกลับคืน ใบขอซื้อไม่เปิดยอดซ้ำ', async () => {
+  const w = await buyWorld();
+  const prNo = await approvedPr(w, [{ code: 'BUY-BOLT', qty: 200, needDate: day(6), wh: 'A', reason: 'ต่ำกว่า Min' }]);
+  const po = await w.ok('PUR', 'po.create', { supplier: 'SUP-A', prNos: [prNo] });
+  const poNo = po.result.poNo;
+  await w.ok('PUR', 'po.issue', { poNo });
+  await w.ok('STORE1', 'po.receive', { poNo, lines: [{ line: 1, qty: 4, bin: 'A-01' }] });
+  const rv = await w.ok('STORE1', 'po.return', { poNo, reason: 'ขนาดผิด ขอเปลี่ยน', lines: [{ line: 1, qty: 1, bin: 'A-01', replace: true }] });
+  // the vendor will not replace: the purchasing lead closes the PO – the 50 go back to the PR as not ordered
+  await w.ok('PURLEAD', 'po.close', { poNo, reason: 'ผู้ขายไม่เปลี่ยนให้' });
+  let s = await w.state();
+  assert.deepEqual([s.tables.pos[poNo].lines[0].cancelled, P().prOpen(s, prNo).lines[0].open], [50, 50]);
+  checkPoLines(s);
+  // the return was keyed by mistake (the goods never left): cancelling it brings the 50 back – the PO line is
+  // received in full again, so the 50 that the close had cancelled are no longer cancelled and the PR is not reopened
+  await w.ok('LEAD', 'doc.cancel', { docNo: rv.result.docNo, reason: 'ของไม่ได้ส่งคืนจริง' });
+  s = await w.state();
+  const pl = s.tables.pos[poNo].lines[0];
+  assert.deepEqual([s.tables.pos[poNo].status, pl.received, pl.returned, pl.replaced, pl.cancelled], ['CLOSED', 200, 0, 0, 0]);
+  assert.equal(P().prOpen(s, prNo).lines[0].open, 0);
+  assert.equal(row(s, 'BUY-BOLT').pendingPr, 0);
+  const again = await w.exec('PUR', 'po.create', { supplier: 'SUP-A', prNos: [prNo] });
+  assert.equal(again.errors[0].code, 'NOTHING');
+  checkPoLines(s);
+});
+
+test('ออก PO ใหม่จากใบขอซื้อที่วันต้องใช้ผ่านไปแล้ว: ระบุวันกำหนดรับของทั้งใบได้', async () => {
+  const w = await buyWorld();
+  const prNo = await approvedPr(w, [{ code: 'BUY-BOLT', qty: 100, needDate: day(3), wh: 'A' }]);
+  const first = await w.ok('PUR', 'po.create', { supplier: 'SUP-A', prNos: [prNo] });
+  await w.ok('PUR', 'po.cancel', { poNo: first.result.poNo, reason: 'ผู้ขายแจ้งส่งไม่ได้' });
+  w.clock.set('2026-11-07T01:00:00.000Z'); // two days after the need date
+  const past = await w.exec('PUR', 'po.create', { supplier: 'SUP-A', prNos: [prNo] });
+  assert.equal(past.errors[0].code, 'BAD_DATE');
+  assert.match(past.errors[0].message, /วันกำหนดรับ/);
+  const ok = await w.ok('PUR', 'po.create', { supplier: 'SUP-A', prNos: [prNo], dueDate: '2026-11-12' });
+  const s = await w.state();
+  const pl = s.tables.pos[ok.result.poNo].lines[0];
+  assert.deepEqual([pl.dueDate, pl.prNo, pl.base], ['2026-11-12', prNo, 100]);
+  // a line's own date still wins over the default of the PO
+  const prNo2 = await approvedPr(w, [{ code: 'BUY-BOLT', qty: 100, needDate: '2026-11-20', wh: 'A' }]);
+  const two = await w.ok('PUR', 'po.create', { supplier: 'SUP-A', dueDate: '2026-11-15', lines: [bolt(2, '2026-11-18', { prNo: prNo2 })] });
+  assert.equal((await w.state()).tables.pos[two.result.poNo].lines[0].dueDate, '2026-11-18');
+  const bad = await w.exec('PUR', 'po.create', { supplier: 'SUP-A', prNos: [prNo2], dueDate: '2026-02-30' });
+  assert.equal(bad.errors[0].code, 'BAD_DATE');
+});
+
+test('ข้อความผิดพลาดเป็นภาษาไทย ไม่โชว์ชื่อฟิลด์ภาษาอังกฤษ', async () => {
+  const w = await buyWorld();
+  const cases = [
+    ['itemSupplier.upsert', { code: 'BUY-BOLT', supplier: 'SUP-B', moq: -1 }],
+    ['itemSupplier.upsert', { code: 'BUY-BOLT', supplier: 'SUP-B', pack: 'x' }],
+    ['itemSupplier.upsert', { code: 'BUY-BOLT', supplier: 'SUP-B', price: -1 }],
+    ['itemSupplier.upsert', { code: 'BUY-BOLT', supplier: 'SUP-B', leadDays: 1.5 }],
+    ['supplier.upsert', { id: 'SUP-N', name: 'x', leadDays: -2 }],
+    ['reorder.set', { code: 'BUY-BOLT', coverDays: -1 }],
+    ['reorder.set', { code: 'BUY-BOLT', usageDays: 0 }],
+    ['reorder.set', { code: 'BUY-BOLT', leadDays: 2.5 }],
+    ['reorder.set', { code: 'BUY-BOLT', min: 'abc' }],
+  ];
+  for (const [kind, payload] of cases) {
+    const r = await w.exec('PUR', kind, payload);
+    assert.equal(r.ok, false, `${kind} ${JSON.stringify(payload)}`);
+    assert.doesNotMatch(r.errors[0].message, /\b(moq|pack|price|leadDays|coverDays|usageDays|min|max)\b/, r.errors[0].message);
+    assert.match(r.errors[0].message, /[฀-๿]/);
+  }
+});
+
+test('ผู้ขายในเงื่อนไขเติมสต็อกถูกปิดใช้งาน: คำแนะนำใช้ผู้ขายหลักแทน และสร้างใบขอซื้อได้', async () => {
+  const w = await buyWorld();
+  await stockIn(w, 'BUY-BOLT', 'A', 'A-01', 60);
+  await w.ok('PUR', 'itemSupplier.upsert', { code: 'BUY-BOLT', supplier: 'SUP-B', price: 3 });
+  await w.ok('PUR', 'reorder.set', { code: 'BUY-BOLT', supplier: 'SUP-B' });
+  let s = await w.state();
+  assert.equal(row(s, 'BUY-BOLT').supplier, 'SUP-B');
+  await w.ok('PUR', 'supplier.upsert', { id: 'SUP-B', active: false });
+  s = await w.state();
+  const r = row(s, 'BUY-BOLT');
+  assert.deepEqual([r.supplier, r.buyUnit, r.orderBuyQty], ['SUP-A', 'กล่อง', 6]);
+  assert.ok(has(r.reasons, /SUP-B ปิดใช้งาน/));
+  const lines = P().draftPrLines(s, { today: TODAY, wh: 'A' });
+  const pr = await w.exec('STORE1', 'pr.create', { lines, source: 'แนะนำสั่งซื้อ' });
+  assert.equal(pr.ok, true, JSON.stringify(pr.errors));
+});
+
+test('เพิ่มผู้ขายใหม่ (create:true) ไม่ทับผู้ขายเดิมที่มีรหัสเดียวกัน', async () => {
+  const w = await buyWorld();
+  const seq = (await w.state()).seq;
+  const dup = await w.exec('PUR', 'supplier.upsert', { id: 'sup-a', name: 'คนละรายกัน', create: true });
+  assert.equal(dup.errors[0].code, 'DUPLICATE');
+  const s = await w.state();
+  assert.equal(s.seq, seq);
+  assert.equal(s.tables.suppliers['SUP-A'].name, 'ผู้ขายทดสอบ เอ');
+  await w.ok('PUR', 'supplier.upsert', { id: 'SUP-C', name: 'ผู้ขายใหม่', create: true });
+});
+
+test('ตัวเลขไม่เพี้ยนหลังรับ/คืน/ยกเลิกหลายรอบ หลายบรรทัด หลายหน่วย และคำขอซ้ำ', async () => {
+  const w = await buyWorld();
+  await w.ok('PUR', 'itemSupplier.upsert', { code: 'TST-001', supplier: 'SUP-A', buyUnit: 'โหล', price: 100 });
+  const poNo = await issuedPo(w, [bolt(6, day(4)), { code: 'TST-001', qty: 5, dueDate: day(6), wh: 'A' }]); // 300 ตัว + 60 ชิ้น
+  let s = await w.state();
+  assert.deepEqual(s.tables.pos[poNo].lines.map((l) => [l.unit, l.factor, l.base]), [['กล่อง', 50, 300], ['โหล', 12, 60]]);
+  // the same receipt sent twice (a retry after a lost answer) is applied once
+  const pay = { poNo, lines: [{ line: 1, qty: 2, bin: 'A-01' }, { line: 2, qty: 1.5, bin: 'A-02' }] };
+  const r1 = await w.ok('STORE1', 'po.receive', pay, 'rcv-1');
+  const r1b = await w.ok('STORE1', 'po.receive', pay, 'rcv-1');
+  assert.equal(r1b.duplicate, true);
+  s = await w.state();
+  assert.deepEqual(s.tables.pos[poNo].lines.map((l) => l.received), [100, 18]);
+  checkPoLines(s);
+  // the same PO line twice in one document, pieces keyed in the base unit via doc.post
+  await w.ok('STORE2', 'doc.post', { type: 'RR', lines: [
+    { code: 'BUY-BOLT', qty: 30, wh: 'A', bin: 'A-01', poNo, poLine: 1 },
+    { code: 'BUY-BOLT', qty: 20, wh: 'A', bin: 'A-02', poNo, poLine: 1 },
+    { code: 'TST-001', qty: 1, unit: 'โหล', wh: 'A', bin: 'A-01', poNo, poLine: 2 }] });
+  s = await w.state();
+  assert.deepEqual(s.tables.pos[poNo].lines.map((l) => l.received), [150, 30]);
+  checkPoLines(s);
+  // credit return, replacement return, replacement received, credit return cancelled, receipt cancelled
+  const credit = await w.ok('STORE1', 'po.return', { poNo, reason: 'เกลียวเสีย', lines: [{ line: 1, qty: 0.4, bin: 'A-01' }] });
+  const repl = await w.ok('STORE1', 'po.return', { poNo, reason: 'ผิดขนาด', lines: [{ line: 2, qty: 0.5, bin: 'A-02', replace: true }] });
+  s = await w.state();
+  assert.deepEqual(s.tables.pos[poNo].lines.map((l) => [l.received, l.returned, l.replaced, P().lineOutstanding(l)]), [[150, 20, 0, 150], [24, 6, 6, 36]]);
+  checkPoLines(s);
+  await w.ok('STORE1', 'po.receive', { poNo, lines: [{ line: 2, qty: 0.5, bin: 'A-02' }] });
+  await w.ok('LEAD', 'doc.cancel', { docNo: credit.result.docNo, reason: 'ผู้ขายไม่รับคืน' });
+  await w.ok('LEAD', 'doc.cancel', { docNo: r1.result.docNo, reason: 'คีย์ผิดวัน' });
+  const twice = await w.exec('LEAD', 'doc.cancel', { docNo: r1.result.docNo, reason: 'ซ้ำ' });
+  assert.equal(twice.errors[0].code, 'ALREADY_CANCELLED');
+  s = await w.state();
+  assert.deepEqual(s.tables.pos[poNo].lines.map((l) => [l.received, l.returned, l.replaced]), [[50, 0, 0], [12, 6, 6]]);
+  assert.equal(s.tables.pos[poNo].status, 'PARTIAL');
+  checkPoLines(s);
+  // part of line 1 cancelled, then the PO closed: outstanding never below 0, stock = its history
+  await w.ok('PUR', 'po.cancelLine', { poNo, line: 1, qty: 1, reason: 'ลดจำนวน' });
+  await w.ok('PURLEAD', 'po.close', { poNo, reason: 'ปิดงวด' });
+  s = await w.state();
+  assert.deepEqual(s.tables.pos[poNo].lines.map((l) => [l.cancelled, P().lineOutstanding(l)]), [[250, 0], [48, 0]]);
+  await w.ok('LEAD', 'doc.cancel', { docNo: repl.result.docNo, reason: 'ของไม่ได้ส่งคืน' });
+  s = await w.state();
+  assert.deepEqual(s.tables.pos[poNo].lines.map((l) => [l.received, l.returned, l.replaced, l.cancelled]), [[50, 0, 0, 250], [18, 0, 0, 42]]);
+  assert.deepEqual(P().outstanding(s, { today: TODAY }), []);
+  checkPoLines(s);
+  assert.equal(qty(s, { code: 'BUY-BOLT' }), 50);
+  assert.equal(qty(s, { code: 'TST-001' }), 18);
+});
+
+test('คลังของผู้อนุมัติ: อนุมัติใบขอซื้อ/ปิด PO/อนุมัติรับเกินได้เฉพาะคลังที่ตัวเองดูแล', async () => {
+  const w = await buyWorld();
+  await w.ok('ADMIN', 'user.upsert', { id: 'LEADA', name: 'หัวหน้าจัดซื้อคลัง A', roles: ['purchasing_lead'], warehouses: ['A'] });
+  const prB = await w.ok('STORE1', 'pr.create', { lines: [{ code: 'BUY-BOLT', qty: 10, needDate: day(3), wh: 'B' }] });
+  const seq = (await w.state()).seq;
+  for (const [kind, payload] of [['pr.approve', { prNo: prB.result.prNo }], ['pr.reject', { prNo: prB.result.prNo, reason: 'ไม่จำเป็น' }]]) {
+    const r = await w.exec('LEADA', kind, payload);
+    assert.equal(r.ok, false, kind);
+    assert.equal(r.errors[0].code, 'NO_PERMISSION', `${kind}: ${JSON.stringify(r.errors)}`);
+    assert.match(r.errors[0].message, /คลัง B/);
+  }
+  const poB = await issuedPo(w, [bolt(2, day(5), { wh: 'B' })]);
+  const close = await w.exec('LEADA', 'po.close', { poNo: poB, reason: 'ปิดยอด' });
+  assert.equal(close.errors[0].code, 'NO_PERMISSION');
+  const over = await w.exec('LEADA', 'po.allowOverReceive', { poNo: poB, line: 1, qty: 1, reason: 'ส่งเกิน' });
+  assert.equal(over.errors[0].code, 'NO_PERMISSION');
+  const cancelPr = await w.exec('LEADA', 'pr.cancel', { prNo: prB.result.prNo, reason: 'ไม่ใช้แล้ว' });
+  assert.equal(cancelPr.errors[0].code, 'NO_PERMISSION');
+  // a buyer limited to A creates POs for A only – and cannot issue, re-date or cancel a PO of B either
+  await w.ok('ADMIN', 'user.upsert', { id: 'PURA', name: 'จัดซื้อคลัง A', roles: ['purchasing'], warehouses: ['A'] });
+  const draftB = await w.ok('PUR', 'po.create', { supplier: 'SUP-A', lines: [bolt(2, day(5), { wh: 'B' })] });
+  for (const [kind, payload] of [['po.issue', { poNo: draftB.result.poNo }], ['po.setDue', { poNo: poB, line: 1, dueDate: day(9), reason: 'เลื่อน' }],
+    ['po.cancelLine', { poNo: poB, line: 1, qty: 1, reason: 'ลดจำนวน' }], ['po.cancel', { poNo: poB, reason: 'ไม่ใช้แล้ว' }]]) {
+    const r = await w.exec('PURA', kind, payload);
+    assert.equal(r.ok, false, kind);
+    assert.equal(r.errors[0].code, 'NO_PERMISSION', `${kind}: ${JSON.stringify(r.errors)}`);
+  }
+  // in their own warehouse they can
+  const prA = await w.ok('STORE1', 'pr.create', { lines: [{ code: 'BUY-BOLT', qty: 10, needDate: day(3), wh: 'A' }] });
+  await w.ok('LEADA', 'pr.approve', { prNo: prA.result.prNo });
+  const poA = await w.ok('PURA', 'po.create', { supplier: 'SUP-A', prNos: [prA.result.prNo] });
+  await w.ok('PURA', 'po.issue', { poNo: poA.result.poNo });
+  const s = await w.state();
+  assert.equal(s.tables.prs[prB.result.prNo].status, 'SUBMITTED');
+  assert.equal(s.tables.pos[poB].status, 'ISSUED');
+  assert.ok(s.seq > seq);
+});
+
+test('คืนผู้ขายแบบขอของทดแทนต้องอ้าง PO (ไม่งั้นคำขอเปลี่ยนของจะหาย)', async () => {
+  const w = await buyWorld();
+  await stockIn(w, 'BUY-BOLT', 'A', 'A-01', 10);
+  const seq = (await w.state()).seq;
+  const r = await w.exec('STORE1', 'doc.post', { type: 'RV', lines: [{ code: 'BUY-BOLT', qty: 1, wh: 'A', bin: 'A-01', replace: true }] });
+  assert.equal(r.ok, false);
+  assert.equal(r.errors[0].code, 'REQUIRED');
+  assert.match(r.errors[0].message, /ใบสั่งซื้อ/);
+  assert.equal((await w.state()).seq, seq);
+  // a credit return without a PO is still an ordinary RV
+  await w.ok('STORE1', 'doc.post', { type: 'RV', lines: [{ code: 'BUY-BOLT', qty: 1, wh: 'A', bin: 'A-01' }] });
+});
+
+test('ฟังก์ชันอ่านข้อมูลไม่แก้ state และให้ผลเหมือนเดิมทุกครั้ง', async () => {
+  const w = await buyWorld();
+  await stockIn(w, 'BUY-BOLT', 'A', 'A-01', 60);
+  const poNo = await issuedPo(w, [bolt(2, day(1))]);
+  await w.ok('STORE1', 'po.receive', { poNo, lines: [{ line: 1, qty: 1, bin: 'A-01' }] });
+  await w.ok('STORE1', 'pr.create', { lines: [{ code: 'BUY-BOLT', qty: 10, needDate: day(3), wh: 'A' }] });
+  const s = await w.state();
+  const hash = () => RRS.util.sha256(RRS.util.stable(s.tables));
+  const before = hash();
+  const run = () => [P().suggest(s, { today: day(4) }), P().suggest(s, { today: day(4), wh: 'A' }), P().outstanding(s, { today: day(4), includeDraft: true }),
+    P().affectedJobs(s, { today: day(4), atRisk: true }), P().usage(s, 'BUY-BOLT', { today: day(4) }), P().draftPrLines(s, { today: day(4), defaultWh: 'A' }),
+    P().itemSuppliers(s, 'BUY-BOLT'), P().pos(s), P().prs(s), P().prOpen(s, 'PR6911-0001')];
+  const a = RRS.util.stable(run());
+  const b = RRS.util.stable(run());
+  assert.equal(a, b);
+  assert.equal(hash(), before);
 });

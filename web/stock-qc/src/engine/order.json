@@ -1,1 +1,1 @@
-["core.js", "ledger.js", "master.js", "inventory.js", "planning.js", "reconcile.js", "purchasing.js", "quality.js", "reports.js", "fixture.js", "selftest.js"]
+["core.js", "ledger.js", "master.js", "inventory.js", "planning.js", "sales.js", "reconcile.js", "purchasing.js", "quality.js", "reports.js", "fixture.js", "selftest.js"]

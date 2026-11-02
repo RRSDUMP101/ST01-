@@ -246,16 +246,22 @@
     };
     const inRrsAtSnap = (d) => ms(d.postedAt) <= snapMs
       && (POSTED.indexOf(d.status) >= 0 || (d.status === 'CANCELLED' && ms(d.cancelledAt) > snapMs));
+    // `source` comes from the caller of doc.post: an AJ counts as a count/Express adjustment only when its session or
+    // batch really points at it (session.docNo / a batch decision's docNo)
+    const sessionOf = {};
+    for (const s of read('count_sessions')) if (s.docNo) sessionOf[s.docNo] = s.id;
+    const batchOf = {};
+    for (const x of read('express_batches')) for (const r of x.resolutions || []) if (r.docNo) batchOf[r.docNo] = x.id;
     for (const d of read('documents')) {
       const lines = d.lines || [];
       if (d.expressStatus === 'WAIT' && inRrsAtSnap(d)) {
         for (const l of lines) for (const w of [l.wh, l.toWh]) if (w) add(pend, l.code + '|' + w, d.docNo);
       }
-      if (POSTED.indexOf(d.status) < 0) continue;
+      if (POSTED.indexOf(d.status) < 0 || !(ms(d.postedAt) > snapMs)) continue;
       const src = String(d.source || '');
-      if ((src.indexOf('count:') === 0 || src.indexOf('express:') === 0) && src !== 'express:' + batch.id && ms(d.postedAt) > snapMs) {
-        for (const l of lines) if (l.wh) add(stale, l.code + '|' + l.wh, d.docNo);
-      }
+      const linked = (sessionOf[d.docNo] && src === 'count:' + sessionOf[d.docNo])
+        || (batchOf[d.docNo] && batchOf[d.docNo] !== batch.id && src === 'express:' + batchOf[d.docNo]);
+      if (linked) for (const l of lines) if (l.wh) add(stale, l.code + '|' + l.wh, d.docNo);
     }
     for (const s of read('count_sessions')) {
       if (s.status !== 'APPROVED' || s.docCancelled) continue;
@@ -633,7 +639,7 @@
       const flags = (l.flags || []).slice();
       if (moved && flags.indexOf('MOVED_DURING_COUNT') < 0) flags.push('MOVED_DURING_COUNT');
       const adjust = l.final ? util.round(l.final.counted - l.final.system) : null;
-      const heldQty = held[l.key] || 0;
+      const heldQty = s.status === 'APPROVED' && l.heldQty != null ? l.heldQty : held[l.key] || 0; // as seen at approval
       // found more than the record where tagged QC stock lies: probably counted twice – the approver must check
       if (s.status !== 'APPROVED' && adjust > 0 && heldQty > 0 && flags.indexOf('HELD_STOCK') < 0) flags.push('HELD_STOCK');
       return Object.assign({}, l, {
@@ -671,13 +677,16 @@
     return s ? buildCountView(stateReader(state), s) : null;
   };
 
-  /** The freeze session holding a location still (OPEN/SUBMITTED, mode freeze), or null. */
-  function freezeAt(sessions, wh, bin, source) {
-    return sessions.find((s) => s.mode === 'freeze' && LIVE_COUNT.indexOf(s.status) >= 0 && source !== 'count:' + s.id
-      && inScope(s, wh, bin)) || null;
+  /**
+   * The freeze session holding a location still (OPEN/SUBMITTED, mode freeze), or null. There is no exemption by a
+   * document's `source`: doc.post takes `source` from the caller, so it proves nothing. The approval's own AJ passes
+   * because count.approve marks the session APPROVED (no longer live) in the same commit before it posts.
+   */
+  function freezeAt(sessions, wh, bin) {
+    return sessions.find((s) => s.mode === 'freeze' && LIVE_COUNT.indexOf(s.status) >= 0 && inScope(s, wh, bin)) || null;
   }
   rec.frozenBy = function frozenBy(state, wh, bin) {
-    const s = freezeAt(RRS.q.rows(state, 'count_sessions'), util.normCode(wh), util.normCode(bin), '');
+    const s = freezeAt(RRS.q.rows(state, 'count_sessions'), util.normCode(wh), util.normCode(bin));
     return s ? s.id : '';
   };
 
@@ -898,9 +907,9 @@
   RRS.hooks.on('doc.lineCheck', function (tx, doc, line) {
     const sessions = liveFreezes(tx);
     if (!sessions.length) return;
-    const from = freezeAt(sessions, line.wh, line.bin, doc.source);
+    const from = freezeAt(sessions, line.wh, line.bin);
     if (from) return freezeError(tx, from, line.code, line.wh, line.bin, line.line, 'บันทึก');
-    const to = line.toWh ? freezeAt(sessions, line.toWh, line.toBin, doc.source) : null;
+    const to = line.toWh ? freezeAt(sessions, line.toWh, line.toBin) : null;
     if (to) freezeError(tx, to, line.code, line.toWh, line.toBin, line.line, 'บันทึก');
   });
 
@@ -917,7 +926,7 @@
       const sessions = liveFreezes(tx);
       if (!sessions.length) return out;
       for (const m of tx.all('movements', (x) => x.seq === tx.seq && x.wh !== TRANSIT)) {
-        const s = freezeAt(sessions, m.wh, m.bin, '');
+        const s = freezeAt(sessions, m.wh, m.bin);
         if (s) return freezeError(tx, s, m.code, m.wh, m.bin, m.line, 'รับโอน', ' หรือรับเข้าช่องอื่นที่ไม่ได้นับ');
       }
       return out;
@@ -929,7 +938,7 @@
     // cancelling writes reversing movements in the same places – also refused while those places are frozen
     const sessions = liveFreezes(tx);
     for (const l of sessions.length ? lines || [] : []) {
-      const s = freezeAt(sessions, l.wh, l.bin, doc.source);
+      const s = freezeAt(sessions, l.wh, l.bin);
       if (s) return freezeError(tx, s, l.code, l.wh, l.bin, l.line, 'ยกเลิกเอกสาร');
     }
     const src = String(doc.source || '');
@@ -939,7 +948,8 @@
       if (s && s.docNo === doc.docNo) tx.put('count_sessions', s.id, Object.assign({}, s, { docCancelled: info }));
     } else if (src.indexOf('express:') === 0) {
       const b = tx.get('express_batches', src.slice(8));
-      if (b) {
+      // only the batch's own AJ (a decision points at it) reopens its rows; a document merely claiming the source does not
+      if (b && (b.resolutions || []).some((r) => r.docNo === doc.docNo && !r.cancelledAt)) {
         const resolutions = (b.resolutions || []).map((r) => (r.docNo === doc.docNo && !r.cancelledAt
           ? Object.assign({}, r, { cancelledBy: tx.userId, cancelledAt: tx.now, cancelReason: info.reason }) : r));
         tx.put('express_batches', b.id, Object.assign({}, b, { resolutions }));

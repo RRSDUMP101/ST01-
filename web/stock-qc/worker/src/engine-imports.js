@@ -5,8 +5,10 @@ import '../../src/engine/ledger.js';
 import '../../src/engine/master.js';
 import '../../src/engine/inventory.js';
 import '../../src/engine/planning.js';
+import '../../src/engine/sales.js';
 import '../../src/engine/reconcile.js';
 import '../../src/engine/purchasing.js';
 import '../../src/engine/quality.js';
+import '../../src/engine/reports.js';
 
-export const ENGINE_FILES = ["core.js","ledger.js","master.js","inventory.js","planning.js","reconcile.js","purchasing.js","quality.js"];
+export const ENGINE_FILES = ["core.js","ledger.js","master.js","inventory.js","planning.js","sales.js","reconcile.js","purchasing.js","quality.js","reports.js"];

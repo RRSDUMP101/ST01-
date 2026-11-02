@@ -1,0 +1,29 @@
+[FAIL] 1 SKU in A/B, PD from B
+        after PD warehouse=B qty 1: A=9, B=10 (line warehouse is not used to pick the item; Movement has no warehouse field: False)
+[FAIL] 2 one available, two issues
+        both documents posted; balance=-1; warnings of 2nd: ['TEST-002 ติดลบ -1 ชิ้น']
+[PASS] 3 same document object posted twice
+        second post of the same object refused: ['เอกสารนี้บันทึกแล้ว']
+[FAIL] 3b same request rebuilt (no idempotency key)
+        balance after a resent copy = 3 (start 5, one issue of 1 intended)
+[FAIL] 4 multi-line document with unknown code + wrong unit
+        status=บันทึกแล้ว; balance=2 (start 5); warnings=['ไม่พบ NO-SUCH-CODE ในสต็อก – ไม่ได้ตัดยอด']; unit กก. vs ชิ้น not checked
+[PASS] 5 cancel twice
+        balance=5 (start 5); reversal movements=1; original movements kept
+[FAIL] 6 open job needs 5, 5 more being made, 5 on hand
+        reserved=0, free=5 (reserved = min(on_hand, need - incoming)); no per-SO reservation
+[FAIL] 8 re-import the same Express file after a PD
+        after PD 3: 7; after importing the same file again: 10; movements kept: 1 (balance and history now disagree)
+[FAIL] storage: library.json cut short, then any save
+        loaded items=0 (no error shown); file 88 bytes -> 282 bytes; TEST-009 still in file: False; write is not atomic (write_text), no backup copy
+
+SUMMARY
+FAIL     1 SKU in A/B, PD from B
+FAIL     2 one available, two issues
+PASS     3 same document object posted twice
+FAIL     3b same request rebuilt (no idempotency key)
+FAIL     4 multi-line document with unknown code + wrong unit
+PASS     5 cancel twice
+FAIL     6 open job needs 5, 5 more being made, 5 on hand
+FAIL     8 re-import the same Express file after a PD
+FAIL     storage: library.json cut short, then any save

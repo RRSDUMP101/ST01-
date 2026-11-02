@@ -96,6 +96,11 @@ async function toast(text) {
     .catch(async () => { throw new Error(`ไม่พบข้อความแจ้ง "${text}" ได้ "${await page.locator('#toasts').innerText()}"`); });
   await page.evaluate(() => { document.querySelector('#toasts').innerHTML = ''; });
 }
+/** Wait until a state check is true (a confirm closes before its command runs; done notes may be the previous one's). */
+async function until(fn, arg, msg) {
+  await page.waitForFunction(([src, a]) => !!(0, eval)(src)(window.RRS.app.ledger.state, window.RRS, a), [fn.toString(), arg === undefined ? null : arg], { timeout: 6000 })
+    .catch(() => { throw new Error(msg); });
+}
 /** Type into a number box the way a person would (fill() refuses text a number box cannot hold). */
 async function typeNum(sel, text) {
   await page.fill(sel, '');
@@ -310,6 +315,7 @@ await step('PO straight from a ticked PR (no pull), money of 1,000+ shown', asyn
   await dlgOpen();
   await dlgSubmit();
   await dlgClosed();
+  await until((s, R, k) => s.tables.pos[k].status === 'ISSUED', ids.poNut, 'ใบสั่งซื้อต้องเป็น ส่งผู้ขายแล้ว');
   // the supplier's own page shows the open PO with its value
   await go('suppliers');
   await tab('sup');
@@ -363,7 +369,7 @@ await step('receive: messages use the PO line numbers, missing heat, supplier de
   await dlgOpen();
   await dlgSubmit();
   await dlgClosed();
-  await waitText('รับเข้าแล้ว', 6000, '#p4-done');
+  await until((s, R, k) => s.tables.pos[k].lines[0].received === 50 && s.tables.pos[k].status === 'RECEIVED', ids.po2, 'รับบรรทัด 1 แล้วใบสั่งซื้อต้องรับครบ');
   // accounting matches the supplier's invoice to the receipt on the PO
   await asUser('P4RACC');
   await tab('po');
@@ -396,6 +402,7 @@ await step('return: unreadable qty refused, nothing leaves the store', async () 
   await dlgSubmit();
   await dlgClosed();
   await waitText('คืนผู้ขายแล้ว', 6000, '#p4-done');
+  await until((s, R, k) => s.tables.pos[k].lines[0].returned > 0, ids.po2, 'ใบคืนต้องบันทึก');
   const l = await state((s, R, k) => s.tables.pos[k].lines[0], ids.po2);
   assert(l.returned === 50 && l.replaced === 50 && l.received === 0, `คืนแบบขอทดแทน: ${JSON.stringify(l)}`);
 });

@@ -249,3 +249,6 @@ details > :not(summary) { padding: 10px 12px; }
 .count-entry input, .count-entry select, .fld.big input, .fld.big select { font-size: 1.15rem; padding: 12px; }
 .count-entry .btn-primary { padding: 12px 20px; font-size: 1rem; }
 @media (max-width: 640px) { input, select, textarea { font-size: 16px; } }
+.who { flex-wrap: wrap; justify-content: flex-end; }
+.who .btn-quiet { color: var(--rail-fg); }
+.who .btn-quiet:hover { color: var(--rail-on); border-color: transparent; }

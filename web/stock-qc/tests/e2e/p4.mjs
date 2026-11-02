@@ -90,6 +90,13 @@ async function dlgError(text) {
 async function toast(text) {
   await page.waitForFunction((x) => document.querySelector('#toasts').innerText.indexOf(x) >= 0, text, { timeout: 6000 })
     .catch(async () => { throw new Error(`ไม่พบข้อความแจ้ง "${text}" ได้ "${await page.locator('#toasts').innerText()}"`); });
+  // a toast stays ~4 s: clear it so a later wait for the same words needs a new one (and the state it reports)
+  await page.evaluate(() => { document.querySelector('#toasts').innerHTML = ''; });
+}
+/** Wait until a state check is true (a confirm closes before the command runs). */
+async function until(fn, arg, msg) {
+  await page.waitForFunction(([src, a]) => !!(0, eval)(src)(window.RRS.app.ledger.state, window.RRS, a), [fn.toString(), arg === undefined ? null : arg], { timeout: 6000 })
+    .catch(() => { throw new Error(msg); });
 }
 const rowCells = (sel, text) => page.evaluate(([s, x]) => {
   const tr = Array.from(document.querySelectorAll(s)).find((r) => r.innerText.indexOf(x) >= 0);
@@ -448,7 +455,7 @@ await step('PO from the approved PR, rounded to buy units, issued', async () => 
   await waitText('ระบบไม่ได้ส่งอีเมลหรือข้อความให้ผู้ขาย', 3000, '#dlg');
   await dlgSubmit();
   await dlgClosed();
-  assert(await state((s, R, k) => s.tables.pos[k].status === 'ISSUED' && s.tables.pos[k].issuedBy === 'P4PUR', ctxIds.poBolt), 'ใบสั่งซื้อต้องเป็น ส่งผู้ขายแล้ว');
+  await until((s, R, k) => s.tables.pos[k].status === 'ISSUED' && s.tables.pos[k].issuedBy === 'P4PUR', ctxIds.poBolt, 'ใบสั่งซื้อต้องเป็น ส่งผู้ขายแล้ว');
 });
 
 await step('PO for the other supplier (dated earlier, so it is late) and one by hand', async () => {
@@ -547,6 +554,7 @@ await step('receive: partial, then over-receipt only after the lead approves', a
   await dlgSubmit();
   await dlgClosed();
   await waitText('รับเข้าแล้ว', 6000, '#p4-done');
+  await until((s, R, k) => s.tables.pos[k].lines[0].received >= 1100, ctxIds.poBolt, 'รับเกินที่อนุมัติแล้วต้องบันทึก'); // the note may be the first receipt's
   const s2 = await state((s, R, k) => s.tables.pos[k], ctxIds.poBolt);
   assert(s2.status === 'RECEIVED' && s2.lines[0].received === 1100 && s2.lines[0].overAllowed === 0, `หลังรับเกิน: ${s2.status} ${s2.lines[0].received} ${s2.lines[0].overAllowed}`);
 });
@@ -607,6 +615,8 @@ await step('return to supplier with and without replacement', async () => {
   await dlgSubmit();
   await dlgClosed();
   await waitText('คืนผู้ขายแล้ว', 6000, '#p4-done');
+  // #p4-done already says คืนผู้ขายแล้ว from the first return: wait for the second one to be recorded
+  await until((s, R, k) => s.tables.pos[k].lines[0].returned >= 300, ctxIds.poBolt, 'ใบคืนใบที่สองต้องบันทึก');
   const b = await state((s, R, k) => s.tables.pos[k].lines[0], ctxIds.poBolt);
   assert(b.returned === 300 && b.replaced === 200 && b.received === 900 && R0(b) === 100, `คืนแบบลดหนี้: ${JSON.stringify(b)}`);
   const rvs = await state((s, R, k) => Object.values(s.tables.documents).filter((d) => d.type === 'RV' && d.ref === k).length, ctxIds.poBolt);

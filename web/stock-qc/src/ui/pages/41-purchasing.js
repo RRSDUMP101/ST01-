@@ -455,7 +455,7 @@
       { label: 'เอกสาร', render: (d) => docLink(d.docNo) },
       { label: 'ประเภท', get: (d) => (d.type === 'RR' ? 'รับของ' : 'คืนผู้ขาย') },
       { label: 'วันที่', get: (d) => h.fmt.date(d.date) },
-      { label: 'รายการ', render: (d) => t`${d.lines.map((l) => t`${h.code(l.code)} ${n(Math.abs(l.base != null ? l.base : l.qty))}${l.status && l.status !== 'AVAILABLE' ? t` ${h.statusBadge(l.status)}` : ''}${l.lot ? t` <small class="muted">${l.lot}</small>` : ''}<br>`)}` },
+      { label: 'รายการ', render: (d) => t`${d.lines.map((l) => t`${h.code(l.code)} ${h.qty(Math.abs(l.base != null ? l.base : l.qty), itemOf(ctx, l.code).baseUnit)}${l.status && l.status !== 'AVAILABLE' ? t` ${h.statusBadge(l.status)}` : ''}${l.lot ? t` <small class="muted">${l.lot}</small>` : ''}<br>`)}` },
       { label: 'ใบส่งของ/ใบลดหนี้ผู้ขาย', render: (d) => d.supplierDoc || dash },
       { label: 'สถานะ', render: (d) => h.docStatus(d.status) },
       { label: 'ผู้บันทึก', get: (d) => ctx.userName(d.postedBy || d.createdBy) },

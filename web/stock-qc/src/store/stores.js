@@ -175,7 +175,7 @@
     emit(info) {
       for (const fn of this.listeners) fn(this.state, info || {});
     }
-    async catchUp() {
+    async catchUp(opts) {
       let n = 0;
       for (let page = 0; page < 1000; page++) {
         const r = await fetch(`${this.api}/commits?after=${this.state.seq}`, { headers: this.headers, credentials: 'same-origin' });
@@ -191,7 +191,7 @@
         }
         if (!body.more || this.state.seq === before) break;
       }
-      if (n) this.emit({ remote: true, count: n });
+      if (n) this.emit(opts && opts.local ? { local: true, count: n } : { remote: true, count: n });
       return n;
     }
     async execute(command, ctx) {
@@ -208,7 +208,7 @@
       if (!body) return { ok: false, errors: [{ code: 'STORE', message: 'เซิร์ฟเวอร์ไม่ตอบ (' + r.status + ')' }] };
       if (body.error && !body.errors) return { ok: false, errors: [{ code: 'HTTP_' + r.status, message: body.error }] };
       try {
-        await this.catchUp(); // an account without rights may not read the data – the answer still stands
+        await this.catchUp({ local: true }); // our own result; an account without rights may not read the data – the answer still stands
       } catch (e) { /* shown on the next refresh */ }
       return body;
     }

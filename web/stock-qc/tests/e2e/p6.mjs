@@ -365,6 +365,7 @@ await step('offcuts: register from a plate (wrong size and unknown heat refused,
   await page.fill('#oc-reg-lot', 'P6-H1');
   await page.click('form[data-form="reg"] button[type="submit"]');
   await waitToast('เขียนรหัสนี้บนชิ้นเศษ');
+  await waitState((s) => Object.values(s.tables.offcuts || {}).some((o) => o.code === 'P6-PL10' && o.width === 800), null, 'บันทึกเศษ 800 × 1200');
   ids.ocA = await state((s) => (Object.values(s.tables.offcuts || {}).find((o) => o.code === 'P6-PL10' && o.width === 800) || {}).id);
   assert(ids.ocA, 'ต้องมีเศษ 800 × 1200');
   const a = await state((s, R, id) => s.tables.offcuts[id], ids.ocA);
@@ -386,6 +387,8 @@ await step('offcuts: register from a plate (wrong size and unknown heat refused,
   await page.fill('#oc-reg-from', EVIL);
   await page.click('form[data-form="reg"] button[type="submit"]');
   await waitToast('เขียนรหัสนี้บนชิ้นเศษ');
+  // the toast of the first piece may still be on screen: wait for the record itself
+  await waitState((s) => Object.values(s.tables.offcuts || {}).some((o) => o.code === 'P6-PL10' && o.width === 400), null, 'บันทึกเศษ 400 × 500');
   ids.ocB = await state((s) => (Object.values(s.tables.offcuts || {}).find((o) => o.code === 'P6-PL10' && o.width === 400) || {}).id);
   assert(ids.ocB, 'ต้องมีเศษ 400 × 500');
   await waitIn('#oc-detail', EVIL);

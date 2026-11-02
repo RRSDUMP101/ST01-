@@ -82,7 +82,7 @@ web/stock-qc/
 
 ```bash
 cd web/stock-qc
-node --test tests/*.test.mjs                 # แกนระบบทุกเฟส (206 ผ่าน, 1 ข้าม)
+node --test tests/*.test.mjs                 # แกนระบบทุกเฟส (207 ผ่าน, 1 ข้าม)
 (cd worker && npm ci && npm test)            # เซิร์ฟเวอร์ใน Miniflare (65 ผ่าน)
 node build.mjs                               # สร้าง dist/artifact.html และ dist/index.html
 node tests/e2e/smoke.mjs                     # เปิดทุกหน้าใน Chromium (เดสก์ท็อป + มือถือ)

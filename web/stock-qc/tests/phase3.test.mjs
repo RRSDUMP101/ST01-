@@ -89,6 +89,11 @@ test('ไฟล์เก่าไม่ทับรายการใหม่�
   s = await w.state();
   assert.equal(qty(s, { code: 'TST-002', wh: 'A' }), 4);
   assert.equal(qty(s, { code: 'TST-001', wh: 'A' }), 9);
+  // the deliberate use of an old file is on record with the decision
+  const used = s.tables.express_batches[b0].resolutions.find((x) => x.code === 'TST-002');
+  assert.deepEqual([used.action, used.confirmOld, used.by], ['adjust', true, 'ACC']);
+  assert.equal(s.tables.express_batches[b0].resolutions.find((x) => x.code === 'TST-001').confirmOld, false);
+  assert.deepEqual(RRS.inventory.verifyBalances(s), []);
 });
 
 test('นับในคลัง B สร้าง AJ ที่คลัง B', async () => {
@@ -617,4 +622,193 @@ test('Count: an approval whose AJ would go below zero is refused whole and the s
   assert.equal(s.seq, seq);
   assert.equal(s.tables.count_sessions[ct].status, 'SUBMITTED');
   assert.equal(qty(s, { code: 'TST-001' }), 1);
+});
+
+// ---------------------------------------------------------------------------------------------------------------
+// review findings: numbers that drift, freeze gaps, stale files, separation of duties, QC stock in a count
+// ---------------------------------------------------------------------------------------------------------------
+test('Count: a recount after stock moved compares the difference each count found at its own time, not the raw number', async () => {
+  const w = await world();
+  await stockIn(w, 'TST-001', 'A', 'A-01', 100);
+  await stockIn(w, 'TST-002', 'A', 'A-02', 50);
+  const ct = (await w.ok('LEAD', 'count.create', { wh: 'A' })).result.id; // timestamp mode: issues go on during the count
+  // STORE1 finds 3 short of 100 and 5 short of 50 – both over the limit
+  const first = await w.ok('STORE1', 'count.enter', { id: ct, lines: [{ code: 'TST-001', bin: 'A-01', counted: 97 }, { code: 'TST-002', bin: 'A-02', counted: 45 }] });
+  assert.deepEqual(first.result.recount, ['TST-001|A-01|', 'TST-002|A-02|']);
+  await w.ok('STORE1', 'doc.post', { type: 'PD', job: 'SO-5', lines: [{ code: 'TST-001', qty: 3, wh: 'A', bin: 'A-01' }, { code: 'TST-002', qty: 5, wh: 'A', bin: 'A-02' }] });
+  // the records are now 97 and 45. STORE2 finds 94 (still 3 short = the same finding) and 45 (no difference: the same
+  // number STORE1 wrote, but a different finding – that is not a confirmation)
+  await w.ok('STORE2', 'count.enter', { id: ct, lines: [{ code: 'TST-001', bin: 'A-01', counted: 94 }, { code: 'TST-002', bin: 'A-02', counted: 45 }] });
+  let v = RRS.reconcile.countView(await w.state(), ct);
+  const line = (code) => v.lines.find((l) => l.code === code);
+  assert.deepEqual([line('TST-001').flags.includes('RECOUNTED'), line('TST-001').adjust], [true, -3]);
+  assert.deepEqual([line('TST-002').flags.includes('DUPLICATE'), line('TST-002').adjust], [true, null]);
+  assert.equal(v.canSubmit, false);
+  assert.equal((await w.exec('STORE1', 'count.submit', { id: ct })).errors[0].code, 'NEEDS_RECOUNT');
+  // a third person settles TST-002: 45 = the record now (agrees with STORE2)
+  await w.ok('LEAD', 'count.enter', { id: ct, lines: [{ code: 'TST-002', bin: 'A-02', counted: 45 }] });
+  v = RRS.reconcile.countView(await w.state(), ct);
+  assert.deepEqual([line('TST-002').flags.includes('RECOUNTED'), line('TST-002').adjust], [true, 0]);
+  await w.ok('STORE1', 'count.submit', { id: ct });
+  const ap = await w.ok('ACC', 'count.approve', { id: ct, ack: true, reasons: { 'TST-001|A-01|': 'นับยืนยันสองคน ขาด 3' } });
+  const s = await w.state();
+  assert.equal(qty(s, { code: 'TST-001', wh: 'A', bin: 'A-01' }), 94, 'what is really on the shelf');
+  assert.equal(qty(s, { code: 'TST-002', wh: 'A', bin: 'A-02' }), 45);
+  assert.deepEqual(s.tables.documents[ap.result.docNo].lines.map((l) => [l.code, l.base]), [['TST-001', -3]]);
+  assert.deepEqual(RRS.inventory.verifyBalances(s), []);
+});
+
+test('Freeze: a transfer already on the way cannot be received into a frozen bin (another bin can)', async () => {
+  const w = await world();
+  await stockIn(w, 'TST-001', 'B', 'B-01', 10);
+  const tr = (await w.ok('STORE1', 'doc.post', { type: 'TR', lines: [{ code: 'TST-001', qty: 4, wh: 'B', bin: 'B-01', toWh: 'A', toBin: 'A-01' }] })).result.docNo;
+  const ct = await w.ok('LEAD', 'count.create', { wh: 'A', bins: ['A-01'], mode: 'freeze' });
+  assert.ok(ct.warnings.some((x) => x.includes(tr)), 'the transfer on the way is announced');
+  const seq = (await w.state()).seq;
+  const r = await w.exec('STORE2', 'transfer.receive', { docNo: tr, lines: [{ line: 1, qty: 1 }] });
+  assert.equal(r.ok, false);
+  assert.equal(r.errors[0].code, 'COUNT_FREEZE');
+  assert.match(r.errors[0].message, /ที่ A\/A-01 /);
+  // a new transfer into the frozen bin: the message names the frozen place, not the source bin
+  const tr2 = await w.exec('STORE1', 'doc.post', { type: 'TR', lines: [{ code: 'TST-001', qty: 1, wh: 'B', bin: 'B-01', toWh: 'A', toBin: 'A-01' }] });
+  assert.equal(tr2.errors[0].code, 'COUNT_FREEZE');
+  assert.match(tr2.errors[0].message, /ที่ A\/A-01 /);
+  let s = await w.state();
+  assert.equal(s.seq, seq, 'nothing changed');
+  assert.equal(qty(s, { code: 'TST-001', wh: RRS.TRANSIT }), 4);
+  await w.ok('STORE2', 'transfer.receive', { docNo: tr, lines: [{ line: 1, qty: 1, toBin: 'A-02' }] }); // a bin not being counted
+  await w.ok('LEAD', 'count.cancel', { id: ct.result.id, reason: 'เลื่อนนับ' });
+  await w.ok('STORE2', 'transfer.receive', { docNo: tr }); // the rest into A-01 once released
+  s = await w.state();
+  assert.deepEqual([qty(s, { code: 'TST-001', wh: 'A', bin: 'A-01' }), qty(s, { code: 'TST-001', wh: 'A', bin: 'A-02' }), s.tables.documents[tr].status], [3, 1, 'RECEIVED']);
+  assert.deepEqual(RRS.inventory.verifyBalances(s), []);
+});
+
+test('Express: pending documents are the ones in RRS at the snapshot (by posting time) and not keyed in Express', async () => {
+  const w = await expressWorld();
+  const opening = await stockIn(w, 'TST-001', 'A', 'A-01', 10);
+  const dated = await w.ok('STORE1', 'doc.post', { type: 'PD', date: '2026-11-30', lines: [{ code: 'TST-001', qty: 1, wh: 'A', bin: 'A-01' }] }); // posted now, dated later
+  const undone = await w.ok('STORE1', 'doc.post', { type: 'PD', lines: [{ code: 'TST-001', qty: 1, wh: 'A', bin: 'A-01' }] });
+  const keyed = await w.ok('STORE1', 'doc.post', { type: 'PD', lines: [{ code: 'TST-001', qty: 1, wh: 'A', bin: 'A-01' }] });
+  await w.ok('ACC', 'doc.markExpress', { docNo: keyed.result.docNo, expressNo: 'EXP-9' });
+  const snap = w.clock.peek();
+  await w.ok('LEAD', 'doc.cancel', { docNo: undone.result.docNo, reason: 'เบิกผิด' }); // cancelled after the file was made
+  const later = await w.ok('STORE1', 'doc.post', { type: 'PD', lines: [{ code: 'TST-001', qty: 2, wh: 'A', bin: 'A-01' }] }); // same day, after the file
+  const b = (await w.ok('LEAD', 'express.import', fileOf('pend.xlsx', snap, [{ code: 'TST-001', wh: '01', qty: 9 }]))).result.batchId;
+  const row = RRS.reconcile.reconcile(await w.state(), b).rows[0];
+  assert.deepEqual([row.rrsAtSnapshot, row.rrsNow, row.diff], [7, 6, 2]);
+  // the 2 is explained by the two PDs that were in RRS at the snapshot but are not in Express
+  assert.deepEqual(row.pendingDocs, [opening.result.docNo, dated.result.docNo, undone.result.docNo].sort());
+  assert.ok(!row.pendingDocs.includes(later.result.docNo), 'posted after the file: it cannot explain the difference');
+  assert.ok(!row.pendingDocs.includes(keyed.result.docNo));
+});
+
+test('Express: a count made after the file – even one without a difference – makes the file stale for that row', async () => {
+  const w = await expressWorld('Express');
+  await stockIn(w, 'TST-001', 'A', 'A-01', 10);
+  await stockIn(w, 'TST-002', 'A', 'A-01', 5);
+  const b = (await w.ok('LEAD', 'express.import', fileOf('before-count.xlsx', w.clock.peek(), [{ code: 'TST-001', wh: '01', qty: 12 }, { code: 'TST-002', wh: '01', qty: 6 }]))).result.batchId;
+  const ct = (await w.ok('LEAD', 'count.create', { wh: 'A', bins: ['A-01'] })).result.id;
+  await w.ok('STORE1', 'count.enter', { id: ct, lines: [{ code: 'TST-001', bin: 'A-01', counted: 10 }] }); // the record is right
+  await w.ok('STORE1', 'count.submit', { id: ct });
+  assert.equal((await w.ok('LEAD', 'count.approve', { id: ct })).result.docNo, '', 'no difference, no AJ');
+  let s = await w.state();
+  assert.deepEqual(RRS.reconcile.reconcile(s, b).rows.find((r) => r.code === 'TST-001').staleBy, [ct]);
+  const seq = s.seq;
+  const r = await w.exec('ACC', 'express.resolve', { batchId: b, confirmOld: true, lines: [adjust('TST-001', 'A', 'A-01')] });
+  assert.equal(r.errors[0].code, 'STALE_ROW');
+  assert.ok(r.errors[0].message.includes(ct));
+  s = await w.state();
+  assert.equal(s.seq, seq);
+  assert.equal(qty(s, { code: 'TST-001' }), 10, 'the counted quantity is not overwritten by the older file');
+  // the row the count did not cover still follows the file
+  await w.ok('ACC', 'express.resolve', { batchId: b, lines: [adjust('TST-002', 'A', 'A-01')] });
+  assert.equal(qty(await w.state(), { code: 'TST-002' }), 6);
+});
+
+test('Separation of duties: whoever sends a count for approval cannot approve it', async () => {
+  const w = await world();
+  await stockIn(w, 'TST-001', 'A', 'A-01', 10);
+  const ct = (await w.ok('LEAD', 'count.create', { wh: 'A', bins: ['A-01'] })).result.id;
+  await w.ok('STORE1', 'count.enter', { id: ct, lines: [{ code: 'TST-001', bin: 'A-01', counted: 9 }] });
+  await w.ok('LEAD', 'count.submit', { id: ct }); // LEAD did not count, but asks for the approval
+  const own = await w.exec('LEAD', 'count.approve', { id: ct, reasons: { 'TST-001|A-01|': 'ชำรุด' } });
+  assert.equal(own.errors[0].code, 'SAME_PERSON');
+  assert.equal(qty(await w.state(), { code: 'TST-001' }), 10);
+  await w.ok('ACC', 'count.approve', { id: ct, reasons: { 'TST-001|A-01|': 'ชำรุด' } });
+  const s = await w.state();
+  assert.deepEqual([s.tables.count_sessions[ct].submittedBy, s.tables.count_sessions[ct].approvedBy, qty(s, { code: 'TST-001' })], ['LEAD', 'ACC', 9]);
+});
+
+test('Express: a move between bins of one warehouse still in transit stays in that warehouse; a bad time gives no number', async () => {
+  const w = await expressWorld();
+  await stockIn(w, 'TST-001', 'A', 'A-01', 10);
+  await stockIn(w, 'TST-001', 'B', 'B-01', 5);
+  const binMove = (await w.ok('STORE1', 'doc.post', { type: 'TR', lines: [{ code: 'TST-001', qty: 4, wh: 'A', bin: 'A-01', toWh: 'A', toBin: 'A-02' }] })).result.docNo;
+  await w.ok('STORE1', 'doc.post', { type: 'TR', lines: [{ code: 'TST-001', qty: 2, wh: 'B', bin: 'B-01', toWh: 'A', toBin: 'A-01' }] }); // between warehouses
+  const snap = w.clock.peek();
+  await w.ok('STORE2', 'transfer.receive', { docNo: binMove }); // received after the file
+  const b = (await w.ok('LEAD', 'express.import', fileOf('bins.xlsx', snap, [{ code: 'TST-001', wh: '01', qty: 10 }, { code: 'TST-001', wh: 'B', qty: 3 }]))).result.batchId;
+  const s = await w.state();
+  const rows = RRS.reconcile.reconcile(s, b).rows;
+  const a = rows.find((r) => r.wh === 'A');
+  assert.deepEqual([a.status, a.rrsAtSnapshot, a.rrsNow], ['MATCH', 10, 10], 'Express has no bins: a bin move is no difference');
+  assert.equal(rows.find((r) => r.wh === 'B').rrsAtSnapshot, 3, 'between warehouses: in neither until received');
+  assert.equal(RRS.reconcile.rrsQtyAt(s, 'TST-001', 'A', snap), 10);
+  assert.equal(RRS.reconcile.rrsQtyAt(s, 'TST-001', 'A', 'not a time'), null, 'a bad time is not answered with today’s quantity');
+});
+
+test('Count: counting above the record where QC stock lies must be checked (ack) before adjusting', async () => {
+  const w = await world();
+  await w.ok('LEAD', 'doc.post', { type: 'AJ', lines: [{ code: 'TST-001', qty: 5, wh: 'A', bin: 'A-01', status: 'QC_HOLD' }, { code: 'TST-002', qty: 2, wh: 'A', bin: 'A-01', status: 'QC_HOLD' }] });
+  await w.ok('LEAD', 'doc.post', { type: 'AJ', lines: [{ code: 'TST-001', qty: 10, wh: 'A', bin: 'A-01' }, { code: 'TST-002', qty: 4, wh: 'A', bin: 'A-01' }] });
+  const ct = (await w.ok('LEAD', 'count.create', { wh: 'A', bins: ['A-01'] })).result.id;
+  // 15 = 10 usable + the 5 tagged for QC, most likely counted together; TST-002 is 1 short (no double count possible)
+  await w.ok('STORE1', 'count.enter', { id: ct, lines: [{ code: 'TST-001', bin: 'A-01', counted: 15 }, { code: 'TST-002', bin: 'A-01', counted: 3 }] });
+  await w.ok('STORE2', 'count.enter', { id: ct, lines: [{ code: 'TST-001', bin: 'A-01', counted: 15 }] });
+  await w.ok('STORE1', 'count.submit', { id: ct });
+  const v = RRS.reconcile.countView(await w.state(), ct);
+  const l1 = v.lines.find((l) => l.code === 'TST-001');
+  const l2 = v.lines.find((l) => l.code === 'TST-002');
+  assert.deepEqual([l1.adjust, l1.heldQty, l1.flags.includes('HELD_STOCK')], [5, 5, true]);
+  assert.deepEqual([l2.adjust, l2.heldQty, l2.flags.includes('HELD_STOCK')], [-1, 2, false]);
+  assert.equal(v.needsAck, true);
+  const seq = (await w.state()).seq;
+  const reasons = { 'TST-001|A-01|': 'ตรวจแล้ว ของเกินอยู่นอกพื้นที่กักกัน', 'TST-002|A-01|': 'ชำรุดทิ้ง' };
+  const noAck = await w.exec('ACC', 'count.approve', { id: ct, reasons });
+  assert.equal(noAck.errors[0].code, 'HELD_STOCK');
+  assert.equal((await w.state()).seq, seq);
+  await w.ok('ACC', 'count.approve', { id: ct, reasons, ack: true });
+  const s = await w.state();
+  assert.deepEqual([s.tables.count_sessions[ct].ack.by, s.tables.count_sessions[ct].ack.held], ['ACC', ['TST-001|A-01|']]);
+  assert.equal(qty(s, { code: 'TST-001', status: 'AVAILABLE' }), 15);
+  assert.equal(qty(s, { code: 'TST-001', status: 'QC_HOLD' }), 5, 'QC stock is untouched by the count');
+  assert.equal(qty(s, { code: 'TST-002', status: 'AVAILABLE' }), 3);
+  assert.deepEqual(RRS.inventory.verifyBalances(s), []);
+});
+
+test('Express: adjust, cancel, cancel again, adjust again – the difference is applied once and every decision is kept', async () => {
+  const w = await expressWorld('Express');
+  const opening = await stockIn(w, 'TST-001', 'A', 'A-01', 10);
+  const b = (await w.ok('LEAD', 'express.import', fileOf('redo.xlsx', w.clock.peek(), [{ code: 'TST-001', wh: '01', qty: 7 }]))).result.batchId;
+  await w.ok('STORE1', 'doc.post', { type: 'PD', lines: [{ code: 'TST-001', qty: 2, wh: 'A', bin: 'A-01' }] }); // after the file
+  const r1 = await w.ok('ACC', 'express.resolve', { batchId: b, lines: [adjust('TST-001', 'A', 'A-01')] });
+  // the opening AJ was never keyed in Express: the person adjusting is told (it must not be keyed on top of the file)
+  assert.ok(r1.warnings.some((x) => x.includes(opening.result.docNo)));
+  let s = await w.state();
+  assert.equal(qty(s, { code: 'TST-001' }), 5, '8 now − 3 found at the snapshot');
+  assert.deepEqual(s.tables.express_batches[b].resolutions[0].pendingDocs, [opening.result.docNo]);
+  await w.ok('LEAD', 'doc.cancel', { docNo: r1.result.docNo, reason: 'ปรับผิด' });
+  assert.equal((await w.exec('LEAD', 'doc.cancel', { docNo: r1.result.docNo, reason: 'ซ้ำ' })).errors[0].code, 'ALREADY_CANCELLED');
+  s = await w.state();
+  assert.equal(qty(s, { code: 'TST-001' }), 8);
+  const r2 = await w.ok('ACC', 'express.resolve', { batchId: b, lines: [adjust('TST-001', 'A', 'A-01', 'ตรวจแล้ว ยึด Express')] });
+  assert.notEqual(r2.result.docNo, r1.result.docNo);
+  s = await w.state();
+  assert.equal(qty(s, { code: 'TST-001' }), 5, 'the same difference once – not twice');
+  const row = RRS.reconcile.reconcile(s, b).rows[0];
+  assert.deepEqual([row.diff, row.resolution.docNo, row.resolved], [-3, r2.result.docNo, true]);
+  assert.deepEqual(s.tables.express_batches[b].resolutions.map((x) => [x.docNo, !!x.cancelledAt]), [[r1.result.docNo, true], [r2.result.docNo, false]]);
+  await w.ok('ACC', 'express.close', { batchId: b });
+  assert.deepEqual(RRS.inventory.verifyBalances(await w.state()), []);
 });

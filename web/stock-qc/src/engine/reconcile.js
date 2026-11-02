@@ -719,7 +719,11 @@
       tx.put('count_sessions', id, s);
       const transit = tx.all('documents', (d) => d.type === 'TR' && d.status === 'IN_TRANSIT'
         && (d.lines || []).some((l) => l.toWh === wh && l.received < l.base)).map((d) => d.docNo);
-      if (transit.length) tx.warn(`มีใบโอนระหว่างทางเข้าคลัง ${wh}: ${transit.join(', ')} – รับโอนระหว่างนับจะถูกแจ้งเป็นการเคลื่อนไหวหลังนับ`);
+      if (transit.length) {
+        tx.warn(`มีใบโอนระหว่างทางเข้าคลัง ${wh}: ${transit.join(', ')} – ${mode === 'freeze'
+          ? 'รับเข้าช่องที่นับไม่ได้จนกว่าจะอนุมัติหรือยกเลิกรอบนับ (รับเข้าช่องอื่นได้)'
+          : 'รับโอนระหว่างนับจะถูกแจ้งเป็นการเคลื่อนไหวหลังนับ'}`);
+      }
       tx.result.id = id;
       tx.summary = `เปิดรอบนับ ${id} คลัง ${wh}${bins.length ? ' ช่อง ' + bins.join(', ') : ' ทั้งคลัง'} (${mode})`;
     },

@@ -143,27 +143,27 @@
     }
     const pPr = findPage(['prs', 'pr', 'purchase-requests'], /ขอซื้อ|PR/);
     if (can('pr.approve') && has(s, 'prs')) {
-      add(rows(s, 'prs', (p) => p.status === 'SUBMITTED' && p.requestedBy !== me).length, 'อนุมัติใบขอซื้อ', 'ใบขอซื้อที่ส่งมารออนุมัติ', pPr);
+      add(rows(s, 'prs', (p) => p.status === 'SUBMITTED' && p.requestedBy !== me).length, 'อนุมัติใบขอซื้อ', 'ใบขอซื้อที่ส่งมารออนุมัติ', pPr, pPr === 'purchasing' ? { tab: 'pr', prSt: 'SUBMITTED' } : null);
     }
     const pPo = findPage(['pos', 'po', 'purchasing'], /สั่งซื้อ|PO/);
     if ((can('po.manage') || can('po.receive')) && has(s, 'pos')) {
-      add(latePoLines(s, ctx.today).length, 'ตามของ PO ที่เลยกำหนดส่ง', 'บรรทัด PO ที่ถึงกำหนดแล้วยังรับไม่ครบ', pPo, null, 'bad');
+      add(latePoLines(s, ctx.today).length, 'ตามของ PO ที่เลยกำหนดส่ง', 'บรรทัด PO ที่ถึงกำหนดแล้วยังรับไม่ครบ', pPo, pPo === 'purchasing' ? { tab: 'recv' } : null, 'bad');
     }
     const pQc = findPage(['inspections', 'qc', 'inspect'], /ตรวจรับ|ตรวจคุณภาพ|QC/);
     if (can('qc.inspect')) {
       const holdLocs = rows(s, 'balances', (b) => b.status === 'QC_HOLD' && b.wh !== RRS.TRANSIT).length;
-      add(holdLocs, 'ตรวจของที่รอตรวจ', 'ของสถานะรอตรวจยังใช้/เบิกไม่ได้จนกว่าจะผ่าน QC', pQc);
+      add(holdLocs, 'ตรวจของที่รอตรวจ', 'ของสถานะรอตรวจยังใช้/เบิกไม่ได้จนกว่าจะผ่าน QC', pQc, pQc === 'inspections' ? { tab: 'queue' } : null);
     }
     if (can('qc.release') && has(s, 'inspections')) {
       // the quality module decides who may release (not the inspector, not who posted the receipt, certificate checked)
       const check = RRS.quality && typeof RRS.quality.releaseCheck === 'function' ? (i) => !RRS.quality.releaseCheck(s, i.id, me).length : (i) => i.inspector !== me;
       add(rows(s, 'inspections', (i) => i.status === 'OPEN' && i.result === 'PASS' && can('qc.release', i.wh) && check(i)).length,
-        'ปล่อยผ่านของที่ตรวจผ่าน', 'ผลตรวจผ่านแล้ว รอผู้อนุมัติที่ไม่ใช่ผู้ตรวจปล่อยให้ใช้ได้', pQc);
+        'ปล่อยผ่านของที่ตรวจผ่าน', 'ผลตรวจผ่านแล้ว รอผู้อนุมัติที่ไม่ใช่ผู้ตรวจปล่อยให้ใช้ได้', pQc, pQc === 'inspections' ? { tab: 'release' } : null);
     }
     const pNcr = findPage(['ncrs', 'ncr'], /NCR|ของไม่ได้มาตรฐาน/);
-    if (can('ncr.disposition') && has(s, 'ncrs')) add(rows(s, 'ncrs', (n) => n.status === 'OPEN').length, 'ตัดสินของไม่ได้มาตรฐาน (NCR)', 'NCR ที่ยังไม่ตัดสินว่าแก้/คืน/ทิ้ง/ใช้ตามสภาพ', pNcr, null, 'bad');
+    if (can('ncr.disposition') && has(s, 'ncrs')) add(rows(s, 'ncrs', (n) => n.status === 'OPEN').length, 'ตัดสินของไม่ได้มาตรฐาน (NCR)', 'NCR ที่ยังไม่ตัดสินว่าแก้/คืน/ทิ้ง/ใช้ตามสภาพ', pNcr, pNcr === 'ncrs' ? { tab: 'open' } : null, 'bad');
     const pPlan = findPage(['qc-plans', 'qcplans', 'qc_plans'], /แผนตรวจ/);
-    if (can('qc.planApprove') && has(s, 'qc_plans')) add(rows(s, 'qc_plans', (p) => p.status === 'DRAFT' && p.createdBy !== me).length, 'อนุมัติแผนตรวจ', 'แผนตรวจร่างที่รออนุมัติ', pPlan);
+    if (can('qc.planApprove') && has(s, 'qc_plans')) add(rows(s, 'qc_plans', (p) => p.status === 'DRAFT' && p.createdBy !== me).length, 'อนุมัติแผนตรวจ', 'แผนตรวจร่างที่รออนุมัติ', pPlan, pPlan === 'qc-plans' ? { tab: 'DRAFT', sel: null } : null);
     const pUat = findPage(['uat'], /UAT|ทดสอบรับ/);
     if (can('uat.record') && has(s, 'uat')) add(rows(s, 'uat', (u) => u.status !== 'PASS').length, 'ทดสอบเกณฑ์รับระบบ (UAT)', 'เกณฑ์ที่ยังไม่ผ่านหรือยังไม่ได้ทดสอบ', pUat, null, 'info');
     return out;

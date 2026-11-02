@@ -252,3 +252,8 @@ details > :not(summary) { padding: 10px 12px; }
 .who { flex-wrap: wrap; justify-content: flex-end; }
 .who .btn-quiet { color: var(--rail-fg); }
 .who .btn-quiet:hover { color: var(--rail-on); border-color: transparent; }
+/* many tabs (reports has 11): wrap into rows on a phone instead of a long sideways scroll */
+@media (max-width: 640px) {
+  .tabs { flex-wrap: wrap; overflow-x: visible; row-gap: 0; }
+  .tab { padding: 7px 9px; font-size: .84rem; }
+}

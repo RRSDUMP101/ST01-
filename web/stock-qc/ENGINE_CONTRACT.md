@@ -103,3 +103,11 @@ None of these has a confirmed Express document type yet (`express: false`).
   active, perm `reorder.manage`), PO line `replaced, overAllowed, overApprovals, originalDue, prLine, amount`, PR
   `submittedBy/At, restCancelled, convertedBy/At, log`; inspections status `VOID` with `voidedBy/At, voidReason`,
   `releasedQty, releases[]`; lots `poLine, history`; ncrs `stockHeld, stage, reinspections[], history`; command `ncr.open`.
+- QC commands added later: `qc.void {id, reason}` (perm `qc.release`; an OPEN PASS only; not the inspector; the stock stays
+  in its status and must be inspected again) and `qc.plan.obsolete {id, reason}` (perm `qc.planApprove`; a draft or approved
+  plan retired without a replacement; row field `obsoleteReason`). `qc.release` refuses `qty: ''` (REQUIRED) – leave `qty`
+  out to release everything left. The inspector / releaser ≠ receiver check uses `inspections.receivedBy`, worked out from the
+  movements into the location, so it holds without a `sourceDoc`.
+- UI kit: `h.badNumbers(form)` – number boxes the browser cannot read are refused in every page form and dialog before
+  anything is sent; a `num: true` column formats raw numbers only (a pre-formatted string is shown as it is); a live filter
+  typed just before a click runs first.

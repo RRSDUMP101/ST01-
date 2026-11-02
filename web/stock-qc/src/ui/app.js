@@ -200,7 +200,7 @@
       app.needLogin = true;
       startMode('server');
     }
-    if (!r.ok) return Object.assign({ ok: false, errors: [{ code: 'HTTP_' + r.status, message: (data && data.error) || 'เซิร์ฟเวอร์ตอบ ' + r.status }] }, data || {});
+    if (!r.ok) return Object.assign({ ok: false, errors: [{ code: 'HTTP_' + r.status, message: (data && (typeof data.error === 'string' ? data.error : data.message)) || 'เซิร์ฟเวอร์ตอบ ' + r.status }] }, data || {});
     return Object.assign({ ok: true }, data || {});
   }
   /**
@@ -296,6 +296,12 @@
   async function submitDialog(form) {
     const s = dlgState;
     if (!s) return;
+    const bad = h.badNumbers(form);
+    if (bad) {
+      const box = $('#dlg-err');
+      if (box) box.innerHTML = String(h.errors(bad));
+      return;
+    }
     const values = h.parseForm(form);
     if (!s.o.onSubmit) return closeDialog(values);
     const outerRid = app.rid; // a page form may be waiting on this dialog: keep its request id
@@ -645,9 +651,19 @@
   // ---- events ---------------------------------------------------------------------------------------------------------
   function bind() {
     const doc = root.document;
+    let liveTimer = null;
+    let livePending = null;
+    /** Run a filter typed less than 250 ms ago now, so a click right after typing works on the filtered list. */
+    async function flushLive() {
+      const p = livePending;
+      clearTimeout(liveTimer);
+      livePending = null;
+      if (p) await p();
+    }
     doc.addEventListener('click', async (ev) => {
       const el = ev.target.closest('[data-act],[data-go],[data-dlg-close],[data-mode-switch],[data-nav-toggle]');
       if (!el) return;
+      if (livePending && !(el.matches && el.matches('[data-live]'))) await flushLive();
       if (el.hasAttribute('data-dlg-close')) {
         ev.preventDefault();
         return closeDialog(null);
@@ -696,16 +712,18 @@
       const fn = page && page.actions[act];
       if (fn) await fn(makeCtx(page.id), el, ev);
     });
-    let liveTimer = null;
     doc.addEventListener('input', (ev) => {
       const el = ev.target;
       if (el.matches && el.matches('[data-live][data-act]')) {
         clearTimeout(liveTimer);
-        liveTimer = setTimeout(async () => {
+        const run = async () => {
+          if (livePending === run) livePending = null;
           const page = RRS.ui.pages[app.page];
           const fn = page && page.actions[el.dataset.act];
           if (fn) await fn(makeCtx(page.id), el, ev);
-        }, 250);
+        };
+        livePending = run;
+        liveTimer = setTimeout(run, 250);
         return;
       }
       if (el.closest && el.closest('#main form, #dlg')) app.dirty = true;
@@ -713,6 +731,7 @@
     doc.addEventListener('submit', async (ev) => {
       const form = ev.target;
       clearTimeout(liveTimer); // a filter typed just before saving must not re-render over the result
+      livePending = null;
       if (form.hasAttribute('data-dlg-form')) {
         ev.preventDefault();
         return submitDialog(form);
@@ -721,6 +740,13 @@
       if (!name) return;
       ev.preventDefault();
       if (app.busy) return;
+      const bad = h.badNumbers(form);
+      if (bad) {
+        toast(bad.errors.map((e) => e.message).join(' · '), 'warn');
+        const first = form.querySelector('input[type=number]:invalid');
+        if (first) first.focus();
+        return;
+      }
       const values = h.parseForm(form);
       if (!form.dataset.rid) form.dataset.rid = newRid();
       app.rid = form.dataset.rid;

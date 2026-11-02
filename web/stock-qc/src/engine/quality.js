@@ -83,7 +83,8 @@
       ['status', 'enum', 'สถานะ', 'DRAFT/APPROVED/OBSOLETE'], ['createdBy', 'text', 'ผู้จัดทำ'], ['createdAt', 'datetime', 'จัดทำเมื่อ'],
       ['updatedBy', 'text', 'ผู้แก้ล่าสุด'], ['updatedAt', 'datetime', 'แก้ล่าสุดเมื่อ'], ['approvedBy', 'text', 'ผู้อนุมัติ'],
       ['approvedAt', 'datetime', 'อนุมัติเมื่อ'], ['obsoletedBy', 'text', 'ผู้ทำให้เลิกใช้'], ['obsoletedAt', 'datetime', 'เลิกใช้เมื่อ'],
-      ['replacedBy', 'text', 'แทนด้วยแผน'], ['history', 'json', 'ประวัติการเปลี่ยนแปลง {at, seq, by, action, detail}']],
+      ['replacedBy', 'text', 'แทนด้วยแผน'], ['obsoleteReason', 'text', 'เหตุที่เลิกใช้ (เมื่อไม่มีแผนแทน)'],
+      ['history', 'json', 'ประวัติการเปลี่ยนแปลง {at, seq, by, action, detail}']],
   });
   schema.define('inspections', {
     label: 'ผลตรวจ QC', phase: 5, key: 'id',
@@ -656,6 +657,30 @@
     },
   });
 
+  /** Retire a draft or approved plan without a replacement (the item is no longer inspected at this stage, or the draft is abandoned). */
+  define('qc.plan.obsolete', {
+    label: 'เลิกใช้แผนตรวจ QC', perm: 'qc.planApprove',
+    prepare(tx, p) {
+      const plan = tx.get('qc_plans', util.normCode(p.id));
+      if (!plan) return tx.error('NOT_FOUND', `ไม่พบแผนตรวจ ${p.id || ''}`, { field: 'id' });
+      if (plan.status === 'OBSOLETE') return tx.error('BAD_STATE', `แผน ${plan.id} เลิกใช้แล้ว`, { field: 'id' });
+      const reason = util.trim(p.reason).slice(0, 300);
+      if (!reason) return tx.error('REQUIRED', 'ระบุเหตุผลที่เลิกใช้แผน', { field: 'reason' });
+      tx.put('qc_plans', plan.id, hist(Object.assign(clone(plan), { status: 'OBSOLETE', obsoletedBy: tx.userId, obsoletedAt: tx.now, replacedBy: '', obsoleteReason: reason }),
+        tx, 'OBSOLETE', `เลิกใช้โดยไม่มีแผนแทน: ${reason}`));
+      if (plan.status === 'APPROVED') {
+        const waiting = tx.all('balances', (b) => b.code === plan.code && b.qty > 0 && (b.status === QC_HOLD || b.status === REWORK) && b.wh !== TRANSIT);
+        if (STOCK_STAGES[plan.stage] && waiting.length) {
+          tx.warn(`${plan.code} ยังมีของรอตรวจ/รอแก้ไข ${round(util.sum(waiting, (b) => b.qty))} – ต้องอนุมัติแผน${STAGES[plan.stage]}ฉบับใหม่ก่อนจึงจะตรวจได้`);
+        } else {
+          tx.warn(`${plan.code} ไม่มีแผน${STAGES[plan.stage]}ที่ใช้ได้แล้ว – การตรวจขั้นนี้ต้องรออนุมัติแผนใหม่`);
+        }
+      }
+      tx.result = { id: plan.id };
+      tx.summary = `เลิกใช้แผนตรวจ ${plan.id} ${plan.code} ${STAGES[plan.stage]}`;
+    },
+  });
+
   // ---------------------------------------------------------------------------------------------------------
   // inspection, release
   // ---------------------------------------------------------------------------------------------------------
@@ -687,7 +712,7 @@
       if (qty == null) return;
       const lot = util.trim(p.lot);
       if (lot && !tracked(it)) return tx.error('LOT_NOT_TRACKED', `${it.id} ไม่ได้ตั้งให้ติดตามล็อต – ลบล็อตออก`, { field: 'lot' });
-      if (stock && tracked(it) && !lot) return tx.error('LOT_REQUIRED', `${it.id} ต้องระบุ${trackName(it)}`, { field: 'lot' });
+      if (stock && tracked(it) && !lot) return tx.error('LOT_REQUIRED', `${it.id} ต้องระบุ ${trackName(it)}`, { field: 'lot' });
       const wh = util.normCode(p.wh);
       const bin = util.normCode(p.bin);
       let fromStatus = '';
@@ -906,7 +931,8 @@
       const it = tx.item(insp.code);
       const left = round(insp.qty - (insp.releasedQty || 0));
       let qty = left;
-      if (p.qty != null && p.qty !== '') {
+      if (p.qty === '' || (typeof p.qty === 'string' && !util.trim(p.qty))) return tx.error('REQUIRED', 'ระบุจำนวนที่ปล่อย (ไม่ส่งจำนวน = ปล่อยที่เหลือทั้งหมด)', { field: 'qty' });
+      if (p.qty != null) {
         qty = baseQty(tx, it, p.qty, p.unit, 'จำนวนที่ปล่อย');
         if (qty == null) return;
         if (qty > left) return tx.error('TOO_MUCH', `ปล่อยได้ไม่เกิน ${left} ${it.baseUnit}`, { field: 'qty' });
@@ -929,6 +955,29 @@
     },
   });
 
+  /** Void a PASS still waiting for release (e.g. a mistyped result). The stock stays in its status and must be inspected again. */
+  define('qc.void', {
+    label: 'ยกเลิกผลตรวจ (เป็นโมฆะ)', perm: 'qc.release',
+    prepare(tx, p) {
+      const insp = tx.get('inspections', util.normCode(p.id));
+      if (!insp) return tx.error('NOT_FOUND', `ไม่พบผลตรวจ ${p.id || ''}`, { field: 'id' });
+      if (insp.result !== 'PASS') return tx.error('NOT_PASS', `${insp.id} ผลไม่ผ่าน – ผลไม่ผ่านแก้ด้วยการตัดสิน NCR ${insp.ncrNo || ''} ไม่ใช่ยกเลิก`, { field: 'id' });
+      if (insp.status !== 'OPEN') return tx.error('BAD_STATE', `${insp.id} ${INSP_STATUS[insp.status] || insp.status} – ยกเลิกได้เฉพาะผลผ่านที่ยังรอปล่อย`, { field: 'id' });
+      if (insp.wh && !tx.need('qc.release', insp.wh, { field: 'id' })) return;
+      if (!notSame(tx, insp.inspector, 'ผู้ยกเลิกผลตรวจ ต้องเป็นคนละคนกับผู้ตรวจ (แยกหน้าที่)', { field: 'id' })) return;
+      const reason = util.trim(p.reason).slice(0, 300);
+      if (!reason) return tx.error('REQUIRED', 'ระบุเหตุผลที่ยกเลิกผลตรวจ', { field: 'reason' });
+      const left = round(insp.qty - (insp.releasedQty || 0));
+      tx.put('inspections', insp.id, Object.assign(clone(insp), { status: 'VOID', voidedBy: tx.userId, voidedAt: tx.now, voidReason: reason }));
+      const it = tx.item(insp.code) || { baseUnit: '' };
+      if (STOCK_STAGES[insp.stage] && left > 0) {
+        tx.warn(`${insp.code}${insp.lot ? ' ล็อต ' + insp.lot : ''} ${left} ${it.baseUnit} ยังอยู่สถานะ${STATUS_LABEL[insp.fromStatus] || insp.fromStatus} – ต้องตรวจใหม่ก่อนใช้`);
+      }
+      tx.result = { id: insp.id, left };
+      tx.summary = `ยกเลิกผลตรวจ ${insp.id} ${insp.code}${insp.lot ? ' ล็อต ' + insp.lot : ''}: ${reason}`;
+    },
+  });
+
   // ---------------------------------------------------------------------------------------------------------
   // NCR
   // ---------------------------------------------------------------------------------------------------------
@@ -940,7 +989,7 @@
       if (!it) return;
       const lot = util.trim(p.lot);
       if (lot && !tracked(it)) return tx.error('LOT_NOT_TRACKED', `${it.id} ไม่ได้ตั้งให้ติดตามล็อต`, { field: 'lot' });
-      if (tracked(it) && !lot) return tx.error('LOT_REQUIRED', `${it.id} ต้องระบุ${trackName(it)}`, { field: 'lot' });
+      if (tracked(it) && !lot) return tx.error('LOT_REQUIRED', `${it.id} ต้องระบุ ${trackName(it)}`, { field: 'lot' });
       const wh = util.normCode(p.wh);
       const bin = util.normCode(p.bin);
       if (!checkWh(tx, wh, bin, 'qc.inspect')) return;

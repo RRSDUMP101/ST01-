@@ -93,7 +93,8 @@
         if (c.render) v = c.render(r, i);
         else {
           const raw = c.get ? c.get(r, i) : r[c.key];
-          v = c.num ? fmt.num(raw, c.digits) : raw;
+          // only raw numbers are formatted; a string already formatted (money "1,250.00", "3 แผ่น", "–") is shown as it is
+          v = c.num && (typeof raw === 'number' || (typeof raw === 'string' && /^-?\d+(\.\d+)?$/.test(raw.trim()))) ? fmt.num(raw, c.digits) : raw;
         }
         return t`<td class="${c.num ? 'n' : ''} ${c.cls || ''}">${v}</td>`;
       });
@@ -183,6 +184,24 @@
   };
 
   /** FormData -> object. 'a[]' -> array; 'lines[0][code]' -> lines[0].code; checkboxes -> true/false. */
+  /**
+   * Number boxes the browser could not read (e.g. "1,5" or "12a"): their value is "" so the engine would see an
+   * empty box. Returns {ok:false, errors} naming each field, or null when every number box is readable.
+   */
+  const badNumbers = (formEl) => {
+    const errors = [];
+    for (const el of formEl.querySelectorAll('input[type=number]')) {
+      if (el.disabled || !el.validity || !el.validity.badInput) continue;
+      let label = el.getAttribute('aria-label') || '';
+      if (!label) {
+        const f = el.closest('.fld');
+        const l = f && f.querySelector('.fld-l');
+        label = (l && l.textContent) || el.name || 'ช่องตัวเลข';
+      }
+      errors.push({ code: 'BAD_NUMBER', field: el.name, message: `${util.trim(label).replace(/\s*\*$/, '')}: ใส่เป็นตัวเลขเท่านั้น (ทศนิยมใช้จุด ไม่ใช้จุลภาค)` });
+    }
+    return errors.length ? { ok: false, errors } : null;
+  };
   const parseForm = (formEl) => {
     const out = {};
     const setPath = (obj, path, value) => {
@@ -297,7 +316,7 @@
       return this.pages[def.id];
     },
     h: { t, safe, esc, show, attr, join, fmt, badge, statusBadge, docStatus, code, qty, btn, link, table, empty, field, form,
-      tabs, kpi, kpis, section, toolbar, note, dl, lists, whOptions, binOptions, userOptions, lineEditor, parseForm,
+      tabs, kpi, kpis, section, toolbar, note, dl, lists, whOptions, binOptions, userOptions, lineEditor, parseForm, badNumbers,
       cleanLines, errors, Safe, parseCsv, readTable, mapHeader, csv, meter },
   };
 })(typeof globalThis !== 'undefined' ? globalThis : this);

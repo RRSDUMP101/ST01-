@@ -116,6 +116,9 @@
         why = t`<p class="hint">รออนุมัติโดยวิศวกรรม/หัวหน้า QC ที่ไม่ใช่ผู้จัดทำ</p>`;
       }
     }
+    if (p.status !== 'OBSOLETE' && ctx.can('qc.planApprove')) {
+      acts.push(h.btn(p.status === 'DRAFT' ? 'ทิ้งร่างนี้' : 'เลิกใช้แผน (ไม่มีแผนแทน)', { act: 'obsoletePlan', tone: 'ghost', id: 'plan-obsolete-btn' }));
+    }
     if (p.status !== 'DRAFT' && ctx.can('qc.plan')) {
       acts.push(h.btn('สร้างฉบับใหม่จากแผนนี้', { act: 'copyPlan', tone: p.status === 'APPROVED' && !match ? 'primary' : 'ghost', id: 'plan-copy-btn' }));
     }
@@ -135,7 +138,7 @@
         ['อ้างอิงแบบ/WI', p.sourceRef], ['วิธีสุ่มตรวจ', p.sampling],
         ['จัดทำ', K.who(ctx, p.createdBy, p.createdAt)], ['แก้ล่าสุด', K.who(ctx, p.updatedBy, p.updatedAt)],
         ['อนุมัติ', K.who(ctx, p.approvedBy, p.approvedAt)],
-        p.status === 'OBSOLETE' ? ['เลิกใช้', t`${K.who(ctx, p.obsoletedBy, p.obsoletedAt)}${p.replacedBy ? t` · แทนด้วย ${K.planLink(p.replacedBy)}` : ''}`] : null,
+        p.status === 'OBSOLETE' ? ['เลิกใช้', t`${K.who(ctx, p.obsoletedBy, p.obsoletedAt)}${p.replacedBy ? t` · แทนด้วย ${K.planLink(p.replacedBy)}` : ''}${p.obsoleteReason ? t` · ${p.obsoleteReason}` : ''}`] : null,
         ['ใช้ตรวจแล้ว', `${h.fmt.num(used)} ครั้ง`],
       ])}
       <h3>หัวข้อตรวจ</h3>${charsTable(p.chars)}
@@ -300,6 +303,18 @@
         if (!ok) return;
         const r = await ctx.exec('qc.plan.approve', { id: p.id }, { done: (x) => `อนุมัติ ${p.id} แล้ว${x.result.obsoleted && x.result.obsoleted.length ? ' – เลิกใช้ ' + x.result.obsoleted.join(', ') : ''}` });
         if (r.ok) ctx.set({});
+      },
+      async obsoletePlan(ctx) {
+        const p = RRS.q.get(ctx.state, 'qc_plans', ctx.view.sel);
+        if (!p) return;
+        const draft = p.status === 'DRAFT';
+        await ctx.dialog({
+          title: draft ? `ทิ้งร่าง ${p.id}` : `เลิกใช้แผน ${p.id}`, submit: draft ? 'ทิ้งร่างนี้' : 'เลิกใช้แผนนี้', danger: true,
+          message: draft ? 'ร่างนี้จะอนุมัติไม่ได้อีก (ประวัติยังอยู่)'
+            : `${p.code} จะไม่มีแผน${Q.STAGES[p.stage]}ที่ใช้ได้ – บันทึกผลตรวจขั้นนี้ไม่ได้จนกว่าจะอนุมัติแผนใหม่ ผลผ่านที่รอปล่อยอยู่ยังปล่อยได้ตามเดิม`,
+          body: h.field({ name: 'reason', label: 'เหตุผล', type: 'textarea', required: true, wide: true, id: 'plan-obsolete-reason' }),
+          onSubmit: (vals) => ctx.exec('qc.plan.obsolete', { id: p.id, reason: vals.reason }, { quiet: true, done: () => `${p.id} เลิกใช้แล้ว` }),
+        });
       },
     },
     forms: {

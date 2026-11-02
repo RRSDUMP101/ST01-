@@ -1138,3 +1138,62 @@ test('รีวิว 2 (กันถอยหลัง): ตัดสินแ�
     qty(s, { code: 'QC-BOLT', lot: 'V1' })], [0, 3, 3]);
   assert.deepEqual(RRS.inventory.verifyBalances(s), []);
 });
+
+test('ยกเลิกผลตรวจที่บันทึกผิด และเลิกใช้แผนตรวจโดยไม่มีแผนแทน', async () => {
+  const w = await world();
+  const plan = await approvedPlan(w, 'TST-PLATE', 'INCOMING', PLATE_CHARS);
+  const rr = await receivePlate(w, 'V1', 4);
+  await certVerified(w, 'V1');
+  const i = await w.ok('QC1', 'qc.inspect', { stage: 'INCOMING', code: 'TST-PLATE', wh: 'A', bin: 'A-01', lot: 'V1', qty: 4, planId: plan, results: plateOk, sourceDoc: rr });
+  const id = i.result.id;
+  // only a QC lead, not the inspector, and only with a reason
+  assert.equal(codeOf(await w.exec('QC1', 'qc.void', { id, reason: 'พิมพ์ผิด' })), 'NO_PERMISSION');
+  assert.equal(codeOf(await w.exec('QCLEAD', 'qc.void', { id, reason: '  ' })), 'REQUIRED');
+  // an empty quantity box is not "release everything"
+  assert.equal(codeOf(await w.exec('QCLEAD', 'qc.release', { id, qty: '' })), 'REQUIRED');
+  const v = await w.ok('QCLEAD', 'qc.void', { id, reason: 'บันทึกค่าความหนาผิดช่อง' });
+  assert.equal(v.result.left, 4);
+  let s = await w.state();
+  assert.equal(s.tables.inspections[id].status, 'VOID');
+  assert.equal(s.tables.inspections[id].voidedBy, 'QCLEAD');
+  assert.equal(qty(s, { code: 'TST-PLATE', wh: 'A', bin: 'A-01', lot: 'V1', status: 'QC_HOLD' }), 4, 'stock stays on hold');
+  assert.equal(codeOf(await w.exec('QCLEAD', 'qc.release', { id })), 'BAD_STATE');
+  assert.equal(codeOf(await w.exec('QCLEAD', 'qc.void', { id, reason: 'ซ้ำ' })), 'BAD_STATE');
+  // the stock can be inspected again in full
+  const again = await w.ok('QC1', 'qc.inspect', { stage: 'INCOMING', code: 'TST-PLATE', wh: 'A', bin: 'A-01', lot: 'V1', qty: 4, planId: plan, results: plateOk, sourceDoc: rr });
+  // a FAIL is handled through its NCR, not voided
+  const rr2 = await receivePlate(w, 'V2', 1);
+  const bad = await w.ok('QC1', 'qc.inspect', { stage: 'INCOMING', code: 'TST-PLATE', wh: 'A', bin: 'A-01', lot: 'V2', qty: 1, planId: plan, results: plateBad, sourceDoc: rr2, photos: PHOTO });
+  assert.equal(codeOf(await w.exec('QCLEAD', 'qc.void', { id: bad.result.id, reason: 'x' })), 'NOT_PASS');
+  // retire the approved plan without a replacement
+  assert.equal(codeOf(await w.exec('QC1', 'qc.plan.obsolete', { id: plan, reason: 'เลิกตรวจขั้นนี้' })), 'NO_PERMISSION');
+  assert.equal(codeOf(await w.exec('QCLEAD', 'qc.plan.obsolete', { id: plan })), 'REQUIRED');
+  const ob = await w.ok('QCLEAD', 'qc.plan.obsolete', { id: plan, reason: 'ลูกค้ายกเลิกข้อกำหนดตรวจรับ' });
+  assert.ok(ob.warnings.length >= 1, 'warns that no approved plan is left');
+  s = await w.state();
+  assert.equal(s.tables.qc_plans[plan].status, 'OBSOLETE');
+  assert.equal(s.tables.qc_plans[plan].obsoleteReason, 'ลูกค้ายกเลิกข้อกำหนดตรวจรับ');
+  assert.equal(codeOf(await w.exec('QCLEAD', 'qc.plan.obsolete', { id: plan, reason: 'ซ้ำ' })), 'BAD_STATE');
+  const rr3 = await receivePlate(w, 'V3', 1);
+  assert.equal(codeOf(await w.exec('QC1', 'qc.inspect', { stage: 'INCOMING', code: 'TST-PLATE', wh: 'A', bin: 'A-01', lot: 'V3', qty: 1, planId: plan, results: plateOk, sourceDoc: rr3 })), 'PLAN_NOT_APPROVED');
+  // a PASS made before the plan was retired can still be released by someone else
+  await w.ok('QCLEAD', 'qc.release', { id: again.result.id });
+  // a draft can be abandoned too
+  const draft = (await w.ok('ENG', 'qc.plan.save', { code: 'TST-PLATE', stage: 'INCOMING', sourceRef: 'WI-QC-09', chars: PLATE_CHARS })).result.id;
+  await w.ok('QCLEAD', 'qc.plan.obsolete', { id: draft, reason: 'ร่างซ้ำ' });
+  assert.equal(codeOf(await w.exec('QCLEAD', 'qc.plan.approve', { id: draft })), 'BAD_STATE');
+});
+
+test('ผู้รับของเข้าคลังปล่อยผ่านของตัวเองไม่ได้ แม้ไม่ได้อ้างเอกสารรับ', async () => {
+  const w = await world();
+  await w.ok('ADMIN', 'user.upsert', { id: 'DUAL', name: 'DUAL', roles: ['store_lead', 'qc_lead'] });
+  const plan = await approvedPlan(w, 'TST-PLATE', 'INCOMING', PLATE_CHARS);
+  await w.ok('DUAL', 'doc.post', { type: 'RR', lines: [{ code: 'TST-PLATE', qty: 2, wh: 'A', bin: 'A-01', lot: 'D1' }] });
+  await certVerified(w, 'D1');
+  const i = await w.ok('QC1', 'qc.inspect', { stage: 'INCOMING', code: 'TST-PLATE', wh: 'A', bin: 'A-01', lot: 'D1', qty: 2, planId: plan, results: plateOk });
+  const s = await w.state();
+  assert.equal(s.tables.inspections[i.result.id].sourceDoc, '');
+  assert.deepEqual(s.tables.inspections[i.result.id].receivedBy, ['DUAL']);
+  assert.equal(codeOf(await w.exec('DUAL', 'qc.release', { id: i.result.id })), 'SAME_PERSON');
+  await w.ok('QCLEAD', 'qc.release', { id: i.result.id });
+});

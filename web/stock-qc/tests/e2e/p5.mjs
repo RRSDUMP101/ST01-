@@ -3,10 +3,11 @@
 //   RRS_OUT=/tmp/stockqc-p5 node tests/e2e/p5.mjs [--shots dir]
 // Starts from a clean demo page, creates its own master data (codes P5-…, warehouse P5W, users P5…) and drives the
 // flows through the UI: plan with the wrong drawing revision → fixed → approved by another person → new version
-// obsoletes it; certificate recorded by store and verified by QC; inspection with live pass/fail and a photo; PASS
-// released by a QC lead (not the inspector); FAIL → NCR → return to supplier; finished goods held until QC → rework
-// → re-inspection → release → delivery; trace from a heat and from a job; lot quarantine blocks issues, NCR for
-// quarantined stock → scrap, release back to รอตรวจ; read-only viewer; many lots; phone width.
+// obsoletes it; certificate recorded by store and verified by QC (a photo of it previewed in this tab); inspection with
+// live pass/fail and a photo; PASS released by a QC lead (not the inspector); FAIL → NCR → return to supplier; finished
+// goods held until QC → rework → re-inspection → release → delivery; trace from a heat and from a job; lot quarantine
+// blocks issues, NCR for quarantined stock → scrap, release back to รอตรวจ; use as is (QC lead only, with conditions);
+// read-only viewer; many lots; phone width.
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import fs from 'node:fs';
@@ -327,8 +328,13 @@ await step('lots: QC verifies the certificate (not the person who entered it)', 
   await page.click('#lot-cert-btn');
   await dlgOpen();
   await page.fill('#cert-no', 'MTC-P5-002');
+  // demo mode: the photo of the certificate is shrunk by ctx.uploadFile and shown in this tab; the record keeps its name
+  await page.setInputFiles('#cert-file', { name: 'p5-cert.png', mimeType: 'image/png', buffer: PNG });
   await dlgSubmit();
   await dlgClosed();
+  await waitState((s) => { const c = s.tables.lots['P5-PLATE|P5-H2'].cert; return c.no === 'MTC-P5-002' && c.file === 'p5-cert.png' && c.enteredBy === 'P5QC'; }, null, 'ใบรับรอง H2 เก็บชื่อไฟล์');
+  await page.waitForSelector('#lot-cert-preview img');
+  assert((await page.getAttribute('#lot-cert-preview img', 'src')).indexOf('data:image/jpeg;base64,') === 0, 'รูปใบรับรองต้องเป็นรูปย่อในหน้าต่างนี้');
   await page.waitForSelector('#lot-verify-btn');
   assert(await page.locator('#lot-verify-btn').isDisabled(), 'ผู้บันทึกใบรับรองต้องตรวจเองไม่ได้');
   await waitIn('#lot-detail', 'คุณเป็นผู้บันทึกใบรับรองนี้');
@@ -618,6 +624,59 @@ await step('lot quarantine blocks every issue; NCR for quarantined stock → scr
   await waitIn('#lot-detail', 'ปลดกักกันล่าสุด');
 });
 
+await step('NCR use as is: only a QC lead who did not inspect, with conditions', async () => {
+  await must('doc.post', { type: 'FR', job: 'P5-JOB-3', lines: [{ code: 'P5-FG', qty: 1, wh: 'P5W', bin: 'P5-02' }] }, 'P5STORE');
+  await asUser('P5QC');
+  await go('inspections');
+  await page.click('#main button[data-act="tab"][data-arg="queue"]');
+  await clickInRow('#qc-queue tbody tr', 'P5-FG', 'button[data-act="startIns"]');
+  await page.waitForSelector('#ins-form form[data-form="ins"]');
+  await typeLive('#ins-res-C1', '1515');
+  await page.check('input[name="res[C2]"][value="ผ่าน"]');
+  await waitIn('#ins-judge-C1', 'ไม่ผ่าน');
+  await page.click('#ins-form button[type="submit"]');
+  await dlgOpen();
+  await dlgSubmit();
+  await waitState((s) => Object.values(s.tables.inspections).some((i) => i.code === 'P5-FG' && i.jobNo === 'P5-JOB-3' && i.result === 'FAIL'), null, 'FG งาน 3 ไม่ผ่าน');
+  ids.ncr4 = await state((s) => Object.values(s.tables.inspections).find((i) => i.code === 'P5-FG' && i.jobNo === 'P5-JOB-3').ncrNo);
+  assert(await qtyOf({ code: 'P5-FG', wh: 'P5W', bin: 'P5-02', status: 'QUARANTINE' }) === 1, 'ของที่ไม่ผ่านต้องกักกัน 1');
+  // engineering may decide NCRs but not accept them as they are
+  await asUser('P5ENG');
+  await go('ncrs');
+  await page.click('#main button[data-act="tab"][data-arg="open"]');
+  await clickInRow('#ncr-list tbody tr', ids.ncr4);
+  await page.click('#ncr-decide-btn');
+  await dlgOpen();
+  assert(await page.locator('#dlg input[name="disposition"][value="USE_AS_IS"]').isDisabled(), 'วิศวกรรมต้องเลือกยอมรับแบบมีเงื่อนไขไม่ได้');
+  await waitIn('#dlg', 'เลือกไม่ได้: ต้องเป็นหัวหน้า QC');
+  assert(await page.locator('#dlg input[name="disposition"][value="SCRAP"]').isEnabled(), 'วิศวกรรมต้องเลือกตัดทิ้งได้');
+  await page.click('#dlg .dlg-f .btn-ghost');
+  await dlgClosed();
+  // a QC lead who did not inspect: conditions are required
+  await asUser('P5LEAD');
+  await page.waitForSelector('#ncr-decide-btn');
+  await page.click('#ncr-decide-btn');
+  await dlgOpen();
+  await page.check('#dlg input[name="disposition"][value="USE_AS_IS"]');
+  await page.fill('#disp-reason', 'เกินเกณฑ์ 5 มม. ลูกค้ายอมรับ');
+  await dlgSubmit();
+  await dlgError('ต้องระบุเงื่อนไข');
+  await page.fill('#disp-cond', 'ใช้กับรถลูกค้ารายนี้เท่านั้น ' + EVIL);
+  await dlgSubmit();
+  await dlgClosed();
+  await waitState((s, R, no) => { const n = s.tables.ncrs[no]; return n.disposition === 'USE_AS_IS' && n.dispositionBy === 'P5LEAD' && n.docType === 'QS' && n.conditions.indexOf('ใช้กับรถลูกค้ารายนี้') === 0; }, ids.ncr4, 'ยอมรับแบบมีเงื่อนไข');
+  assert(await qtyOf({ code: 'P5-FG', wh: 'P5W', bin: 'P5-02', status: 'AVAILABLE' }) === 1, 'ยอมรับแบบมีเงื่อนไขแล้วของต้องใช้ได้ 1');
+  const doc = await state((s, R, no) => s.tables.ncrs[no].docNo, ids.ncr4);
+  await waitIn('#ncr-detail', doc);
+  await waitIn('#ncr-detail', 'ใช้กับรถลูกค้ารายนี้เท่านั้น');
+  assert(await page.locator('#main img[src="x"]').count() === 0, 'เงื่อนไขต้องแสดงเป็นตัวอักษร');
+  await page.click('#ncr-close-btn');
+  await dlgOpen();
+  await dlgSubmit();
+  await dlgClosed();
+  await waitState((s, R, no) => s.tables.ncrs[no].status === 'CLOSED', ids.ncr4, 'ปิด NCR ยอมรับแบบมีเงื่อนไข');
+});
+
 await step('viewer sees no action buttons', async () => {
   await asUser('P5VIEW');
   await go('lots');
@@ -662,6 +721,13 @@ await step('phone width: nothing wider than the screen', async () => {
   await clickInRow('#lots-list tbody tr', 'P5-H1');
   await page.waitForSelector('#lot-detail');
   await noOverflow('lots detail');
+  await page.click('#lot-cert-btn');
+  await dlgOpen();
+  const card = await page.evaluate(() => { const r = document.querySelector('#dlg .dlg-card').getBoundingClientRect(); return { l: r.left, r: r.right, w: window.innerWidth }; });
+  assert(card.l >= 0 && card.r <= card.w + 1, 'หน้าต่างใบรับรองต้องอยู่ในจอโทรศัพท์ ' + JSON.stringify(card));
+  await noOverflow('certificate dialog');
+  await page.click('#dlg .dlg-f .btn-ghost');
+  await dlgClosed();
   await page.click('#main button[data-act="tab"][data-arg="trace"]');
   await page.waitForSelector('#trace-head');
   await noOverflow('lots trace');

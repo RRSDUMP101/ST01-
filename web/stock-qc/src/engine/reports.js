@@ -109,7 +109,8 @@
       ['rollbackPlan', 'text', 'แผนย้อนกลับ'], ['phases', 'list', 'Phase ที่ต้องผ่าน UAT'],
       ['status', 'enum', 'สถานะ', 'PROPOSED/APPROVED/REJECTED/ROLLED_BACK'], ['proposedBy', 'text', 'ผู้เสนอ'],
       ['proposedAt', 'datetime', 'เสนอเมื่อ'], ['approvedBy', 'text', 'ผู้อนุมัติ'], ['approvedAt', 'datetime', 'อนุมัติเมื่อ'],
-      ['readiness', 'json', 'ผลตรวจความพร้อมตอนอนุมัติ'], ['rejectedBy', 'text', 'ผู้ไม่อนุมัติ'], ['rejectedAt', 'datetime', 'ไม่อนุมัติเมื่อ'],
+      ['readiness', 'json', 'ผลตรวจความพร้อมตอนอนุมัติ'],
+      ['added', 'json', 'ขอบเขตที่แผนนี้เพิ่มเข้าทดลอง {groups, warehouses} (ย้อนกลับถอดเฉพาะส่วนนี้)'], ['rejectedBy', 'text', 'ผู้ไม่อนุมัติ'], ['rejectedAt', 'datetime', 'ไม่อนุมัติเมื่อ'],
       ['rejectReason', 'text', 'เหตุผลไม่อนุมัติ'], ['rolledBackBy', 'text', 'ผู้สั่งย้อนกลับ'], ['rolledBackAt', 'datetime', 'ย้อนกลับเมื่อ'],
       ['rollbackReason', 'text', 'เหตุผลย้อนกลับ'], HIST],
   });
@@ -159,10 +160,14 @@
   };
   const PHASE_TITLE = { 0: 'ข้อมูลหลักและกติกา', 1: 'รับ–จ่าย–โอนตามคลัง', 2: 'ใบงานและการจอง', 3: 'กระทบยอด Express และตรวจนับ',
     4: 'จัดซื้อและเติมสต็อก', 5: 'QC ล็อตและ NCR', 6: 'ทดลองใช้งานจริง รายงาน และขยายผล' };
+  /** Automated test file per criterion (default: the phase's file; Phase 0 master data lives in phase1). */
+  const AUTO_FILE = { 'P0-3': 'tests/phase6.test.mjs' }; // backup replay / restore test (verifyBackup)
   const UAT_CRITERIA = [];
   for (const ph of Object.keys(CRITERIA_TEXT)) {
-    CRITERIA_TEXT[ph].forEach((text, i) => UAT_CRITERIA.push({ id: `P${ph}-${i + 1}`, phase: Number(ph), criterion: text,
-      auto: `tests/phase${Number(ph) <= 1 ? 1 : ph}.test.mjs` }));
+    CRITERIA_TEXT[ph].forEach((text, i) => {
+      const id = `P${ph}-${i + 1}`;
+      UAT_CRITERIA.push({ id, phase: Number(ph), criterion: text, auto: AUTO_FILE[id] || `tests/phase${Number(ph) <= 1 ? 1 : ph}.test.mjs` });
+    });
   }
   Object.freeze(UAT_CRITERIA);
 
@@ -219,6 +224,103 @@
     ['INTEGRITY', 'ตรวจยอดไม่ผ่าน', 'ยอดคงเหลือไม่ตรงประวัติ/มีของกักกันหลุด/เอกสารซ้ำ', 'ดูผลตรวจยอดประจำวัน แก้ปัญหาและบันทึกเป็นปัญหาร้ายแรงก่อน', 'หัวหน้าสโตร์ + บัญชี'],
     ['NOT_READY', 'ยังไม่พร้อมขยายผล', 'ยังขาดเงื่อนไขก่อนขยาย (ผู้รับผิดชอบ แผนย้อนกลับ ผลกู้ข้อมูล UAT การยอมรับ การอบรม)', 'ดูรายการความพร้อมของแผนขยายผล', 'เจ้าของโครงการ'],
     ['HEAD_MISMATCH', 'ไฟล์สำรองไม่ตรงระบบ', 'ลายนิ้วมือ commit สุดท้ายไม่ตรงกับระบบที่ลำดับเดียวกัน', 'สำรองใหม่แล้วทดสอบกู้อีกครั้ง', 'บัญชี/ผู้ดูแลระบบ'],
+    ['DATA_MISMATCH', 'ข้อมูลที่กู้ได้ไม่ตรงระบบ', 'กู้ถึงลำดับเดียวกันแต่ลายนิ้วมือข้อมูลไม่เท่ากับระบบจริง', 'บันทึกเป็นผลไม่ผ่าน แจ้งผู้ดูแลระบบ แล้วสำรอง/ทดสอบกู้ใหม่', 'บัญชี/ผู้ดูแลระบบ'],
+    // ---- Phase 2 ใบงาน/จอง/เบิก (planning) and the Sales Office bridge (sales) ----
+    ['BAD_DATE', 'วันที่ไม่ถูกต้อง', 'วันที่ไม่ใช่รูปแบบ YYYY-MM-DD หรือไม่มีวันนั้นจริง', 'เลือกวันที่ใหม่', 'ผู้บันทึก'],
+    ['BAD_INPUT', 'ข้อมูลขัดกัน', 'ระบุข้อมูลสองแบบที่ใช้ร่วมกันไม่ได้ (เช่น ทั้ง BOM และรายการเอง) หรือใช้ใบจองกับเอกสารที่ไม่ใช่ใบเบิก/ส่งมอบ', 'เลือกอย่างใดอย่างหนึ่งตามข้อความที่ระบบแจ้ง', 'ผู้บันทึก'],
+    ['BELOW_FINISHED', 'ต่ำกว่าที่ผลิตเสร็จ', 'ตั้งจำนวนผลิตเองต่ำกว่ายอดที่บันทึกผลิตเสร็จแล้ว', 'ตั้งไม่ต่ำกว่ายอดผลิตเสร็จ', 'วางแผน'],
+    ['BELOW_ISSUED', 'ต่ำกว่าที่เบิกแล้ว', 'ลดยอดจองต่ำกว่าที่เบิกไปแล้ว', 'ลดได้ไม่ต่ำกว่ายอดเบิก หรือคืนของ (RT) ก่อน', 'วางแผน'],
+    ['BELOW_RECEIVED', 'ต่ำกว่าที่รับเข้าแล้ว', 'ยอดผลิตเสร็จต่ำกว่าที่รับเข้าคลัง (FR) แล้ว', 'ยกเลิกใบรับ FR ที่เกินก่อน แล้วแก้ยอด', 'วางแผน + สโตร์'],
+    ['BOM_CHANGED', 'BOM เปลี่ยนฉบับ', 'ฉบับ BOM ที่อนุมัติตอนนี้ไม่ใช่ฉบับที่ใบงานใช้', 'ให้วางแผนตรวจใบงานกับ BOM ฉบับใหม่ก่อนหยิบ/เบิก', 'วางแผน + วิศวกรรม'],
+    ['BOM_NOT_APPROVED', 'BOM ยังไม่อนุมัติ', 'BOM ฉบับที่เลือกยังเป็นร่างหรือเลิกใช้แล้ว', 'ใช้ฉบับที่อนุมัติ หรือให้วิศวกรรมอนุมัติฉบับนี้', 'วิศวกรรม'],
+    ['NO_BOM', 'ยังไม่มี BOM ที่อนุมัติ', 'สินค้าที่ผลิตยังไม่มี BOM ฉบับที่อนุมัติ', 'ให้วิศวกรรมอนุมัติ BOM หรือสร้างใบงานแบบระบุรายการชิ้นส่วนเอง', 'วิศวกรรม'],
+    ['FR_OVER', 'รับเข้าเกินที่ผลิตเสร็จ', 'จำนวนรับสินค้าจากการผลิต (FR) เกินยอดผลิตเสร็จที่รอรับของใบงาน', 'บันทึกผลิตเสร็จก่อน แล้วรับตามจำนวนที่เหลือ', 'ผลิต + สโตร์'],
+    ['ISSUED_NOT_RETURNED', 'ยังมีของเบิกค้าง', 'ปิด/ยกเลิกใบงานขณะที่ยังมีของที่เบิกไปและยังไม่คืน', 'คืนของเหลือ (RT) ก่อน หรือยกเลิกแบบบังคับพร้อมเหตุผล', 'วางแผน + สโตร์'],
+    ['JOB_CLOSED', 'ใบงานปิดแล้ว', 'ใบงานเสร็จ/ส่งมอบ/ยกเลิกแล้ว ทำรายการนี้ไม่ได้', 'ตรวจเลขใบงาน; งานใหม่ให้เปิดใบงานใหม่', 'วางแผน'],
+    ['JOB_MISMATCH', 'งานไม่ตรงกัน', 'งานของบรรทัดหรือเอกสารอ้างอิงไม่ตรงกับงานของเอกสารนี้', 'แก้เลขงานให้ตรงกัน หรือแยกเอกสาร', 'ผู้บันทึก'],
+    ['NOT_IN_JOB', 'ไม่อยู่ในใบงาน', 'สินค้านี้ไม่อยู่ในรายการที่ใบงานต้องใช้', 'ตรวจรหัส หรือให้วางแผนเพิ่มในใบงาน', 'วางแผน'],
+    ['NOT_MADE', 'ไม่ได้ตั้งให้ผลิตเอง', 'บรรทัดนี้ไม่ได้ตั้งจำนวนผลิตเองในใบงาน', 'ให้วางแผนตั้งจำนวนผลิตเองก่อน', 'วางแผน'],
+    ['OVER_MAKE', 'ผลิตเสร็จเกินแผน', 'ยอดผลิตเสร็จรวมเกินจำนวนที่ตั้งให้ผลิต', 'ตรวจยอดที่บันทึกแล้ว หรือให้วางแผนเพิ่มจำนวนผลิต', 'ผลิต + วางแผน'],
+    ['OVER_NEED', 'เกินความต้องการของงาน', 'จำนวนผลิตเอง/จองเกินที่งานต้องใช้ หรือจอง/เบิกครบแล้ว', 'ตรวจยอดต้องใช้ของใบงาน', 'วางแผน'],
+    ['OVER_PICK', 'หยิบเกินยอดจอง', 'จำนวนหยิบรวมเกินยอดคงเหลือของใบจอง', 'หยิบตามยอดจองที่เหลือ หรือให้วางแผนเพิ่มการจอง', 'สโตร์ + วางแผน'],
+    ['OWN_PRODUCT', 'เบิกสินค้าของงานตัวเอง', 'เบิกสินค้าที่ใบงานนี้ผลิตเข้าใบงานเดียวกัน', 'ตรวจรหัสและเลขงาน', 'สโตร์'],
+    ['PARTLY_ISSUED', 'เบิกไปบางส่วนแล้ว', 'ใบจองที่เบิกไปแล้วย้ายคลังไม่ได้', 'ปล่อยส่วนที่เหลือแล้วจองใหม่ที่คลังที่ต้องการ', 'วางแผน'],
+    ['RETURNED', 'มีการคืนแล้ว', 'ยกเลิกเอกสารที่มีใบคืน (RT/RV) ตามมาแล้ว', 'ยกเลิกใบคืนก่อน แล้วจึงยกเลิกเอกสารนี้', 'หัวหน้าสโตร์'],
+    ['RT_OVER', 'คืนเกินที่เบิก', 'จำนวนคืนของเหลือ (RT) เกินที่ใบงานเบิกไป', 'ตรวจจำนวนคืนและเลขใบงาน', 'สโตร์'],
+    ['WRONG_ITEM', 'สแกนผิดชิ้น', 'รหัสที่สแกน/ในบรรทัดไม่ใช่สินค้าของใบจอง', 'หยิบชิ้นให้ตรงใบจองแล้วสแกนใหม่', 'สโตร์'],
+    ['WRONG_JOB', 'ใบจองของงานอื่น', 'ใบจองที่อ้างเป็นของใบงานอื่น', 'เลือกใบจองของงานนี้ หรือระบุงานในเอกสาร', 'สโตร์'],
+    ['WRONG_SIDE', 'ข้างไม่ตรง', 'ข้างที่สแกน (L/R) ไม่ตรงกับสินค้า', 'หยิบชิ้นข้างที่ถูกต้องแล้วสแกนใหม่', 'สโตร์'],
+    ['WRONG_WH', 'คลังไม่ตรงใบจอง', 'เบิกจากคลังที่ไม่ใช่คลังของใบจอง', 'เบิกจากคลังที่จองไว้ หรือให้วางแผนจองใหม่', 'สโตร์'],
+    ['BAD_COMMAND', 'คำสั่งจาก Sales Office ผิดรูปแบบ', 'ข้อมูล SO ที่ส่งมาขาดหรือผิดรูปแบบ', 'ให้ผู้ดูแลตรวจข้อมูลฝั่ง Sales Office แล้วส่งใหม่', 'ผู้ดูแลระบบ'],
+    ['BRIDGE_ONLY', 'รับจากตัวเชื่อมเท่านั้น', 'ใบงานจาก SO สร้างเองในหน้านี้ไม่ได้', 'รอคำสั่งจาก Sales Office หรือใช้หน้าใบงานปกติสำหรับงานภายใน', 'วางแผน'],
+    ['HAS_RESERVATIONS', 'มีของจองอยู่', 'เปลี่ยน BOM ของใบงานที่ยังมีการจอง', 'ปล่อยการจองก่อน แล้วผูก BOM ใหม่', 'วางแผน'],
+    ['JOB_STARTED', 'งานเริ่มแล้ว', 'ใบงานเริ่มเบิก/ผลิตแล้ว เปลี่ยน BOM ไม่ได้', 'ตรวจผลกระทบและคืนของก่อน', 'วางแผน + วิศวกรรม'],
+    ['MAPPING_CONFLICT', 'เลขใบงานชนกัน', 'เลขใบงาน/งานผลิตนี้ผูกกับ SO อื่นแล้ว', 'ไม่รับคำสั่ง – ให้ผู้ดูแลตรวจการจับคู่ SO (ไม่จับคู่จากชื่อ ค-10)', 'ผู้ดูแลระบบ'],
+    ['NOT_SALES', 'ไม่ใช่ใบงานจาก Sales Office', 'ใบงานนี้สร้างภายใน ไม่ได้มาจาก SO', 'ใช้หน้าใบงานปกติ', 'วางแผน'],
+    ['OLDER_VERSION', 'คำสั่งฉบับเก่าหรือซ้ำ', 'มีคำสั่งฉบับใหม่กว่าหรือฉบับเดียวกันแล้ว', 'ไม่ต้องทำซ้ำ – ตรวจฉบับล่าสุดใน Sales Office', 'ผู้ดูแลระบบ'],
+    ['PAYLOAD_HASH', 'ข้อมูล SO ไม่ตรงลายนิ้วมือ', 'ลายนิ้วมือข้อมูลไม่ตรงกับข้อมูลที่ได้รับ (ข้อมูลอาจถูกแก้ระหว่างทาง)', 'ไม่รับคำสั่ง – ให้ผู้ดูแลส่งใหม่จากต้นทาง', 'ผู้ดูแลระบบ'],
+    // ---- Phase 3 กระทบยอด Express / ตรวจนับ (reconcile) ----
+    ['ALREADY_ADJUSTED', 'ปรับยอดไปแล้ว', 'รายการนี้ปรับยอดไปแล้วในใบปรับยอดของรอบนี้', 'ยกเลิกใบปรับยอดนั้นก่อนถ้าจะตัดสินใหม่', 'บัญชี + หัวหน้าสโตร์'],
+    ['AMBIGUOUS_WH', 'รหัสคลัง Express ซ้ำ', 'รหัสคลัง Express หนึ่งรหัสผูกกับหลายคลัง', 'แก้รหัสคลัง Express ในหน้าคลังให้ไม่ซ้ำ', 'บัญชี + ข้อมูลหลัก'],
+    ['BAD_HASH', 'ลายนิ้วมือไฟล์ผิดรูปแบบ', 'ลายนิ้วมือไฟล์ไม่ใช่ SHA-256', 'เลือกไฟล์ใหม่ให้ระบบคำนวณลายนิ้วมือ', 'บัญชี'],
+    ['BAD_KEY', 'ไม่พบบรรทัดนับ', 'อ้างบรรทัดที่ไม่มีในรอบนับ', 'เปิดรอบนับใหม่แล้วเลือกบรรทัดจากรายการ', 'หัวหน้าสโตร์'],
+    ['BAD_TIME', 'เวลาของไฟล์ไม่ถูกต้อง', 'ไม่ได้ระบุวันเวลาของข้อมูลพร้อมเขตเวลา', 'ระบุวันเวลาที่ดึงข้อมูลจาก Express เช่น 2026-11-01T17:00:00+07:00', 'บัญชี'],
+    ['COUNT_FREEZE', 'อยู่ระหว่างตรวจนับ', 'ตำแหน่งนี้อยู่ในรอบนับแบบหยุดเคลื่อนไหว', 'รอให้อนุมัติหรือยกเลิกรอบนับก่อน แล้วทำรายการใหม่', 'สโตร์ + หัวหน้าสโตร์'],
+    ['DUPLICATE_FILE', 'ไฟล์นี้นำเข้าแล้ว', 'ไฟล์เดียวกัน (ลายนิ้วมือเดียวกัน) นำเข้าไปแล้ว', 'ไม่ต้องนำเข้าซ้ำ – เปิดรอบเดิม', 'บัญชี'],
+    ['DUPLICATE_LINE', 'บรรทัดซ้ำ', 'รายการเดียวกันอยู่หลายบรรทัด', 'รวมเป็นบรรทัดเดียว', 'ผู้บันทึก'],
+    ['FUTURE_TIME', 'เวลาอยู่ในอนาคต', 'เวลาของข้อมูลในไฟล์อยู่หลังเวลาปัจจุบัน', 'ตรวจวันเวลาของไฟล์ Express', 'บัญชี'],
+    ['HAS_ADJUSTMENTS', 'มีใบปรับยอดแล้ว', 'รอบนี้ปรับยอดไปแล้ว ทิ้งรอบไม่ได้', 'ยกเลิกใบปรับยอดของรอบก่อน', 'บัญชี + หัวหน้าสโตร์'],
+    ['HELD_STOCK', 'อาจนับรวมของรอตรวจ', 'นับได้มากกว่าระบบที่ตำแหน่งที่มีของรอตรวจ/กักกัน/รอแก้ไข', 'ตรวจว่าไม่ได้นับของเหล่านั้นเป็นของใช้ได้ แล้วยืนยันรับทราบ', 'หัวหน้าสโตร์ + QC'],
+    ['MOVED_DURING_COUNT', 'มีเคลื่อนไหวหลังนับ', 'มีรายการรับ/จ่ายหลังเวลานับ', 'ตรวจรายการแล้วยืนยันรับทราบ – ระบบปรับเฉพาะผลต่าง ณ เวลานับ', 'หัวหน้าสโตร์'],
+    ['NEEDS_RECOUNT', 'ต้องนับซ้ำ', 'ผลต่างเกินเกณฑ์ ต้องให้อีกคนนับซ้ำ', 'ให้ผู้นับอีกคนนับบรรทัดที่ระบบชี้', 'สโตร์'],
+    ['NOT_IN_BATCH', 'ไม่อยู่ในรอบนำเข้า', 'แถว/รายการที่อ้างไม่มีในผลกระทบยอดของรอบนี้', 'เลือกจากรายการในรอบ', 'บัญชี'],
+    ['NO_ROWS', 'ไฟล์ไม่มีข้อมูล', 'ไฟล์ที่นำเข้าไม่มีแถวข้อมูล', 'ตรวจไฟล์ที่ส่งออกจาก Express', 'บัญชี'],
+    ['NO_WAREHOUSE', 'ไม่พบคลังของแถว', 'รหัสคลังในไฟล์ไม่ตรงกับคลังในระบบ และไม่มีคลังเริ่มต้นที่ใช้ได้', 'ตั้งรหัสคลัง Express ในหน้าคลังก่อน', 'บัญชี + ข้อมูลหลัก'],
+    ['OLD_SNAPSHOT', 'ไฟล์เก่ากว่ารอบล่าสุด', 'ไฟล์ Express นี้เก่ากว่ารอบที่ปิดล่าสุด', 'ใช้ไฟล์ใหม่ หรือยืนยันการใช้ไฟล์เก่าพร้อมเหตุผล', 'บัญชี'],
+    ['OUT_OF_SCOPE', 'นอกขอบเขตรอบนับ', 'ช่องเก็บไม่อยู่ในรอบนับนี้', 'นับในรอบของช่องนั้น หรือเปิดรอบนับใหม่', 'สโตร์'],
+    ['OVERLAP', 'รอบนับซ้อนกัน', 'พื้นที่นี้อยู่ในรอบนับอื่นที่ยังเปิด (นับซ้อนจะปรับยอดซ้ำ)', 'ปิดหรือยกเลิกรอบเดิมก่อน', 'หัวหน้าสโตร์'],
+    ['OWNERSHIP', 'ยอดจำนวนเป็นของระบบ RRS', 'ไฟล์ Express ใช้กระทบยอดเท่านั้น ไม่เขียนทับยอด (ค-1)', 'อธิบายผลต่าง หรือเปิดรอบตรวจนับ', 'บัญชี + สโตร์'],
+    ['REASON_REQUIRED', 'ต้องระบุเหตุผล', 'ยอดต่างต้องมีคำอธิบาย', 'กรอกเหตุผล/คำอธิบายผลต่างและผู้รับผิดชอบ', 'หัวหน้าสโตร์'],
+    ['STALE_ROW', 'ไฟล์ล้าสมัยสำหรับรายการนี้', 'รายการถูกตรวจนับ/ปรับยอดหลังเวลาของไฟล์แล้ว', 'ใช้ไฟล์ที่ใหม่กว่า', 'บัญชี'],
+    ['TOO_LARGE', 'ข้อมูลใหญ่เกินหนึ่งรายการ', 'จำนวนแถว/รายการเกินที่บันทึกได้ในครั้งเดียว', 'แยกไฟล์ตามคลัง หรือนำเข้าเฉพาะกลุ่มทดลอง', 'บัญชี'],
+    ['UNRESOLVED', 'ยังมียอดต่างค้าง', 'มีรายการยอดต่างที่ยังไม่ได้อธิบาย/ปรับยอด', 'อธิบายหรือปรับยอดทุกรายการก่อนปิดรอบ', 'บัญชี + สโตร์'],
+    // ---- Phase 4 จัดซื้อ (purchasing) ----
+    ['HAS_RECEIPTS', 'รับของแล้ว', 'PO ที่รับของแล้วยกเลิกทั้งใบไม่ได้', 'ยกเลิกยอดค้างรายบรรทัด หรือปิดยอดค้างแทน', 'จัดซื้อ'],
+    ['NOT_OWNER', 'ไม่ใช่ผู้ขอ', 'ร่างใบขอซื้อแก้/ส่งขออนุมัติได้เฉพาะผู้ขอ', 'ให้ผู้ขอทำ หรือสร้างใบขอซื้อใหม่', 'ผู้ขอซื้อ'],
+    ['OVER_RECEIVE', 'รับเกิน PO', 'จำนวนรับเกินยอดค้างรับรวมส่วนเผื่อที่อนุญาต', 'รับเท่ายอดค้าง หรือขออนุมัติรับเกินจากหัวหน้าจัดซื้อ', 'สโตร์ + หัวหน้าจัดซื้อ'],
+    ['PRICE_REQUIRED', 'ยังไม่มีราคา', 'สินค้านี้ยังไม่มีราคากับผู้ขาย ระบบไม่เดาราคา', 'ระบุราคาในใบสั่งซื้อหรือทะเบียนผู้ขาย', 'จัดซื้อ'],
+    ['PR_DONE', 'ใบขอซื้อครบแล้ว', 'บรรทัดใบขอซื้อออก PO ครบหรือยกเลิกส่วนที่เหลือแล้ว', 'ต้องการเพิ่มให้ขอซื้อใหม่', 'จัดซื้อ'],
+    ['PR_NOT_APPROVED', 'ใบขอซื้อยังไม่อนุมัติ', 'ออก PO ได้เฉพาะใบขอซื้อที่อนุมัติแล้ว', 'ส่งขออนุมัติและรอผู้อนุมัติ', 'จัดซื้อ + ผู้อนุมัติ'],
+    ['RETURN_OVER', 'คืนผู้ขายเกินที่รับ', 'จำนวนคืนเกินกว่าที่รับจากใบรับนั้น', 'ตรวจจำนวนและเลขใบรับ', 'สโตร์ + จัดซื้อ'],
+    ['UNIT_CONFLICT', 'ตัวคูณหน่วยขัดกัน', 'หน่วยซื้อมีตัวคูณในทะเบียนไม่ตรงกับที่กรอก ระบบไม่เลือกให้', 'แก้ที่ทะเบียนหน่วยก่อน (ค-4)', 'ข้อมูลหลัก + จัดซื้อ'],
+    // ---- Phase 5 QC ล็อต NCR (quality) ----
+    ['ALREADY', 'ทำไปแล้ว', 'ล็อตนี้ถูกกักกันอยู่แล้ว', 'ไม่ต้องทำซ้ำ – ตรวจสถานะล็อต', 'QC'],
+    ['ALREADY_VERIFIED', 'ใบรับรองตรวจแล้ว', 'ใบรับรองวัสดุนี้ตรวจแล้ว', 'ไม่ต้องตรวจซ้ำ', 'QC'],
+    ['CERT_NOT_VERIFIED', 'ใบรับรองยังไม่ตรวจ', 'สินค้าที่ต้องมีใบรับรองวัสดุยังไม่มีใบที่ตรวจแล้ว', 'แนบและตรวจใบรับรองวัสดุก่อนใช้/ปล่อย', 'QC'],
+    ['MISSING_RESULT', 'ผลตรวจไม่ครบ', 'ยังไม่บันทึกผลบางหัวข้อของแผนตรวจ', 'บันทึกผลทุกหัวข้อ', 'QC'],
+    ['NCR_CLOSED', 'NCR ปิดแล้ว', 'เอกสารผลการตัดสินของ NCR ที่ปิดแล้วยกเลิกไม่ได้', 'ตรวจประวัติ NCR – ถ้าต้องแก้ให้เปิด NCR ใหม่', 'หัวหน้า QC'],
+    ['NCR_HELD', 'ของถูก NCR กันไว้', 'ของที่ตำแหน่งนี้เป็นของ NCR ที่รอตัดสิน/รอตรวจซ้ำ', 'ตัดสิน NCR หรือตรวจซ้ำก่อน', 'QC'],
+    ['NCR_REQUIRED', 'ต้องผ่าน NCR', 'ของกักกัน/รอแก้ไขตัดทิ้งหรือคืนผู้ขายได้ผ่านการตัดสิน NCR เท่านั้น', 'เปิด NCR แล้วให้ผู้มีสิทธิ์ตัดสิน', 'QC'],
+    ['NOT_DISPOSITIONED', 'NCR ยังไม่ตัดสิน', 'ปิด NCR ที่ยังไม่ได้ตัดสิน', 'ตัดสิน NCR ก่อนปิด', 'หัวหน้า QC'],
+    ['NOT_FAIL', 'ผลเดิมผ่านแล้ว', 'ตรวจซ้ำต้องอ้างผลตรวจที่ไม่ผ่าน', 'เลือกผลตรวจที่ไม่ผ่านหรือ NCR', 'QC'],
+    ['NOT_IN_DOC', 'ไม่มีในเอกสาร', 'เอกสารอ้างอิงไม่มีสินค้า/ล็อต/ตำแหน่งนี้', 'ตรวจเลขเอกสารและล็อต', 'QC'],
+    ['NOT_QUARANTINED', 'ล็อตไม่ได้ถูกกักกัน', 'ปลดกักกันล็อตที่ไม่ได้ถูกกักกัน', 'ตรวจสถานะล็อต', 'QC'],
+    ['NO_CERT', 'ไม่มีใบรับรอง', 'ยังไม่มีใบรับรองวัสดุให้ตรวจ', 'แนบใบรับรองจากผู้ขายก่อน', 'สโตร์ + QC'],
+    ['NO_CHANGE', 'ไม่มีอะไรเปลี่ยน', 'ข้อมูลที่ส่งเหมือนเดิม', 'ไม่ต้องบันทึกซ้ำ', 'ผู้บันทึก'],
+    ['NO_STOCK', 'ไม่มีของในคลัง', 'NCR นี้ไม่มีของในคลัง (พบระหว่างผลิต) จึงคืนผู้ขายไม่ได้', 'เลือกการตัดสินอื่น', 'หัวหน้า QC'],
+    ['PLAN_MISMATCH', 'แผนตรวจไม่ตรง', 'แผนตรวจเป็นของสินค้า/ขั้นตอนอื่น', 'เลือกแผนของสินค้าและขั้นตอนนี้', 'QC'],
+    ['PLAN_NOT_APPROVED', 'แผนตรวจยังไม่อนุมัติ', 'ใช้ได้เฉพาะแผนตรวจที่อนุมัติ', 'ให้ผู้มีสิทธิ์อนุมัติแผนตรวจ', 'หัวหน้า QC + วิศวกรรม'],
+    ['PLAN_REV_STALE', 'แผนตรวจอ้างแบบเก่า', 'แผนอ้างฉบับแบบที่ไม่ใช่ฉบับที่อนุมัติปัจจุบัน', 'อนุมัติแผนตรวจฉบับใหม่ก่อน', 'วิศวกรรม + หัวหน้า QC'],
+    ['QS_MANUAL', 'QS สร้างเองไม่ได้', 'เอกสารเปลี่ยนสถานะคุณภาพสร้างจากคำสั่ง QC เท่านั้น', 'ใช้คำสั่ง QC (ตรวจ/ปล่อย/กักกัน)', 'QC'],
+    ['QS_NO_CANCEL', 'ยกเลิก QS ตรงไม่ได้', 'การเปลี่ยนสถานะคุณภาพยกเลิกด้วยคำสั่งยกเลิกเอกสารไม่ได้', 'ใช้คำสั่ง QC (กักกัน/ตรวจซ้ำ) แทน', 'QC'],
+    ['REINSPECTION_PENDING', 'ยังตรวจซ้ำไม่ครบ', 'NCR แก้ไขงานแล้วต้องตรวจซ้ำครบจำนวนก่อนปิด', 'ตรวจซ้ำส่วนที่เหลือ', 'QC'],
+    ['REINSPECTION_REQUIRED', 'ต้องอ้างผลเดิม', 'ของรอแก้ไขต้องตรวจซ้ำโดยอ้างผลตรวจไม่ผ่านหรือ NCR เดิม', 'เลือกผลตรวจ/NCR เดิม', 'QC'],
+    ['REINSPECT_MISMATCH', 'ตรวจซ้ำไม่ตรงของเดิม', 'ผลเดิม/NCR เป็นของสินค้า ล็อต ขั้นตอน หรือตำแหน่งอื่น', 'ตรวจซ้ำของชิ้นเดียวกับผลเดิม', 'QC'],
+    ['REINSPECT_STATE', 'ยังตรวจซ้ำไม่ได้', 'NCR ยังไม่ได้ตัดสินให้แก้ไขงาน หรือของไม่ได้อยู่ในสถานะรอแก้ไข', 'ให้ตัดสิน NCR เป็นแก้ไขงานก่อน', 'หัวหน้า QC'],
+    ['REV_MISMATCH', 'ฉบับแบบไม่ตรง', 'แผน/การตรวจซ้ำอ้างฉบับแบบไม่ตรงกับที่ต้องใช้', 'ใช้แผนตามฉบับแบบที่อนุมัติ (ตรวจซ้ำใช้ฉบับเดิม)', 'QC + วิศวกรรม'],
+    ['STAGE_MISMATCH', 'ขั้นตอนตรวจไม่ตรง', 'เอกสารอ้างอิงต้องตรวจคนละขั้นตอน', 'เลือกขั้นตอนตามประเภทเอกสาร', 'QC'],
+    ['TOO_MANY', 'เกินจำนวนที่ให้', 'แนบรูปเกินจำนวนต่อผลตรวจ', 'เลือกรูปที่สำคัญ', 'QC'],
+    ['UNKNOWN_CHAR', 'ไม่พบหัวข้อตรวจ', 'หัวข้อที่บันทึกไม่มีในแผนตรวจ', 'เลือกหัวข้อจากแผน', 'QC'],
   ].map(([code, title, cause, action, who]) => ({ code, title, cause, action, who }));
   const GUIDE_BY_CODE = {};
   for (const g of ERROR_GUIDE) GUIDE_BY_CODE[g.code] = g;
@@ -747,8 +849,10 @@
 
   /**
    * Daily integrity check (ตรวจยอดประจำวัน): balances = Σ history; negative balances only with an approved
-   * exception; no QC_HOLD/QUARANTINE stock taken out except by QS/SC/RV (or by cancelling its own receipt); request
-   * ids (unique by construction); no document posted twice; cancelled documents fully reversed.
+   * exception; no QC_HOLD/QUARANTINE stock taken out except by QS/SC/RV (or by cancelling its own receipt); no stock of
+   * a QUARANTINED lot left usable/waiting outside quarantine (transit and bins under a freeze count are listed as
+   * waiting); every movement belongs to a posted document of its type; request ids (unique by construction); no
+   * document posted twice; cancelled documents fully reversed.
    */
   reports.dailyCheck = function dailyCheck(state) {
     const problems = [];
@@ -815,6 +919,47 @@
         problems.push(`เอกสาร ${docNo} ${why}`);
       }
     }
+    // every stock change belongs to a posted document of the same type (none missing, none still a draft)
+    const orphanMoves = [];
+    const orphanGroups = new Map();
+    for (const m of moves) {
+      const d = m.docNo ? docs[m.docNo] : null;
+      const why = !m.docNo ? 'ไม่มีเลขที่เอกสาร' : !d ? 'ไม่พบเอกสาร' : d.type !== m.docType ? `เลขที่นี้เป็นเอกสารประเภท ${d.type}`
+        : d.status === 'DRAFT' || d.status === 'WAIT_APPROVAL' ? 'เอกสารยังไม่ได้บันทึก' : '';
+      if (!why) continue;
+      orphanMoves.push({ id: m.id, seq: m.seq, docType: m.docType, docNo: m.docNo, code: m.code, wh: m.wh, bin: m.bin, lot: m.lot,
+        status: m.status, qty: m.qty, by: m.by, why });
+      const gk = `${m.docType || '?'} ${m.docNo || ''}|${why}`;
+      orphanGroups.set(gk, (orphanGroups.get(gk) || 0) + 1);
+    }
+    for (const [gk, n] of orphanGroups) {
+      const [doc, why] = gk.split('|');
+      problems.push(`${doc} เปลี่ยนยอด ${n} รายการโดยไม่มีเอกสารที่บันทึกแล้ว (${why})`);
+    }
+    // stock of a quarantined lot (lots.status QUARANTINED) still usable / waiting for QC outside quarantine = released
+    // without QC. Stock in transit lands in QUARANTINE when received; a bin under a freeze count is swept after approval.
+    const lots = tablesOf(state).lots || {};
+    const freezes = T(state, 'count_sessions').filter((s) => s.mode === 'freeze' && (s.status === 'OPEN' || s.status === 'SUBMITTED'));
+    const frozenBy = (b) => {
+      const s = freezes.find((x) => x.wh === b.wh && (!(x.bins || []).length || x.bins.indexOf(b.bin || '') >= 0));
+      return s ? s.id : '';
+    };
+    const lotQuarantineLeaks = [];
+    const lotQuarantineWaiting = [];
+    for (const b of T(state, 'balances')) {
+      if (!(b.qty > 0) || !b.lot || (b.status !== STATUS.AVAILABLE && b.status !== STATUS.QC_HOLD)) continue;
+      const lot = lots[b.code + '|' + b.lot];
+      if (!lot || lot.status !== 'QUARANTINED') continue;
+      const row = { key: RRS.balanceKey(b), code: b.code, wh: b.wh, bin: b.bin || '', lot: b.lot, status: b.status, qty: round(b.qty) };
+      const count = b.wh === TRANSIT ? '' : frozenBy(b);
+      if (b.wh === TRANSIT) lotQuarantineWaiting.push(Object.assign(row, { why: 'ระหว่างโอน – รับปลายทางแล้วเป็นของกักกัน' }));
+      else if (count) lotQuarantineWaiting.push(Object.assign(row, { count, why: `อยู่ระหว่างตรวจนับ ${count} – กักกันซ้ำหลังอนุมัติรอบนับ` }));
+      else {
+        lotQuarantineLeaks.push(row);
+        problems.push(`${b.code} ล็อต ${b.lot} ถูกกักกัน แต่ยังมี ${round(b.qty)} ที่ ${locText(b)} สถานะ${STATUS_LABEL[b.status]} (ต้องอยู่ในสถานะกักกัน)`);
+      }
+    }
+    lotQuarantineWaiting.sort((a, b) => (a.wh === TRANSIT) - (b.wh === TRANSIT) || a.key.localeCompare(b.key));
     // cancelled documents must be fully reversed
     const cancelNotReversed = [];
     for (const d of Object.values(docs)) {
@@ -830,13 +975,16 @@
       { id: 'balances', label: 'ยอดคงเหลือ = ผลรวมประวัติเคลื่อนไหว', ok: !balanceDiffs.length, count: balanceDiffs.length },
       { id: 'negative', label: 'ยอดติดลบต้องมีเอกสารอนุมัติข้อยกเว้น', ok: negatives.every((n) => n.approved), count: negatives.length },
       { id: 'quarantine', label: 'ของรอตรวจ/กักกันไม่ถูกนำออกนอกขั้นตอน QC', ok: !quarantineLeaks.length, count: quarantineLeaks.length },
+      { id: 'lotQuarantine', label: 'ของล็อตที่ถูกกักกันอยู่ในสถานะกักกันทั้งหมด (ยกเว้นระหว่างโอน/ระหว่างนับแบบหยุด)', ok: !lotQuarantineLeaks.length,
+        count: lotQuarantineLeaks.length },
+      { id: 'documents', label: 'ทุกการเปลี่ยนยอดมีเอกสารที่บันทึกแล้วรองรับ', ok: !orphanMoves.length, count: orphanMoves.length },
       { id: 'requests', label: 'คำขอเดิมส่งซ้ำไม่ถูกบันทึกซ้ำ (จำนวนรหัสคำขอที่รู้จัก)', ok: true, count: requests.count },
       { id: 'double', label: 'ไม่มีเอกสารตัดยอดซ้ำ', ok: !doublePosted.length, count: doublePosted.length },
       { id: 'cancel', label: 'เอกสารที่ยกเลิกกลับยอดครบ', ok: !cancelNotReversed.length, count: cancelNotReversed.length },
     ];
     for (const c of checks) c.okLabel = c.ok ? 'ผ่าน' : 'ไม่ผ่าน';
     return { ok: problems.length === 0, seq: (state && state.seq) || 0, head: (state && state.head) || '', checks, problems, balanceDiffs,
-      negatives, quarantineLeaks, requests, doublePosted, cancelNotReversed,
+      negatives, quarantineLeaks, lotQuarantineLeaks, lotQuarantineWaiting, orphanMoves, requests, doublePosted, cancelNotReversed,
       cols: [C('label', 'หัวข้อตรวจ'), C('okLabel', 'ผล'), N('count', 'จำนวน')] };
   };
 
@@ -895,7 +1043,8 @@
   /**
    * Offcuts to use before a new plate: AVAILABLE, same material family and thickness, big enough (rotation allowed),
    * smallest area first, with waste %. Offcuts of a quarantined source lot are never offered (listed in `blocked`).
-   * q: {material, thickness, width, length, wh?, code? (material/thickness from the item)}.
+   * q: {material, thickness, width, length, wh?, code? (material/thickness from the item), job? (its own reservations count
+   * as free for the fallback plates)}.
    */
   reports.suggestOffcuts = function suggestOffcuts(state, q) {
     q = q || {};
@@ -934,12 +1083,18 @@
         wastePct: round(((area - need) / area) * 100, 1) });
     }
     rows.sort((a, b) => a.area - b.area || a.id.localeCompare(b.id));
-    // new plates of the same material family and thickness that are in stock (fallback)
+    // new plates of the same material family and thickness that are in stock (fallback); stock kept for other jobs by
+    // open reservations is not free (q.job: that job's own reservations are)
     const plates = [];
     const free = {};
     for (const b of T(state, 'balances')) {
       if (b.status !== STATUS.AVAILABLE || b.wh === TRANSIT || (q.wh && b.wh !== q.wh) || lotQuarantined(get, b.code, b.lot)) continue;
       free[b.code] = (free[b.code] || 0) + b.qty;
+    }
+    const kept = {};
+    for (const r of T(state, 'reservations')) {
+      if ((r.status !== 'OPEN' && r.status !== 'PARTIAL') || (q.wh && r.wh !== q.wh) || (q.job && r.jobNo === q.job)) continue;
+      kept[r.code] = round((kept[r.code] || 0) + pos0((Number(r.qty) || 0) - (Number(r.issued) || 0)));
     }
     for (const p of T(state, 'items')) {
       if (p.active === false || familyOf(pol, p.material) !== fam || !sameThk(p.thickness, thickness)) continue;
@@ -948,12 +1103,17 @@
       const known = p.width > 0 && p.length > 0;
       const f = known ? fitOf(p.width, p.length, width, length) : { fit: true, rotated: false };
       if (!f.fit) continue;
-      plates.push({ code: p.id, name: p.name, available: round(avail), unit: p.baseUnit, width: p.width || null, length: p.length || null,
+      const reserved = round(Math.min(avail, kept[p.id] || 0));
+      plates.push({ code: p.id, name: p.name, available: round(avail), reserved, free: round(avail - reserved), unit: p.baseUnit,
+        width: p.width || null, length: p.length || null,
         wastePct: known ? round(((p.width * p.length - need) / (p.width * p.length)) * 100, 1) : null });
     }
-    plates.sort((a, b) => (a.wastePct == null ? 101 : a.wastePct) - (b.wastePct == null ? 101 : b.wastePct) || a.code.localeCompare(b.code));
+    plates.sort((a, b) => (b.free > 0) - (a.free > 0) || (a.wastePct == null ? 101 : a.wastePct) - (b.wastePct == null ? 101 : b.wastePct)
+      || a.code.localeCompare(b.code));
+    const usable = plates.find((p) => p.free > 0);
     const advice = rows.length ? `ใช้เศษ ${rows[0].id} ก่อนแผ่นใหม่ (เศษทิ้ง ${rows[0].wastePct}%)`
-      : plates.length ? `ไม่มีเศษที่ใช้ได้ – ใช้แผ่นใหม่ ${plates[0].code}` : 'ไม่มีเศษหรือแผ่นใหม่ที่ใช้ได้ในคลัง';
+      : usable ? `ไม่มีเศษที่ใช้ได้ – ใช้แผ่นใหม่ ${usable.code}`
+        : plates.length ? 'ไม่มีเศษที่ใช้ได้ – แผ่นใหม่ที่มีถูกจองให้งานอื่นหมด ให้วางแผนตรวจการจอง' : 'ไม่มีเศษหรือแผ่นใหม่ที่ใช้ได้ในคลัง';
     return { rows, plates, blocked, cols, problems, advice, family: fam, totals: { found: rows.length, plates: plates.length, blocked: blocked.length } };
   };
 
@@ -1017,6 +1177,15 @@
       const it = tx.item(p.code);
       if (!it) return tx.error('NOT_FOUND', `ไม่พบรหัสแผ่นต้นทาง ${p.code || '(ว่าง)'}`, { field: 'code' });
       if (it.active === false) return tx.error('INACTIVE', `${it.id} ปิดใช้งานแล้ว`, { field: 'code' });
+      // a leftover recorded later under the piece it was cut from: that piece must be cut already (USED), else the same
+      // steel would be in the register twice – an uncut piece is cut with offcut.use {remaining}
+      const parentId = util.normCode(p.parent);
+      const parent = parentId ? tx.get('offcuts', parentId) : null;
+      if (parentId && !parent) return tx.error('NOT_FOUND', `ไม่พบเศษต้นทาง ${parentId}`, { field: 'parent' });
+      if (parent && parent.status !== 'USED') {
+        return tx.error('BAD_STATE', `เศษต้นทาง ${parent.id} ${OFFCUT_STATUS[parent.status]} – บันทึกเศษที่เหลือได้เฉพาะจากเศษที่ใช้ตัดแล้ว (ยังไม่ตัด: ใช้คำสั่งใช้เศษพร้อมระบุเศษที่เหลือ)`, { field: 'parent' });
+      }
+      if (parent && parent.code !== it.id) return tx.error('BAD_VALUE', `เศษต้นทาง ${parent.id} มาจากแผ่น ${parent.code} ไม่ใช่ ${it.id}`, { field: 'code' });
       // material / thickness come from the plate's master data; a different value typed in is refused (never trusted)
       const itMat = util.trim(it.material);
       const material = util.trim(p.material) || itMat;
@@ -1036,14 +1205,36 @@
       if (it.width > 0 && it.length > 0 && !fitOf(it.width, it.length, d.width, d.length).fit) {
         return tx.error('TOO_BIG', `เศษ ${d.width} × ${d.length} มม. ใหญ่กว่าแผ่น ${it.id} (${it.width} × ${it.length} มม.)`, { field: 'width' });
       }
+      if (parent) {
+        if (util.ckey(parent.material) !== util.ckey(material) || !sameThk(parent.thickness, thickness)) {
+          return tx.error('BAD_VALUE', `วัสดุ/ความหนาไม่ตรงกับเศษต้นทาง ${parent.id} (${parent.material} หนา ${parent.thickness} มม.)`, { field: 'material' });
+        }
+        if (!fitOf(parent.width, parent.length, d.width, d.length).fit) {
+          return tx.error('TOO_BIG', `เศษ ${d.width} × ${d.length} มม. ใหญ่กว่าเศษต้นทาง ${parent.id} (${parent.width} × ${parent.length} มม.)`, { field: 'width' });
+        }
+        const kids = (parent.children || []).map((c) => tx.get('offcuts', c)).filter((c) => c && c.status !== 'VOID');
+        const total = round(util.sum(kids, (c) => c.area || 0) + d.area, 3);
+        if (total >= parent.area) {
+          return tx.error('TOO_MUCH_AREA', `พื้นที่เศษที่เหลือรวม ${total} ตร.มม. ไม่น้อยกว่าเศษต้นทาง ${parent.id} ${parent.area} ตร.มม.`, { field: 'width' });
+        }
+      }
       const loc = checkLoc(tx, p.wh, p.bin);
       if (!loc) return;
-      const sourceLot = util.trim(p.sourceLot);
+      const sourceLot = util.trim(p.sourceLot) || (parent ? parent.sourceLot || '' : '');
+      if (parent && sourceLot !== (parent.sourceLot || '')) {
+        return tx.error('BAD_VALUE', `ล็อตต้นทาง ${sourceLot} ไม่ตรงกับเศษต้นทาง ${parent.id} (${parent.sourceLot || 'ไม่ติดตามล็อต'})`, { field: 'sourceLot' });
+      }
       if (it.trackLot && it.trackLot !== 'none') {
         if (!sourceLot) return tx.error('LOT_REQUIRED', `${it.id} ติดตาม${RRS.master.TRACK[it.trackLot]} – ระบุล็อตต้นทางของเศษ`, { field: 'sourceLot' });
         if (/[|\u0000-\u001f]/.test(sourceLot)) return tx.error('BAD_LOT', 'เลขล็อตต้นทางห้ามมี | หรืออักขระควบคุม', { field: 'sourceLot' });
-        if (!tx.get('lots', it.id + '|' + sourceLot) && !tx.all('movements', (m) => m.code === it.id && m.lot === sourceLot).length) {
+        const lotMoves = tx.all('movements', (m) => m.code === it.id && m.lot === sourceLot);
+        if (!tx.get('lots', it.id + '|' + sourceLot) && !lotMoves.length) {
           return tx.error('LOT_UNKNOWN', `ไม่พบ ${RRS.master.TRACK[it.trackLot]} ${sourceLot} ในประวัติของ ${it.id}`, { field: 'sourceLot' });
+        }
+        // a plate of this lot can only have been cut after it was usable (issued from AVAILABLE): a lot that has only
+        // ever waited for QC / been quarantined cannot have left-over pieces that are ready to use
+        if (lotMoves.length && !lotMoves.some((m) => m.status === STATUS.AVAILABLE)) {
+          return tx.error('BAD_STATUS', `${RRS.master.TRACK[it.trackLot]} ${sourceLot} ของ ${it.id} ยังไม่เคยผ่าน QC (มีแต่ของรอตรวจ/กักกัน) – แผ่นล็อตนี้ยังเบิกไปตัดไม่ได้ บันทึกเป็นเศษพร้อมใช้ไม่ได้`, { field: 'sourceLot' });
         }
         if (lotQuarantined((t, k) => tx.get(t, k), it.id, sourceLot)) {
           return tx.error('LOT_QUARANTINED', `ล็อต ${sourceLot} ของ ${it.id} ถูกกักกัน – บันทึกเศษเป็นของพร้อมใช้ไม่ได้`, { field: 'sourceLot' });
@@ -1053,12 +1244,16 @@
       }
       const id = tx.nextId('OC');
       const row = hist({ id, code: it.id, material, family: familyOf(tx.settings().policies, material), thickness, width: d.width,
-        length: d.length, area: d.area, wh: loc.wh, bin: loc.bin, sourceLot, status: 'AVAILABLE', parent: util.normCode(p.parent) || '',
-        children: [], createdFrom: util.trim(p.createdFrom), usedFor: '', remark: util.trim(p.remark), createdBy: tx.userId,
+        length: d.length, area: d.area, wh: loc.wh, bin: loc.bin, sourceLot, status: 'AVAILABLE', parent: parent ? parent.id : '',
+        children: [], createdFrom: util.trim(p.createdFrom) || (parent ? `เศษเหลือหลังตัด ${parent.id}` : ''), usedFor: '',
+        remark: util.trim(p.remark), createdBy: tx.userId,
         createdAt: tx.now, usedBy: '', usedAt: '', scrappedBy: '', scrappedAt: '', scrapReason: '', voidedBy: '', voidedAt: '', voidReason: '' },
       tx, 'ADD', `${material} หนา ${thickness} ${d.width} × ${d.length} ที่ ${locText(loc)}`);
-      if (row.parent && !tx.get('offcuts', row.parent)) return tx.error('NOT_FOUND', `ไม่พบเศษต้นทาง ${row.parent}`, { field: 'parent' });
       tx.put('offcuts', id, row);
+      if (parent) {
+        tx.put('offcuts', parent.id, hist(Object.assign({}, parent, { children: (parent.children || []).concat([id]) }), tx, 'ADD_CHILD',
+          `บันทึกเศษที่เหลือภายหลัง ${id} ${d.width} × ${d.length}`));
+      }
       tx.result.id = id;
       tx.summary = `บันทึกเศษ ${id} ${it.id} ${d.width} × ${d.length} มม. ที่ ${locText(loc)}`;
     },
@@ -1188,7 +1383,7 @@
       const evidence = util.trim(p.evidence);
       const note = util.trim(p.note);
       if (status === 'PASS' && evidence.length < 3) return tx.error('REQUIRED', 'ผลผ่านต้องมีหลักฐาน (เลขเอกสาร ไฟล์ หรือชื่อการทดสอบ)', { field: 'evidence' });
-      if (status === 'FAIL' && !note && !evidence) return tx.error('REQUIRED', 'ผลไม่ผ่านต้องบอกสิ่งที่พบ', { field: 'note' });
+      if (status === 'FAIL' && !note) return tx.error('REQUIRED', 'ผลไม่ผ่านต้องบอกสิ่งที่พบในหมายเหตุ', { field: 'note' });
       const history = prev ? (prev.history || []).concat([{ status: prev.status, tester: prev.tester, testedOn: prev.testedOn,
         evidence: prev.evidence, note: prev.note, at: prev.at }]) : [];
       tx.put('uat', id, { id, phase, criterion, status, tester: tx.userId, testedOn: tx.date, evidence, note, at: tx.now, history });
@@ -1249,7 +1444,10 @@
       const topic = util.trim(p.topic);
       if (!topic) return tx.error('REQUIRED', 'ระบุหัวข้อ/คู่มือที่อบรม', { field: 'topic' });
       const trainedOn = util.trim(p.trainedOn).slice(0, 10) || tx.date;
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(trainedOn) || !isFinite(Date.parse(trainedOn))) return tx.error('BAD_VALUE', 'วันที่อบรมไม่ถูกต้อง (YYYY-MM-DD)', { field: 'trainedOn' });
+      // a real calendar day (Date.parse accepts 2026-02-30 as 2 March)
+      const realDay = /^\d{4}-\d{2}-\d{2}$/.test(trainedOn) && isFinite(Date.parse(trainedOn))
+        && new Date(Date.parse(trainedOn)).toISOString().slice(0, 10) === trainedOn;
+      if (!realDay) return tx.error('BAD_VALUE', 'วันที่อบรมไม่ถูกต้อง (YYYY-MM-DD วันที่มีจริง)', { field: 'trainedOn' });
       if (trainedOn > tx.date) return tx.error('BAD_VALUE', 'วันที่อบรมอยู่ในอนาคต', { field: 'trainedOn' });
       const id = tx.nextId('TN');
       tx.put('trainings', id, { id, userId, role, topic, trainedOn, trainer: tx.userId, note: util.trim(p.note), at: tx.now });
@@ -1326,9 +1524,12 @@
     if (list && !Array.isArray(list) && Array.isArray(list.commits)) list = list.commits;
     const state = RRS.core.createState();
     if (!Array.isArray(list)) {
-      return { ok: false, commits: 0, head: state.head, problems: ['ไฟล์สำรองไม่มีรายการ commit (อ่านไม่ได้หรือผิดรูปแบบ)'], tables: {}, balanceDiffs: [] };
+      return { ok: false, commits: 0, head: state.head, problems: ['ไฟล์สำรองไม่มีรายการ commit (อ่านไม่ได้หรือผิดรูปแบบ)'], tables: {}, balanceDiffs: [],
+        duplicateRequests: [] };
     }
     if (!list.length) problems.push('ไฟล์สำรองว่าง ไม่มี commit');
+    const requestSeq = {};
+    const duplicateRequests = [];
     for (let i = 0; i < list.length; i++) {
       const c = list[i];
       if (!c || typeof c !== 'object' || !Array.isArray(c.effects)) {
@@ -1347,6 +1548,13 @@
         problems.push(`commit ลำดับ ${c.seq} ลายนิ้วมือไม่ตรง – ข้อมูลถูกแก้ไข`);
         break;
       }
+      // the same request applied twice (a server that skipped the request-id check): restorable, but stock moved twice
+      if (c.id) {
+        if (requestSeq[c.id]) {
+          duplicateRequests.push({ id: c.id, seqs: [requestSeq[c.id], c.seq], kind: c.kind });
+          problems.push(`รหัสคำขอ ${c.id} ถูกบันทึกซ้ำ (ลำดับ ${requestSeq[c.id]} และ ${c.seq}) – คำขอเดิมถูกทำสองครั้ง`);
+        } else requestSeq[c.id] = c.seq;
+      }
       try {
         RRS.core.reduce(state, c);
       } catch (e) {
@@ -1364,7 +1572,7 @@
     }
     const tables = {};
     for (const t of Object.keys(state.tables).sort()) tables[t] = Object.keys(state.tables[t]).length;
-    const out = { ok: problems.length === 0, commits: state.seq, head: state.head, fingerprint: fp, problems, tables, balanceDiffs };
+    const out = { ok: problems.length === 0, commits: state.seq, head: state.head, fingerprint: fp, problems, tables, balanceDiffs, duplicateRequests };
     if (opts.keepState) out.state = state;
     return out;
   };
@@ -1378,15 +1586,23 @@
       if (!HEX64.test(head)) return tx.error('BAD_VALUE', 'ลายนิ้วมือ commit สุดท้ายต้องเป็น SHA-256 (64 ตัวอักษร)', { field: 'head' });
       const result = String(p.result || '').toUpperCase();
       if (result !== 'OK' && result !== 'FAIL') return tx.error('BAD_VALUE', 'ผลต้องเป็น OK หรือ FAIL', { field: 'result' });
+      if (p.problems != null && p.problems !== '' && !Array.isArray(p.problems)) {
+        return tx.error('BAD_VALUE', 'รายการปัญหาต้องเป็นรายการ (list) ของข้อความ', { field: 'problems' });
+      }
       const problems = Array.isArray(p.problems) ? p.problems.map(util.trim).filter(Boolean).slice(0, 20) : [];
       if (result === 'OK' && problems.length) return tx.error('BAD_VALUE', 'ผล OK แต่มีรายการปัญหา – ตรวจผลอีกครั้ง', { field: 'result' });
+      if (result === 'OK' && commits < 1) return tx.error('BAD_VALUE', 'ไฟล์สำรองว่าง (0 commit) – บันทึกเป็นกู้ข้อมูลสำเร็จไม่ได้', { field: 'commits' });
       const note = util.trim(p.note);
       if (result === 'FAIL' && !note && !problems.length) return tx.error('REQUIRED', 'ผลไม่ผ่านต้องระบุปัญหาที่พบ', { field: 'note' });
-      if (commits > tx.state.seq) return tx.error('HEAD_MISMATCH', `ไฟล์สำรองมี ${commits} commit มากกว่าระบบ (${tx.state.seq}) – เป็นข้อมูลของระบบอื่น`, { field: 'commits' });
-      if (commits === tx.state.seq && head !== tx.state.head) return tx.error('HEAD_MISMATCH', 'ลายนิ้วมือ commit สุดท้ายไม่ตรงกับระบบที่ลำดับเดียวกัน', { field: 'head' });
-      if (commits < tx.state.seq) tx.warn(`ไฟล์สำรองถึงลำดับ ${commits} ระบบอยู่ที่ ${tx.state.seq} – ตรวจลายนิ้วมือย้อนหลังไม่ได้`);
       const fingerprint = String(p.fingerprint || '').toLowerCase();
       if (fingerprint && !HEX64.test(fingerprint)) return tx.error('BAD_VALUE', 'ลายนิ้วมือข้อมูลต้องเป็น SHA-256', { field: 'fingerprint' });
+      if (commits > tx.state.seq) return tx.error('HEAD_MISMATCH', `ไฟล์สำรองมี ${commits} commit มากกว่าระบบ (${tx.state.seq}) – เป็นข้อมูลของระบบอื่น`, { field: 'commits' });
+      if (commits === tx.state.seq && head !== tx.state.head) return tx.error('HEAD_MISMATCH', 'ลายนิ้วมือ commit สุดท้ายไม่ตรงกับระบบที่ลำดับเดียวกัน', { field: 'head' });
+      // same seq and head: the restored data must be the live data (verifyBackup gives the fingerprint of what it rebuilt)
+      if (result === 'OK' && fingerprint && commits === tx.state.seq && fingerprint !== reports.fingerprint(tx.state)) {
+        return tx.error('DATA_MISMATCH', 'ข้อมูลที่กู้ได้ (ลายนิ้วมือข้อมูล) ไม่ตรงกับระบบที่ลำดับเดียวกัน – บันทึกเป็นกู้สำเร็จไม่ได้', { field: 'fingerprint' });
+      }
+      if (commits < tx.state.seq) tx.warn(`ไฟล์สำรองถึงลำดับ ${commits} ระบบอยู่ที่ ${tx.state.seq} – ตรวจลายนิ้วมือย้อนหลังไม่ได้`);
       const id = tx.nextId('BT');
       tx.put('backup_tests', id, { id, at: tx.now, by: tx.userId, commits, head, result, fingerprint, problems, note });
       tx.result.id = id;
@@ -1395,10 +1611,22 @@
   });
 
   const EXTRA_LABEL = 'ข้อมูลอื่นนอกพจนานุกรม (JSON)';
+  /** Columns whose values stay text: a sheet must not turn '01', '01-0003' or the movement id '12.10' into a number/date. */
+  const TYPED_COLUMN = { number: true, bool: true, date: true, datetime: true };
+  /** Text a sheet (USER_ENTERED) would read as a number, date, time, percent, currency or TRUE/FALSE. */
+  function looksTyped(v) {
+    const s = v.trim();
+    if (/^(true|false)$/i.test(s)) return true;
+    if (/^[-+]?[$฿€£]?\d+(\.\d+)?e[-+]?\d+$/i.test(s)) return true;
+    return /\d/.test(s) && /^[-+$฿€£]?[\d.,:/\s%-]+$/.test(s);
+  }
   function cellOf(v, type, safeText) {
     if (v === null || v === undefined) return '';
     if (typeof v === 'object' || type === 'json' || type === 'list') return JSON.stringify(v);
-    if (typeof v === 'string' && safeText && (/^[=+@\t\r]/.test(v) || /^-[^\d.]/.test(v))) return "'" + v;
+    if (typeof v === 'string' && safeText) {
+      if (/^[=+@\t\r]/.test(v) || /^-[^\d.]/.test(v)) return "'" + v;
+      if (!TYPED_COLUMN[type] && looksTyped(v)) return "'" + v;
+    }
     return v;
   }
   const keyCmp = (a, b) => (/^\d+$/.test(a) && /^\d+$/.test(b) ? Number(a) - Number(b) : a < b ? -1 : a > b ? 1 : 0);
@@ -1507,12 +1735,15 @@
     if (!r) tx.error('NOT_FOUND', `ไม่พบแผนขยายผล ${id || '(ว่าง)'}`, { field: 'id' });
     return r;
   }
+  /** Scope a rollout put into the pilot itself (what it added at approval; older rows: its whole scope). */
+  const addedBy = (r) => r.added || { groups: r.groups || [], warehouses: r.warehouses || [] };
+  /** Pilot scope that other APPROVED rollouts are responsible for. */
   function pilotScope(tx, exceptId) {
     const groups = new Set();
     const whs = new Set();
     for (const r of tx.all('rollouts', (x) => x.status === 'APPROVED' && x.id !== exceptId)) {
-      for (const g of r.groups || []) groups.add(g);
-      for (const w of r.warehouses || []) whs.add(w);
+      for (const g of addedBy(r).groups || []) groups.add(g);
+      for (const w of addedBy(r).warehouses || []) whs.add(w);
     }
     return { groups, whs };
   }
@@ -1520,6 +1751,10 @@
   define('rollout.propose', {
     label: 'เสนอแผนขยายผล', perm: 'rollout.propose',
     prepare(tx, p) {
+      const LIST_FIELDS = { groups: 'กลุ่มสินค้า', warehouses: 'คลัง', team: 'ผู้ใช้งานในขอบเขต (ทีม)', phases: 'Phase ที่ต้องผ่าน UAT' };
+      for (const f of Object.keys(LIST_FIELDS)) {
+        if (p[f] != null && p[f] !== '' && !Array.isArray(p[f])) return tx.error('BAD_VALUE', `${LIST_FIELDS[f]} ต้องเป็นรายการ (list)`, { field: f });
+      }
       const groups = uniq((p.groups || []).map(util.trim).filter(Boolean));
       const warehouses = uniq((p.warehouses || []).map(util.normCode).filter(Boolean));
       if (!groups.length && !warehouses.length) return tx.error('REQUIRED', 'ระบุกลุ่มสินค้าหรือคลังที่จะขยาย', { field: 'groups' });
@@ -1543,7 +1778,7 @@
       const id = tx.nextId('RO');
       const title = util.trim(p.title) || `ขยายผล ${groups.concat(warehouses).join(', ')}`;
       tx.put('rollouts', id, hist({ id, title, groups, warehouses, owner, team, rollbackPlan, phases, status: 'PROPOSED',
-        proposedBy: tx.userId, proposedAt: tx.now, approvedBy: '', approvedAt: '', readiness: null, rejectedBy: '', rejectedAt: '',
+        proposedBy: tx.userId, proposedAt: tx.now, approvedBy: '', approvedAt: '', readiness: null, added: null, rejectedBy: '', rejectedAt: '',
         rejectReason: '', rolledBackBy: '', rolledBackAt: '', rollbackReason: '' }, tx, 'PROPOSE', title));
       tx.result.id = id;
       tx.summary = `เสนอแผนขยายผล ${id}: ${title}`;
@@ -1561,12 +1796,18 @@
       if (!ready.ok) return tx.error('NOT_READY', `ยังไม่พร้อมขยายผล: ${ready.problems.join(' | ')}`);
       const st = util.clone(tx.settings());
       st.pilot = Object.assign({ groups: [], warehouses: [], note: '' }, st.pilot || {});
+      // scope already in the pilot that no other rollout put there (the agreed pilot) stays when this one is rolled back
+      const cover = pilotScope(tx, r.id);
+      const own = (list, x, covered) => list.indexOf(x) >= 0 && !covered.has(x);
+      const added = { groups: (r.groups || []).filter((g) => !own(st.pilot.groups || [], g, cover.groups)),
+        warehouses: (r.warehouses || []).filter((w) => !own(st.pilot.warehouses || [], w, cover.whs)) };
       st.pilot.groups = uniq((st.pilot.groups || []).concat(r.groups || []));
       st.pilot.warehouses = uniq((st.pilot.warehouses || []).concat(r.warehouses || []));
       st.id = 'main';
       tx.put('settings', 'main', st);
-      tx.put('rollouts', r.id, hist(Object.assign({}, r, { status: 'APPROVED', approvedBy: tx.userId, approvedAt: tx.now,
-        readiness: ready.checks.map((c) => ({ id: c.id, ok: c.ok, detail: c.detail })) }), tx, 'APPROVE', ''));
+      tx.put('rollouts', r.id, hist(Object.assign({}, r, { status: 'APPROVED', approvedBy: tx.userId, approvedAt: tx.now, added,
+        readiness: ready.checks.map((c) => ({ id: c.id, ok: c.ok, detail: c.detail })) }), tx, 'APPROVE',
+      `เพิ่มเข้าทดลอง: ${added.groups.concat(added.warehouses).join(', ') || '(อยู่ในขอบเขตทดลองแล้ว)'}`));
       tx.summary = `อนุมัติขยายผล ${r.id}`;
     },
   });
@@ -1583,7 +1824,10 @@
       tx.summary = `ไม่อนุมัติแผนขยายผล ${r.id}`;
     },
   });
-  /** Roll an approved rollout back: its scope leaves settings.pilot unless another approved rollout covers it. */
+  /**
+   * Roll an approved rollout back: the scope it added leaves settings.pilot unless another approved rollout covers it;
+   * the pilot scope that was there before the approval stays.
+   */
   define('rollout.rollback', {
     label: 'ย้อนกลับการขยายผล', perm: 'rollout.approve',
     prepare(tx, p) {
@@ -1593,10 +1837,11 @@
       const reason = util.trim(p.reason);
       if (!reason) return tx.error('REQUIRED', 'ระบุเหตุผลการย้อนกลับ', { field: 'reason' });
       const keep = pilotScope(tx, r.id);
+      const mine = addedBy(r);
       const st = util.clone(tx.settings());
       st.pilot = Object.assign({ groups: [], warehouses: [], note: '' }, st.pilot || {});
-      st.pilot.groups = (st.pilot.groups || []).filter((g) => (r.groups || []).indexOf(g) < 0 || keep.groups.has(g));
-      st.pilot.warehouses = (st.pilot.warehouses || []).filter((w) => (r.warehouses || []).indexOf(w) < 0 || keep.whs.has(w));
+      st.pilot.groups = (st.pilot.groups || []).filter((g) => (mine.groups || []).indexOf(g) < 0 || keep.groups.has(g));
+      st.pilot.warehouses = (st.pilot.warehouses || []).filter((w) => (mine.warehouses || []).indexOf(w) < 0 || keep.whs.has(w));
       st.id = 'main';
       tx.put('settings', 'main', st);
       tx.put('rollouts', r.id, hist(Object.assign({}, r, { status: 'ROLLED_BACK', rolledBackBy: tx.userId, rolledBackAt: tx.now, rollbackReason: reason }),

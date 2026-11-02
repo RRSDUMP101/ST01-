@@ -363,14 +363,29 @@
     const ready = mapped ? P.readiness(state, job.jobNo, { today: util.bkkDate(opts.now || new Date().toISOString()) }) : null;
     const byLine = {};
     for (const l of (ready && ready.lines) || []) byLine[l.line] = l;
-    const parts = mapped ? plan.map((l) => {
-      const r = byLine[l.line] || { reservedRemaining: 0, missing: 0 };
-      const required = round(l.required);
-      const covered = round((l.issued || 0) + (r.reservedRemaining || 0));
-      const shortage = cancelled || closed ? 0 : Math.min(required, pos0(r.missing));
-      return { partId: l.code, required, reserved: Math.min(required, pos0(covered)), shortage, unit: (items[l.code] || {}).baseUnit || '',
-        completed: Math.min(required, pos0(l.finished || 0)) };
-    }) : [];
+    // One part per code: Sales Office refuses the whole request when a partId repeats. sales.mapJob already merges a
+    // code's BOM lines; should a job still hold one code on two lines, they are reported as one part: reservations
+    // belong to job + code, so they are counted once, and whatever is not covered counts as short (never 'ready').
+    const groups = {};
+    const codes = [];
+    for (const l of mapped ? plan : []) {
+      if (!groups[l.code]) {
+        groups[l.code] = [];
+        codes.push(l.code);
+      }
+      groups[l.code].push(l);
+    }
+    const sumOf = (ls, f) => round(ls.reduce((s, l) => s + (Number(l[f]) || 0), 0));
+    const parts = codes.map((code) => {
+      const ls = groups[code];
+      const r = byLine[ls[0].line] || { reservedRemaining: 0, missing: 0 };
+      const required = sumOf(ls, 'required');
+      const reserved = Math.min(required, pos0(sumOf(ls, 'issued') + (r.reservedRemaining || 0)));
+      let shortage = 0;
+      if (!cancelled && !closed) shortage = ls.length === 1 ? Math.min(required, pos0(r.missing)) : round(required - reserved);
+      return { partId: code, required, reserved, shortage, unit: (items[code] || {}).baseUnit || '',
+        completed: Math.min(required, pos0(sumOf(ls, 'finished'))) };
+    });
     let materialStatus = 'unknown';
     if (mapped && !cancelled && parts.length) {
       if (parts.every((x) => x.reserved >= x.required && x.shortage === 0)) materialStatus = 'ready';

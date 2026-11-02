@@ -21,6 +21,23 @@
   const STATUS = { ORDER: ['ต้องสั่ง', 'bad'], COVERED: ['ขอซื้อไว้แล้ว', 'info'], OK: ['พอ', 'ok'], OFF: ['ปิดการแนะนำ', 'muted'] };
   const statusBadge = (s) => h.badge((STATUS[s] || [s])[0], (STATUS[s] || [])[1] || 'muted');
   const whoCan = (perm) => RRS.auth.rolesFor(perm).filter((r) => r !== 'admin').map((r) => RRS.auth.ROLES[r] || r).join(' / ');
+  /**
+   * ctx.set that also keeps a search typed less than 250 ms ago: its live update has not run yet, and without this the
+   * click would re-render the box empty and the late update would then wipe what the user typed into a form.
+   */
+  function set(ctx, patch) {
+    const p = Object.assign({}, patch);
+    for (const el of root.document.querySelectorAll('#main input[data-live][data-act]')) {
+      const k = el.dataset.act;
+      if (!(k in p) && (ctx.view[k] || '') !== el.value) p[k] = el.value;
+    }
+    ctx.set(p);
+  }
+  /** Live search box: re-render only when the text really changed (a click may already have kept it). */
+  const live = (key, extra) => (ctx, el) => {
+    if ((ctx.view[key] || '') === el.value) return;
+    ctx.set(Object.assign({ [key]: el.value }, extra || {}));
+  };
   /** Not ordering yet but close: at/below Min and already requested, or within a quarter of the Min–Max band above Min. */
   const isNear = (r) => r.status === 'COVERED' || (r.status === 'OK' && r.min > 0 && r.projected <= r.min + Math.max(1, (r.max - r.min) * 0.25));
 
@@ -133,7 +150,7 @@
     const jobsPage = ['jobs', 'job', 'production'].find((x) => RRS.ui.pages[x]);
     const jobRef = (jobNo) => (jobsPage ? h.link(h.code(jobNo), jobsPage, { sel: jobNo }) : h.code(jobNo));
     const tbl = h.table({
-      id: 'rp-late', scroll: true, dense: true, rows,
+      id: 'rp-late-tbl', scroll: true, dense: true, rows,
       empty: v.atRisk ? 'ไม่มี PO ที่เลยกำหนดหรือเข้าหลังวันต้องใช้ของงาน' : 'ไม่มีบรรทัด PO ที่เลยกำหนด',
       emptyText: 'เมื่อใบสั่งซื้อเลยกำหนดเข้าแล้วยังรับไม่ครบ จะขึ้นที่นี่พร้อมใบงานและการจองที่รอของนั้น – ฝ่ายจัดซื้อตามของหรือเลื่อนกำหนดเข้าได้ที่หน้า ขอซื้อ สั่งซื้อ และรับของ',
       rowCls: (l) => (l.jobs.some((j) => j.affected) ? 'row-bad' : ''),
@@ -147,7 +164,7 @@
         { label: 'การจองที่รอของ', render: (l) => (l.reservations.length ? t`${l.reservations.map((r) => t`<div>${h.code(r.jobNo)} ${r.wh} คงจอง ${n(r.remaining)}${r.needDate ? ` · ต้องใช้ ${h.fmt.date(r.needDate)}` : ''}</div>`)}` : dash) },
       ],
     });
-    return h.section('PO เลยกำหนดและงานที่กระทบ', tbl, {
+    return h.section('PO เลยกำหนดและงานที่กระทบ', t`<div id="rp-late">${tbl}</div>`, {
       id: 'rp-late-sec',
       sub: `บรรทัดใบสั่งซื้อที่เลยวันกำหนดเข้าแล้วยังรับไม่ครบ กับใบงานที่ยังต้องใช้ของนั้น · แผนเติมสต็อก${counted ? 'ยังนับ' : 'ไม่นับ'}ของจาก PO ที่เลยกำหนดเป็นของที่จะเข้า (นโยบาย)`,
       actions: h.field({ name: 'atRisk', label: 'รวม PO ที่ยังไม่เลยกำหนดแต่เข้าหลังวันต้องใช้ของงาน', type: 'checkbox', value: v.atRisk, act: 'atRisk', id: 'rp-atrisk' }),
@@ -227,30 +244,30 @@
       }
     },
     actions: {
-      f: (ctx, el) => ctx.set({ f: el.dataset.arg, limit: STEP }),
-      q: (ctx, el) => ctx.set({ q: el.value, limit: STEP }),
-      wh: (ctx, el) => ctx.set({ wh: el.value, picked: {}, limit: STEP, made: null }),
-      allWhy: (ctx, el) => ctx.set({ allWhy: el.checked, _st: keepScroll() }),
-      atRisk: (ctx, el) => ctx.set({ atRisk: el.checked }),
-      more: (ctx) => ctx.set({ limit: (ctx.view.limit || STEP) + STEP, _st: keepScroll() }),
+      f: (ctx, el) => set(ctx, { f: el.dataset.arg, limit: STEP }),
+      q: live('q', { limit: STEP }),
+      wh: (ctx, el) => set(ctx, { wh: el.value, picked: {}, limit: STEP, made: null }),
+      allWhy: (ctx, el) => set(ctx, { allWhy: el.checked, _st: keepScroll() }),
+      atRisk: (ctx, el) => set(ctx, { atRisk: el.checked }),
+      more: (ctx) => set(ctx, { limit: (ctx.view.limit || STEP) + STEP, _st: keepScroll() }),
       why(ctx, el) {
         const open = Object.assign({}, ctx.view.open || {});
-        if (ctx.view.allWhy) return ctx.set({ allWhy: false, open: {}, _st: keepScroll() });
+        if (ctx.view.allWhy) return set(ctx, { allWhy: false, open: {}, _st: keepScroll() });
         open[el.dataset.arg] = !open[el.dataset.arg];
-        ctx.set({ open, _st: keepScroll() });
+        set(ctx, { open, _st: keepScroll() });
       },
       pick(ctx, el) {
         const picked = Object.assign({}, ctx.view.picked || {});
         if (el.checked) picked[el.dataset.arg] = true;
         else delete picked[el.dataset.arg];
-        ctx.set({ picked, _st: keepScroll() });
+        set(ctx, { picked, _st: keepScroll() });
       },
       pickAll(ctx) {
         const picked = {};
         for (const r of filtered(ctx).byQ) if (r.status === 'ORDER') picked[r.code] = true;
-        ctx.set({ picked, _st: keepScroll() });
+        set(ctx, { picked, _st: keepScroll() });
       },
-      pickNone: (ctx) => ctx.set({ picked: {}, _st: keepScroll() }),
+      pickNone: (ctx) => set(ctx, { picked: {}, _st: keepScroll() }),
       async csv(ctx) {
         const { rows } = filtered(ctx);
         const v = ctx.view;
@@ -287,7 +304,7 @@
           onSubmit: (vals) => ctx.exec('pr.create', { draft: vals.mode === 'draft', remark: vals.remark, source: 'แผนเติมสต็อก',
             lines: (vals.lines || []).map((l) => ({ code: l.code, qty: l.qty, needDate: l.needDate, wh: l.wh, supplier: l.supplier, reason: l.reason })) },
           { quiet: true, done: (x) => `สร้างใบขอซื้อ ${x.result.prNo} แล้ว` }) });
-        if (r && r.ok) ctx.set({ picked: {}, made: { prNo: r.result.prNo, status: r.result.status } });
+        if (r && r.ok) set(ctx, { picked: {}, made: { prNo: r.result.prNo, status: r.result.status } });
       },
     },
   });

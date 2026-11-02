@@ -7,7 +7,8 @@
 //   Off unless SQ_DRIVE_BACKUP_ENABLED === 'true' and GOOGLE_DRIVE_CLIENT_ID, GOOGLE_DRIVE_CLIENT_SECRET,
 //   GOOGLE_DRIVE_REFRESH_TOKEN, SQ_DRIVE_BACKUP_FOLDER_ID are all set (manual runs too: off means nothing is sent).
 //   A run: lease (one running run at a time, renewed after every part) → token → root folder must be private, a folder,
-//   writable → head = newest commit → dated sub-folder → commits 1..head as JSONL parts ≤ 4 MB (one commit per line,
+//   writable (checked again, up the folder chain to the root, before every write) → head = newest commit → dated
+//   sub-folder → commits 1..head as JSONL parts ≤ 4 MB (one commit per line,
 //   the GET /api/commits format; every hash and prev link checked while reading) → manifest.json last (seq range, head
 //   hash, size + sha256 of each part). A folder without manifest.json is an incomplete backup.
 //   sq_backup_runs: one row per run (status running/ok/failed, error = a short code, never a provider body);
@@ -51,6 +52,7 @@ export const MESSAGES = {
   DESTINATION_NOT_FOLDER: 'ปลายทางใน Google Drive ไม่ใช่โฟลเดอร์',
   DESTINATION_NOT_PRIVATE: 'โฟลเดอร์สำรองแชร์ให้ผู้อื่นหรืออยู่ในไดรฟ์ที่แชร์ – หยุดเพื่อไม่ให้ข้อมูลรั่ว',
   DESTINATION_NOT_WRITABLE: 'เพิ่มไฟล์ในโฟลเดอร์สำรองไม่ได้',
+  DESTINATION_OUTSIDE_BACKUP_FOLDER: 'ปลายทางไม่ได้อยู่ในโฟลเดอร์สำรองที่ตั้งไว้ – ไม่เขียนไฟล์',
   FILE_ID_CONFLICT: 'ไฟล์ใน Google Drive ไม่ตรงกับที่ระบบส่ง',
   REMOTE_CHECKSUM_MISMATCH: 'ขนาดหรือลายนิ้วมือไฟล์ใน Google Drive ไม่ตรงกับข้อมูลที่ส่ง',
   COMMIT_NOT_CONFIRMED: 'ยืนยันไม่ได้ว่า Google Drive บันทึกไฟล์แล้ว',
@@ -114,6 +116,7 @@ function sameObject(f, input, kind) {
 
 /** Drive client for one run: access token from the refresh token, every call bounded (outbound.js). */
 function driveClient(env) {
+  const rootId = str(env, 'SQ_DRIVE_BACKUP_FOLDER_ID').trim();
   let token = '';
   let expires = 0;
   const pool = [];
@@ -167,6 +170,23 @@ function driveClient(env) {
     if (!f.capabilities || f.capabilities.canAddChildren !== true) throw fail('DESTINATION_NOT_WRITABLE');
     return f;
   }
+  /**
+   * Checked again right before every write, retries included (Sales Office validateDestination): the parent and each
+   * folder above it must still be a private, writable folder up to the backup root – sharing may change during a run.
+   */
+  async function validateDestination(parentId) {
+    let id = parentId;
+    const visited = new Set();
+    for (let depth = 0; depth < 8; depth++) {
+      if (visited.has(id)) break;
+      visited.add(id);
+      const folder = await validateFolder(id);
+      if (id === rootId) return;
+      if (!Array.isArray(folder.parents) || folder.parents.length !== 1) break;
+      id = folder.parents[0];
+    }
+    throw fail('DESTINATION_OUTSIDE_BACKUP_FOLDER');
+  }
   /** A Drive file id reserved before the create/upload, so a retry reuses it (409 = it is already there). */
   async function allocateId() {
     if (!pool.length) {
@@ -181,6 +201,7 @@ function driveClient(env) {
   }
   async function ensureFolder(input) {
     if (!validId(input.id) || !validId(input.parentId) || !input.name || input.name.length > 200) throw fail('INVALID_BACKUP_INPUT');
+    await validateDestination(input.parentId);
     const res = await request(`${API}/files?fields=id`, { method: 'POST', headers: { 'Content-Type': 'application/json; charset=UTF-8' },
       body: JSON.stringify({ id: input.id, name: input.name, mimeType: FOLDER_MIME, parents: [input.parentId],
         appProperties: { sqBackupRunId: input.runId, sqBackupKind: 'folder' } }) });
@@ -201,11 +222,16 @@ function driveClient(env) {
     }
     return { id: f.id, size: input.bytes.byteLength, sha256: input.sha256 };
   }
-  /** Multipart upload (one request per file, ≤ 5 MB) with the reserved id; a retry first looks the id up. */
+  /**
+   * Multipart upload (one request per file, ≤ 5 MB) with the reserved id. Every attempt first checks the destination
+   * again; a retry then looks the reserved id up (a stored file is checked, never sent twice). After the upload the
+   * file is read back and its size + sha256Checksum compared with the bytes sent (Sales Office uploadPart does the same).
+   */
   async function uploadFile(input) {
     let lastError = null;
     for (let attempt = 1; attempt <= UPLOAD_ATTEMPTS; attempt++) {
       try {
+        await validateDestination(input.parentId);
         if (attempt > 1) {
           const existing = await getFile(input.id);
           if (existing) return verifyUpload(existing, input);
@@ -230,7 +256,9 @@ function driveClient(env) {
         if (res.status < 200 || res.status >= 300) throw statusError(res.status);
         const f = jsonObject(res);
         if (!f || f.id !== input.id) throw fail('INVALID_PROVIDER_RESPONSE');
-        return verifyUpload(f, input);
+        const committed = await getFile(input.id);
+        if (!committed) throw fail('COMMIT_NOT_CONFIRMED', true);
+        return verifyUpload(committed, input);
       } catch (e) {
         lastError = e;
         if (!(e instanceof OutboundError && e.retryable) || attempt === UPLOAD_ATTEMPTS) throw e;

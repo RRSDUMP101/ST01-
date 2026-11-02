@@ -18,8 +18,9 @@
 //   to the owner account (ADMIN_USERNAME) with via 'sales-bridge:<workspace>' – one hash-chained commit each.
 // Push (pull_push): per job whose stock status changed (content hash without sourceVersion/observedAt) one event:
 //   eventId = sha256 of the event content (status included), sourceVersion = previous + 1 per job, observedAt = now;
-//   stored in sq_bridge_events first, then sent ≤ 20 per POST; the exact stored event is re-sent until Sales Office
-//   answers (503/429/5xx/timeouts = later). Results and rejection codes are recorded per event.
+//   stored in sq_bridge_events first, then sent ≤ 20 per POST and ≤ 1 MB per request; the exact stored event is re-sent
+//   until Sales Office answers (503/429/5xx/timeouts and its own 'conflict' rejection = later). Results and rejection
+//   codes are recorded per event.
 import { db, str, bridgeMode, HttpError } from './runtime.js';
 import { digest, securityEvent } from './security.js';
 import { boundedFetch, jsonObject, OutboundError, errorCode } from './outbound.js';
@@ -33,8 +34,9 @@ export const BRIDGE_PATH = '/api/rrs/partlist/bridge';
 const SECRET_ENV = { domestic: 'SQ_SALES_DOMESTIC_SECRET', export: 'SQ_SALES_EXPORT_SECRET' };
 const MAX_PAGES = 40; // × ≤ 50 commands per page (Sales Office) per run; the rest continues next run from the cursor
 const PAGE_MAX_BYTES = 3 * 1024 * 1024; // Sales Office pages are ≤ 1.5 MB
-const POST_MAX_BYTES = 256 * 1024;
-const EVENTS_PER_POST = 20;
+const POST_MAX_BYTES = 256 * 1024; // answer to a POST
+export const POST_BODY_BYTES = 1000000; // request body budget: Sales Office refuses more than 1 MiB (1048576 bytes) with 413
+export const EVENTS_PER_POST = 20;
 const MAX_POSTS = 25;
 const LEASE_MS = 5 * 60 * 1000;
 const MAX_COMMAND_BYTES = 250000;
@@ -358,6 +360,9 @@ async function pull(env, ctx) {
 
 // ---- push -----------------------------------------------------------------------------------------------------------
 const REJECT_CODE = /^[a-z][a-z0-9_]{0,59}$/;
+// Rejection codes that are Sales Office's own temporary state, not a verdict on the event: 'conflict' = its workspace
+// revision CAS lost 3 times in a row (partlist-bridge.ts acceptEvent). The same stored event is sent again next run.
+const RETRY_REJECTIONS = { conflict: true };
 async function markEvents(env, ws, rows, result, error) {
   if (!rows.length) return;
   const d = db(env);
@@ -365,7 +370,29 @@ async function markEvents(env, ws, rows, result, error) {
   await d.batch(rows.map((r) => d.prepare("UPDATE sq_bridge_events SET result=?, error=?, sent_at=? WHERE workspace=? AND event_id=? AND result='pending'")
     .bind(result, typeof error === 'function' ? error(r) : error || '', at, ws, r.event_id)));
 }
-/** POST ≤ 20 stored events; a 400 for a batch is retried event by event so one bad event cannot hold the rest. */
+/**
+ * Pending rows → POST batches of at most `maxEvents` events and about `maxBytes` of request body (Sales Office: ≤ 20
+ * events and ≤ 1 MiB per request). A single event bigger than the budget goes alone (Sales Office then answers 413).
+ */
+export function packEvents(rows, maxEvents, maxBytes) {
+  const batches = [];
+  let cur = [];
+  let size = 0;
+  const OVERHEAD = '{"events":[]}'.length;
+  for (const r of rows) {
+    const n = new TextEncoder().encode(r.payload).length + 1;
+    if (cur.length && (cur.length >= maxEvents || OVERHEAD + size + n > maxBytes)) {
+      batches.push(cur);
+      cur = [];
+      size = 0;
+    }
+    cur.push(r);
+    size += n;
+  }
+  if (cur.length) batches.push(cur);
+  return batches;
+}
+/** POST stored events; a 400/413 for a batch is retried event by event so one bad event cannot hold the rest. */
 async function postEvents(env, ctx, rows) {
   const events = rows.map((r) => JSON.parse(r.payload));
   const res = await boundedFetch(bridgeUrl(ctx, ''), { method: 'POST', headers: headers(ctx, true), body: JSON.stringify({ events }) },
@@ -380,9 +407,16 @@ async function postEvents(env, ctx, rows) {
       if (x && typeof x.eventId === 'string') rejected[x.eventId] = typeof x.code === 'string' && REJECT_CODE.test(x.code) ? x.code : 'rejected';
     }
     const ok = rows.filter((r) => accepted.has(r.event_id));
-    const no = rows.filter((r) => !accepted.has(r.event_id) && rejected[r.event_id]);
+    const no = rows.filter((r) => !accepted.has(r.event_id) && rejected[r.event_id] && !RETRY_REJECTIONS[rejected[r.event_id]]);
+    const later = rows.filter((r) => !accepted.has(r.event_id) && RETRY_REJECTIONS[rejected[r.event_id]]);
     await markEvents(env, ctx.ws, ok, 'accepted', '');
     await markEvents(env, ctx.ws, no, 'rejected', (r) => rejected[r.event_id]);
+    if (later.length) {
+      // stays pending (re-sent unchanged next run); the code is kept so the status page shows why
+      const d = db(env);
+      await d.batch(later.map((r) => d.prepare("UPDATE sq_bridge_events SET error=?, sent_at=? WHERE workspace=? AND event_id=? AND result='pending'")
+        .bind(rejected[r.event_id], nowIso(), ctx.ws, r.event_id)));
+    }
     ctx.summary.accepted += ok.length;
     ctx.summary.rejected += no.length;
     ctx.summary.retryLater += rows.length - ok.length - no.length;
@@ -393,7 +427,7 @@ async function postEvents(env, ctx, rows) {
     return;
   }
   if (res.status === 400 || res.status === 413) {
-    await markEvents(env, ctx.ws, rows, 'rejected', 'bad_request');
+    await markEvents(env, ctx.ws, rows, 'rejected', res.status === 413 ? 'too_large' : 'bad_request');
     ctx.summary.rejected += rows.length;
     return;
   }
@@ -444,10 +478,12 @@ async function push(env, ctx) {
   for (let i = 0; i < statements.length; i += 50) await d.batch(statements.slice(i, i + 50));
   const pending = (await d.prepare("SELECT event_id, payload FROM sq_bridge_events WHERE workspace=? AND result='pending' ORDER BY job_id, source_version LIMIT ?")
     .bind(ws, EVENTS_PER_POST * MAX_POSTS).all()).results || [];
-  for (let i = 0; i < pending.length; i += EVENTS_PER_POST) {
-    await postEvents(env, ctx, pending.slice(i, i + EVENTS_PER_POST));
+  const batches = packEvents(pending, EVENTS_PER_POST, POST_BODY_BYTES);
+  for (const batch of batches.slice(0, MAX_POSTS)) {
+    await postEvents(env, ctx, batch);
     await renewLease(env, ctx.leaseName, ctx.holder);
   }
+  if (batches.length > MAX_POSTS) ctx.summary.more = true; // the rest stays pending for the next run
   await saveHealth(env, ctx, { pushed: true });
 }
 

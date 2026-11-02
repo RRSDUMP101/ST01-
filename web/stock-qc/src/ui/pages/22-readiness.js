@@ -3,7 +3,7 @@
  *   สต็อก 6 ช่อง  RRS.planning.six: มีจริง, รอตรวจ/กักกัน, จองแล้ว, พร้อมเบิก, กำลังผลิต, จะเข้า + วันเข้า, ต้องใช้, ขาด –
  *                 with a legend: stock still to be made, still in QC or still on a PO is never counted as ready.
  *                 A row opens where the item is: per warehouse, the jobs that need it, what holds it in QC, POs, WIP.
- *   ความพร้อมรายงาน RRS.planning.readiness per open job: what each line still lacks and where it could come from.
+ *   ความพร้อมรายใบงาน RRS.planning.readiness per open job (a closed job shows no "missing"): what each line still lacks and where it could come from.
  */
 (function (root) {
   'use strict';
@@ -30,22 +30,27 @@
     if (!(jobNo in cache.map)) cache.map[jobNo] = P.readiness(ctx.state, jobNo, { today: ctx.today });
     return cache.map[jobNo];
   }
+  /** Average over the job's lines of the part that is issued, reserved or free to reserve now. */
   function pctOf(rd) {
     if (!rd) return null;
-    let req = 0;
-    let miss = 0;
+    // every line counts the same (units differ: 500 bolts must not hide 2 missing sheets)
+    let n = 0;
+    let sum = 0;
     for (const l of rd.lines) {
       if (!(l.required > 0)) continue;
-      req += l.required;
-      miss += Math.min(l.required, l.missing);
+      n++;
+      sum += (l.required - Math.min(l.required, Math.max(0, l.missing))) / l.required;
     }
-    return req > 0 ? (req - miss) / req : null;
+    return n > 0 ? sum / n : null;
   }
   /** Where the missing part of a job line could come from (nothing here is ready to issue). */
   function whereText(l) {
     if (!(l.missing > 0)) return '';
     const parts = [];
-    if (l.qcHold > 0) parts.push(`รอตรวจ/กักกัน ${h.fmt.num(l.qcHold)} (ต้องให้ QC ปล่อยก่อน)`);
+    // QC_HOLD may be released by QC; quarantined (NCR) or rework stock may never come back
+    const held = U.round((l.qcHold || 0) - (l.qcWaiting || 0));
+    if (l.qcWaiting > 0) parts.push(`รอตรวจ ${h.fmt.num(l.qcWaiting)} (QC ต้องตรวจปล่อยก่อน)`);
+    if (held > 0) parts.push(`กักกัน/รอแก้ไข ${h.fmt.num(held)} (อาจใช้ไม่ได้ – รอผลตัดสิน NCR)`);
     if (l.inProduction > 0) parts.push(`กำลังผลิต ${h.fmt.num(l.inProduction)}`);
     if (l.incoming > 0) parts.push(`จะเข้าจาก PO ${h.fmt.num(l.incoming)}${l.nextIncomingDate ? ' ครั้งแรก ' + h.fmt.date(l.nextIncomingDate) : ''}`);
     return parts.length ? parts.join(' · ') : 'ไม่มีที่ไหนเลย – ต้องขอซื้อหรือตั้งผลิตเพิ่ม';
@@ -209,12 +214,17 @@
     const open = job.status === 'OPEN' || job.status === 'IN_PROGRESS';
     const canAlloc = rd.lines.some((l) => l.allocated > 0);
     const it = job.product ? ctx.item(job.product) || {} : null;
-    const head = t`${h.code(job.jobNo)} ${job.soNo ? 'SO ' + job.soNo : ''} ${rd.lines.length ? (rd.ready ? h.badge('พร้อมผลิต', 'ok') : h.badge(`ขาด ${rd.missing.length} รายการ`, 'bad')) : ''}`;
+    const head = t`${h.code(job.jobNo)} ${job.soNo ? 'SO ' + job.soNo : ''} ${open && rd.lines.length ? (rd.ready ? h.badge('พร้อมผลิต', 'ok') : h.badge(`ขาด ${rd.missing.length} รายการ`, 'bad')) : ''}`;
     const facts = h.dl([
       ['สินค้าที่ผลิต', job.product ? `${job.product} ${it.name || ''} · BOM ฉบับ ${job.bomRev}` : job.source === 'sales' ? 'ยังไม่ผูก BOM' : 'ระบุรายการเอง'],
       ['จำนวนชุด', job.qty ? h.fmt.num(job.qty) : ''], ['วันต้องใช้', job.dueDate ? h.fmt.date(job.dueDate) : ''], ['ลำดับความสำคัญ', job.priority], ['สถานะ', jobBadge(job.status)],
       rd.output ? ['สินค้าที่ผลิต: เสร็จ / รับเข้า', `${h.fmt.num(rd.output.finished)} / ${h.fmt.num(rd.output.received)} จาก ${h.fmt.num(rd.output.toMake)}`] : null,
     ]);
+    if (!open) {
+      // a closed job needs nothing more: no "missing" for it (readiness is about work that is still to be done)
+      return h.section(head, t`${facts}${h.note(`ใบงานนี้${P.JOB_STATUS[job.status] || job.status}แล้ว – ความพร้อมผลิตคิดเฉพาะงานที่ยังไม่ปิด จึงไม่มีรายการที่ขาด`, 'info')}
+        <div class="form-actions">${h.link('ไปที่ใบงาน', 'jobs', { sel: job.jobNo })}</div>`, { id: 'rd-job', actions: h.btn('ปิด', { act: 'closeJob', tone: 'quiet', small: true }) });
+    }
     if (!rd.lines.length) {
       return h.section(head, t`${facts}${h.empty(job.source === 'sales' ? 'ยังไม่ได้จับคู่กับ BOM' : 'ใบงานนี้ไม่มีรายการ', job.source === 'sales' ? 'ความพร้อมจะขึ้นเมื่อฝ่ายวางแผนจับคู่ SO กับสินค้าที่มี BOM อนุมัติที่หน้า งาน/SO และการจอง' : '', h.link('ไปที่ใบงาน', 'jobs', { sel: job.jobNo }))}`, { id: 'rd-job' });
     }
@@ -277,7 +287,7 @@
       const v = ctx.view;
       const tab = v.tab === 'jobs' ? 'jobs' : 'six';
       const openJobs = P.jobs(ctx.state, { open: true }).length;
-      return t`${h.tabs([{ id: 'six', label: 'สต็อก 6 ช่อง' }, { id: 'jobs', label: 'ความพร้อมรายงาน', count: openJobs }], tab)}
+      return t`${h.tabs([{ id: 'six', label: 'สต็อก 6 ช่อง' }, { id: 'jobs', label: 'ความพร้อมรายใบงาน', count: openJobs }], tab)}
         ${tab === 'six' ? sixTab(ctx) : jobsTab(ctx)}`;
     },
     after(ctx, root0) {

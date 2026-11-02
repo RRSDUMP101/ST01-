@@ -1,7 +1,8 @@
 // A local fake of the Google endpoints the backup uses (OAuth token, Drive v3 files/generateIds/create, multipart
 // upload, alt=media download) – enough of their real behaviour to test the Worker without Google: bearer tokens from a
 // refresh token, ids from generateIds only, 409 for an id that exists, sha256Checksum/size of what was stored,
-// private-by-default files. Fault injection: g.fault(op, {status, commit, times}).
+// private-by-default files. Fault injection: g.fault(op, {status, commit, times}); g.afterUpload(file) runs after an
+// uploaded file is stored (tests change sharing mid-run with it).
 import { createHash, randomBytes } from 'node:crypto';
 
 const FOLDER = 'application/vnd.google-apps.folder';
@@ -9,7 +10,7 @@ const sha = (b) => createHash('sha256').update(b).digest('hex');
 const json = (data, status = 200, headers = {}) => new Response(JSON.stringify(data), { status, headers: Object.assign({ 'content-type': 'application/json' }, headers) });
 
 export function fakeGoogle({ clientId, clientSecret, refreshToken, rootId }) {
-  const g = { files: new Map(), tokens: new Set(), generated: new Set(), log: [], faults: [], counter: 0, delayMs: 0, tokenCalls: 0 };
+  const g = { files: new Map(), tokens: new Set(), generated: new Set(), log: [], faults: [], counter: 0, delayMs: 0, tokenCalls: 0, afterUpload: null };
   const owner = () => [{ id: 'owner-permission', type: 'user', role: 'owner' }];
   g.files.set(rootId, { id: rootId, name: 'RRS Stock QC backup (test)', mimeType: FOLDER, parents: ['my-drive-root'], trashed: false, shared: false,
     ownedByMe: true, permissions: owner(), capabilities: { canAddChildren: true }, appProperties: {} });
@@ -124,8 +125,10 @@ export function fakeGoogle({ clientId, clientSecret, refreshToken, rootId }) {
       const bad = checkCreate(metadata);
       if (bad) return bad;
       if (fault && !fault.commit) return json({ error: { code: fault.status } }, fault.status);
+      g.log[g.log.length - 1].id = metadata.id;
       const f = newFile(metadata, new Uint8Array(media));
       g.files.set(f.id, f);
+      if (g.afterUpload) g.afterUpload(f);
       if (fault) return json({ error: { code: fault.status } }, fault.status);
       return json(meta(f));
     }

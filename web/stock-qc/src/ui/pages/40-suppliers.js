@@ -43,6 +43,23 @@
   const poLink = (poNo) => h.link(h.code(poNo), 'purchasing', { tab: 'po', po: poNo });
   /** Who can do something the current user cannot (for the read-only notes). */
   const whoCan = (perm) => RRS.auth.rolesFor(perm).filter((r) => r !== 'admin').map((r) => RRS.auth.ROLES[r] || r).join(' / ');
+  /**
+   * ctx.set that also keeps a search typed less than 250 ms ago: its live update has not run yet, and without this the
+   * click would re-render the box empty and the late update would then wipe what the user typed into a form.
+   */
+  function set(ctx, patch) {
+    const p = Object.assign({}, patch);
+    for (const el of root.document.querySelectorAll('#main input[data-live][data-act]')) {
+      const k = el.dataset.act;
+      if (!(k in p) && (ctx.view[k] || '') !== el.value) p[k] = el.value;
+    }
+    ctx.set(p);
+  }
+  /** Live search box: re-render only when the text really changed (a click may already have kept it). */
+  const live = (key, extra) => (ctx, el) => {
+    if ((ctx.view[key] || '') === el.value) return;
+    ctx.set(Object.assign({ [key]: el.value }, extra || {}));
+  };
 
   // ---- ผู้ขาย ---------------------------------------------------------------------------------------------------
   function supForm(ctx, s) {
@@ -353,21 +370,21 @@
       }
     },
     actions: {
-      tab: (ctx, el) => ctx.set({ tab: el.dataset.arg }),
-      sq: (ctx, el) => ctx.set({ sq: el.value }),
-      sOff: (ctx, el) => ctx.set({ sOff: el.checked }),
-      tq: (ctx, el) => ctx.set({ tq: el.value, tLimit: LIMIT }),
-      tSup: (ctx, el) => ctx.set({ tSup: el.value, tLimit: LIMIT }),
-      tNone: (ctx, el) => ctx.set({ tNone: el.checked, tLimit: LIMIT }),
-      tMore: (ctx) => ctx.set({ tLimit: (ctx.view.tLimit || LIMIT) + LIMIT }),
-      rq: (ctx, el) => ctx.set({ rq: el.value }),
-      rWh: (ctx, el) => ctx.set({ rWh: el.value }),
-      pickSup: (ctx, el) => ctx.set({ sup: el.dataset.arg }),
-      newSup: (ctx) => ctx.set({ tab: 'sup', sup: '__new' }),
-      close: (ctx) => ctx.set({ sup: null }),
-      pickItem: (ctx, el) => ctx.set({ item: el.dataset.arg, _scroll: true }),
-      closeItem: (ctx) => ctx.set({ item: null }),
-      toItem: (ctx, el) => ctx.set({ tab: 'terms', item: el.dataset.arg, tq: '', tSup: '', tNone: false, _scroll: true }),
+      tab: (ctx, el) => set(ctx, { tab: el.dataset.arg }),
+      sq: live('sq'),
+      sOff: (ctx, el) => set(ctx, { sOff: el.checked }),
+      tq: live('tq', { tLimit: LIMIT }),
+      tSup: (ctx, el) => set(ctx, { tSup: el.value, tLimit: LIMIT }),
+      tNone: (ctx, el) => set(ctx, { tNone: el.checked, tLimit: LIMIT }),
+      tMore: (ctx) => set(ctx, { tLimit: (ctx.view.tLimit || LIMIT) + LIMIT }),
+      rq: live('rq'),
+      rWh: (ctx, el) => set(ctx, { rWh: el.value }),
+      pickSup: (ctx, el) => set(ctx, { sup: el.dataset.arg }),
+      newSup: (ctx) => set(ctx, { tab: 'sup', sup: '__new' }),
+      close: (ctx) => set(ctx, { sup: null }),
+      pickItem: (ctx, el) => set(ctx, { item: el.dataset.arg, _scroll: true }),
+      closeItem: (ctx) => set(ctx, { item: null }),
+      toItem: (ctx, el) => set(ctx, { tab: 'terms', item: el.dataset.arg, tq: '', tSup: '', tNone: false, _scroll: true }),
       async termForSup(ctx, el) {
         const sup = RRS.q.get(ctx.state, 'suppliers', el.dataset.arg);
         if (!sup) return;
@@ -376,7 +393,7 @@
           body: t`${termFields(ctx, null, null, { code: true })}<p class="hint wide">หน่วยซื้อและตัวคูณต้องตรงกับที่ผู้ขายขายจริง เช่น กล่อง (1 กล่อง = 100 ตัว)</p>`,
           onSubmit: (vals) => ctx.exec('itemSupplier.upsert', termPayload(vals.code, sup.id, vals), { quiet: true, done: 'บันทึกราคาและหน่วยซื้อแล้ว' }),
         });
-        if (done && done.ok) ctx.set({});
+        if (done && done.ok) set(ctx, {});
       },
       async editTerm(ctx, el) {
         const it = ctx.item(ctx.view.item);
@@ -408,7 +425,7 @@
         }
         const r = await ctx.exec('supplier.upsert', { id: vals.id, name: vals.name, taxId: vals.taxId, contact: vals.contact, phone: vals.phone,
           leadDays: vals.leadDays, active: !!vals.active }, { done: prev ? 'บันทึกการแก้ไขผู้ขายแล้ว' : `เพิ่มผู้ขาย ${id} แล้ว` });
-        if (r.ok) ctx.set({ sup: r.result.id || id });
+        if (r.ok) set(ctx, { sup: r.result.id || id });
       },
       async addTerm(ctx, vals, form) {
         const it = ctx.item(ctx.view.item);

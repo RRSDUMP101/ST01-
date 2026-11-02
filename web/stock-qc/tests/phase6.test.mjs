@@ -134,8 +134,11 @@ test('P6-1 ไม่มีข้อผิดพลาดรุนแรง…: �
   // ทางที่ถูกต้อง (QS/SC/RV) ไม่นับเป็นปัญหา
   const s4b = clone(base);
   s4b.tables.movements['998.1'] = Object.assign({}, s4.tables.movements['998.1'], { docType: 'SC', docNo: 'SC-OK' });
+  s4b.tables.documents['SC-OK'] = { docNo: 'SC-OK', type: 'SC', status: 'POSTED', date: '2026-11-02', lines: [] };
   s4b.tables.balances[qk].qty = 2;
-  assert.equal(R.dailyCheck(s4b).ok, true);
+  assert.equal(R.dailyCheck(s4b).ok, true, R.dailyCheck(s4b).problems.join('; '));
+  // the forged PD has no document either: stock changed without a posted document
+  assert.deepEqual(c4.orphanMoves.map((m) => m.docNo), ['PD-FAKE']);
   // (ง) ติดลบโดยไม่มีเอกสารอนุมัติ
   const s5 = clone(base);
   const nk = RRS.balanceKey({ code: 'TST-002', wh: 'B', bin: 'B-01', status: 'AVAILABLE', lot: '' });
@@ -903,16 +906,20 @@ test('บันทึกปัญหาจากการทดลอง: ปั
 
 test('คู่มือกรณีผิดพลาดครอบคลุมรหัสข้อผิดพลาดทุกตัวของระบบสต็อกและของ Phase 6', () => {
   const codes = new Set();
-  for (const f of ['core.js', 'ledger.js', 'master.js', 'inventory.js', 'reports.js']) {
+  // base engine, Phase 6 and every Phase 2–5 module present in order.json (the users see their errors too)
+  const order = JSON.parse(fs.readFileSync(path.join(engineDir, 'order.json'), 'utf8'));
+  for (const f of order.filter((x) => fs.existsSync(path.join(engineDir, x)))) {
     const src = fs.readFileSync(path.join(engineDir, f), 'utf8');
     for (const m of src.matchAll(/(?:error|err)\('([A-Z_]+)'/g)) codes.add(m[1]);
-    for (const m of src.matchAll(/code: '([A-Z_]+)'/g)) codes.add(m[1]);
+    for (const m of src.matchAll(/code: '([A-Z_]+)',\s*message/g)) codes.add(m[1]); // error objects, not data like {code: 'A'}
   }
   codes.add('NO_PERMISSION');
   codes.add('SAME_PERSON');
   const guide = new Set(R.ERROR_GUIDE.map((g) => g.code));
   const missing = [...codes].filter((c) => !guide.has(c));
   assert.deepEqual(missing, []);
+  assert.equal(guide.size, R.ERROR_GUIDE.length, 'one entry per code');
+  for (const c of ['COUNT_FREEZE', 'CERT_NOT_VERIFIED', 'OVER_RECEIVE', 'WRONG_SIDE']) assert.ok(guide.has(c), c);
   for (const g of R.ERROR_GUIDE) assert.ok(THAI.test(g.title) && THAI.test(g.cause) && THAI.test(g.action) && g.who, g.code);
   assert.equal(R.errorHelp('NOT_ENOUGH').title, 'ของไม่พอ');
   assert.ok(THAI.test(R.errorHelp('SOMETHING_NEW').action));
@@ -1015,4 +1022,291 @@ test('รายงานทำงานได้แม้ตารางขอ�
   assert.ok(Object.values(R.exportTables(s)).every((tab) => tab.length === 1));
   assert.equal(R.rolloutReadiness(s, { id: 'RO-404' }).ok, false);
   assert.deepEqual(R.offcuts(s).rows, []);
+});
+
+// =================================================================================================================
+// รีวิวอิสระ (independent review): cases the first version let through
+// =================================================================================================================
+/** Everything a rollout needs before approval: a restore test, UAT all PASS, store/QC/accounting sign-off, team training. */
+async function makeReady(w, team) {
+  const s = await w.state();
+  const v = R.verifyBackup(w.store.commits, { compare: s });
+  assert.equal(v.ok, true, v.problems.join('; '));
+  await w.ok('ACC', 'backup.recordTest', { commits: v.commits, head: v.head, result: 'OK', fingerprint: v.fingerprint, note: 'กู้ลงเครื่องทดสอบ' });
+  for (const c of R.UAT_CRITERIA) await w.ok('QC1', 'uat.record', { id: c.id, status: 'PASS', evidence: c.auto });
+  for (const [u, role] of team) await w.ok('LEAD', 'training.record', { userId: u, role, topic: 'การใช้งานตามบทบาทและคู่มือกรณีผิดพลาด' });
+  await w.ok('LEAD', 'uat.signoff', { area: 'store', decision: 'ACCEPT' });
+  await w.ok('QCLEAD', 'uat.signoff', { area: 'qc', decision: 'ACCEPT' });
+  await w.ok('ACC', 'uat.signoff', { area: 'accounting', decision: 'ACCEPT' });
+}
+
+let forgedSeq = 900;
+/**
+ * Writes movements and balances into a state the way tx.move does, without a commit (to build the states other modules'
+ * bugs would leave behind). opts.doc: also put a posted document row {docNo, type, status}.
+ */
+function forge(s, docType, docNo, moves, opts = {}) {
+  const seq = ++forgedSeq;
+  const at = '2026-11-02T06:00:00.000Z';
+  if (opts.doc !== false) s.tables.documents[docNo] = Object.assign({ docNo, type: docType, status: 'POSTED', date: '2026-11-02', lines: [] }, opts.doc || {});
+  moves.forEach((m, i) => {
+    const loc = { code: m.code, wh: m.wh, bin: m.bin || '', status: m.status || 'AVAILABLE', lot: m.lot || '' };
+    const k = RRS.balanceKey(loc);
+    const after = RRS.util.round(((s.tables.balances[k] || {}).qty || 0) + m.qty);
+    if (after === 0) delete s.tables.balances[k];
+    else s.tables.balances[k] = Object.assign({}, loc, { qty: after, updatedAt: at }, m.qty > 0 ? { lastIn: at } : {});
+    const id = `${seq}.${i + 1}`;
+    s.tables.movements[id] = Object.assign({ id, seq, at, date: '2026-11-02', docType, docNo, line: m.line || 1 }, loc,
+      { qty: m.qty, balanceAfter: after, job: '', by: 'QCLEAD', reversalOf: m.reversalOf || '', remark: '' });
+  });
+}
+/** The quality module's lot quarantine: the lot row is QUARANTINED and its stock in real warehouses moves to QUARANTINE (QS). */
+function quarantineLot(s, codeId, lot) {
+  s.tables.lots = Object.assign({}, s.tables.lots, { [`${codeId}|${lot}`]: { code: codeId, lot, kind: 'heat', status: 'QUARANTINED' } });
+  const moves = [];
+  for (const b of Object.values(s.tables.balances)) {
+    if (b.code !== codeId || b.lot !== lot || b.wh === RRS.TRANSIT || !(b.qty > 0) || b.status !== 'AVAILABLE') continue;
+    moves.push({ code: codeId, wh: b.wh, bin: b.bin, lot, status: 'AVAILABLE', qty: -b.qty }, { code: codeId, wh: b.wh, bin: b.bin, lot, status: 'QUARANTINE', qty: b.qty });
+  }
+  forge(s, 'QS', 'QS6911-0901', moves);
+}
+
+test('รีวิว P6-1: ตรวจยอดประจำวันจับของล็อตที่ถูกกักกันแต่ยังอยู่ในสถานะใช้ได้ (ยกเลิกใบเบิก/รับโอนหลังกักกัน)', async () => {
+  const w = await plateWorld();
+  const pd = await w.ok('STORE1', 'doc.post', { type: 'PD', job: 'J-1', lines: [{ code: 'TST-SHEET', qty: 2, wh: 'A', bin: 'A-01', lot: 'H-77' }] });
+  const tr = await w.ok('STORE1', 'doc.post', { type: 'TR', lines: [{ code: 'TST-SHEET', qty: 1, wh: 'A', bin: 'A-01', lot: 'H-77', toWh: 'B', toBin: 'B-01' }] });
+  const base = clone(await w.state());
+  quarantineLot(base, 'TST-SHEET', 'H-77');
+  assert.equal(RRS.q.qty(base, { code: 'TST-SHEET', wh: 'A', status: 'QUARANTINE' }), 2);
+  const ok = R.dailyCheck(base);
+  assert.deepEqual(ok.problems, []); // the piece in transit waits for its receipt (it lands in QUARANTINE)
+  assert.deepEqual(ok.lotQuarantineWaiting.map((x) => [x.wh, x.qty]), [[RRS.TRANSIT, 1]]);
+  // (ก) ใบเบิกถูกยกเลิกหลังกักกัน: ของ 2 แผ่นกลับเข้าเป็น "ใช้ได้" ทั้งที่ล็อตถูกกักกัน
+  const s1 = clone(base);
+  const pdMove = RRS.inventory.history(s1, { docNo: pd.result.docNo })[0];
+  forge(s1, 'PD', pd.result.docNo, [{ code: 'TST-SHEET', wh: 'A', bin: 'A-01', lot: 'H-77', qty: 2, reversalOf: pdMove.id }],
+    { doc: Object.assign({}, s1.tables.documents[pd.result.docNo], { status: 'CANCELLED' }) });
+  assert.deepEqual(RRS.inventory.verifyBalances(s1), []);
+  const c1 = R.dailyCheck(s1);
+  assert.equal(c1.ok, false);
+  assert.deepEqual(c1.lotQuarantineLeaks.map((x) => [x.code, x.lot, x.wh, x.bin, x.status, x.qty]), [['TST-SHEET', 'H-77', 'A', 'A-01', 'AVAILABLE', 2]]);
+  assert.equal(c1.checks.find((c) => c.id === 'lotQuarantine').ok, false);
+  assert.match(c1.problems.join(' '), /H-77.*กักกัน/);
+  assert.equal(code(dry(s1, 'LEAD', 'uat.signoff', { area: 'store', decision: 'ACCEPT' })), 'INTEGRITY');
+  // (ข) รับโอนหลังกักกันแล้วของลงคลังปลายทางเป็น "ใช้ได้"
+  const s2 = clone(base);
+  forge(s2, 'TR', tr.result.docNo, [{ code: 'TST-SHEET', wh: RRS.TRANSIT, bin: tr.result.docNo, lot: 'H-77', qty: -1 },
+    { code: 'TST-SHEET', wh: 'B', bin: 'B-01', lot: 'H-77', qty: 1 }], { doc: Object.assign({}, s2.tables.documents[tr.result.docNo], { status: 'RECEIVED' }) });
+  assert.deepEqual(R.dailyCheck(s2).lotQuarantineLeaks.map((x) => [x.wh, x.qty]), [['B', 1]]);
+  // ช่องที่อยู่ระหว่างตรวจนับแบบหยุดเคลื่อนไหว: QC กักกันซ้ำหลังอนุมัติรอบนับ (แจ้งไว้ ไม่ใช่ข้อผิดพลาด)
+  const s3 = clone(s1);
+  s3.tables.count_sessions = { 'CT-00001': { id: 'CT-00001', wh: 'A', bins: ['A-01'], mode: 'freeze', status: 'OPEN', lines: [] } };
+  const c3 = R.dailyCheck(s3);
+  assert.equal(c3.ok, true, c3.problems.join('; '));
+  assert.deepEqual(c3.lotQuarantineWaiting.map((x) => [x.wh, x.count || '']), [['A', 'CT-00001'], [RRS.TRANSIT, '']]);
+  s3.tables.count_sessions['CT-00001'].status = 'APPROVED';
+  assert.equal(R.dailyCheck(s3).ok, false);
+});
+
+test('รีวิว P6-1: ตรวจยอดประจำวันจับการเปลี่ยนยอดที่ไม่มีเอกสารที่บันทึกแล้ว (ยอดตรงประวัติแต่ไม่มีใบรองรับ)', async () => {
+  const w = await plateWorld();
+  const draft = await w.ok('STORE1', 'doc.saveDraft', { type: 'OU', lines: [{ code: 'TST-SPHC', qty: 1, wh: 'A', bin: 'A-01' }] });
+  const base = clone(await w.state());
+  assert.equal(R.dailyCheck(base).ok, true);
+  // ไม่มีเอกสาร
+  const s1 = clone(base);
+  forge(s1, 'OU', 'OU6911-0999', [{ code: 'TST-SPHC', wh: 'A', bin: 'A-01', qty: -1 }], { doc: false });
+  assert.deepEqual(RRS.inventory.verifyBalances(s1), []);
+  const c1 = R.dailyCheck(s1);
+  assert.equal(c1.ok, false);
+  assert.deepEqual(c1.orphanMoves.map((m) => [m.docNo, m.qty]), [['OU6911-0999', -1]]);
+  assert.equal(c1.checks.find((c) => c.id === 'documents').ok, false);
+  // เอกสารยังเป็นร่างแต่ยอดเปลี่ยนแล้ว
+  const s2 = clone(base);
+  forge(s2, 'OU', draft.result.docNo, [{ code: 'TST-SPHC', wh: 'A', bin: 'A-01', qty: -1 }], { doc: false });
+  assert.match(R.dailyCheck(s2).problems.join(' '), new RegExp(`${draft.result.docNo}.*ยังไม่ได้บันทึก`));
+  // เลขที่เอกสารเป็นของเอกสารประเภทอื่น
+  const s3 = clone(base);
+  const aj = Object.keys(s3.tables.documents).find((k) => s3.tables.documents[k].type === 'AJ');
+  forge(s3, 'PD', aj, [{ code: 'TST-SPHC', wh: 'A', bin: 'A-01', qty: -1 }], { doc: false });
+  assert.equal(R.dailyCheck(s3).orphanMoves.length, 1);
+});
+
+test('รีวิว P6-3: ไฟล์สำรองที่มีคำขอเดิมถูกบันทึกสองครั้ง (ตัดซ้ำ) ถูกตรวจพบ แม้ลายนิ้วมือต่อกันถูกต้อง', async () => {
+  const w = await world();
+  await stockIn(w, 'TST-001', 'A', 'A-01', 10);
+  const pd = { type: 'PD', lines: [{ code: 'TST-001', qty: 4, wh: 'A', bin: 'A-01' }] };
+  await w.ok('STORE1', 'doc.post', pd, 'phone-1');
+  const commits = clone(w.store.commits);
+  assert.equal(R.verifyBackup(commits).ok, true);
+  // a server that forgot the request-id check applies the same request again (valid hashes, balances = history)
+  const s = RRS.core.createState();
+  for (const c of commits) RRS.core.reduce(s, c);
+  const again = RRS.core.prepare(Object.assign({}, s, { requests: {} }), { kind: 'doc.post', payload: pd, requestId: 'phone-1' },
+    { now: '2026-11-02T05:00:00.000Z', user: 'STORE1' });
+  assert.equal(again.ok, true);
+  const v = R.verifyBackup(commits.concat([again.commit]));
+  assert.deepEqual(v.balanceDiffs, []);
+  assert.equal(v.ok, false);
+  assert.match(v.problems.join(' '), /phone-1.*ซ้ำ/);
+  assert.deepEqual(v.duplicateRequests.map((d) => [d.id, d.seqs]), [['phone-1', [commits.length, commits.length + 1]]]);
+});
+
+test('รีวิว P6-3: บันทึกผลกู้ข้อมูลสำเร็จได้เฉพาะไฟล์ที่มีข้อมูลและได้ข้อมูลเท่าระบบจริง', async () => {
+  const w = await world();
+  await stockIn(w, 'TST-001', 'A', 'A-01', 10);
+  const s = await w.state();
+  const v = R.verifyBackup(w.store.commits, { compare: s });
+  assert.equal(v.ok, true);
+  const seq = s.seq;
+  for (const [p, c] of [
+    [{ commits: 0, head: RRS.core.GENESIS, result: 'OK' }, 'BAD_VALUE'], // ไฟล์ว่าง – verifyBackup ให้ผลไม่ผ่าน
+    [{ commits: v.commits, head: v.head, result: 'OK', fingerprint: 'b'.repeat(64) }, 'DATA_MISMATCH'], // ข้อมูลที่กู้ได้ไม่เท่าระบบ
+    [{ commits: v.commits, head: v.head, result: 'OK', problems: 'ยอดคลัง A ไม่ตรง' }, 'BAD_VALUE'], // ปัญหาแบบข้อความถูกทิ้งเงียบ
+  ]) {
+    const r = await w.exec('ACC', 'backup.recordTest', p);
+    assert.equal(code(r), c, JSON.stringify(p));
+    assert.ok(THAI.test(r.errors[0].message));
+  }
+  assert.equal((await w.state()).seq, seq);
+  const ro = { id: 'X', owner: 'LEAD', team: [], rollbackPlan: 'ปิดสวิตช์และกู้ข้อมูลจากสำรอง' };
+  await w.ok('ACC', 'backup.recordTest', { commits: v.commits, head: v.head, result: 'OK', fingerprint: v.fingerprint });
+  assert.equal(R.rolloutReadiness(await w.state(), { rollout: ro }).checks.find((c) => c.id === 'backup').ok, true);
+  // ผลไม่ผ่านของไฟล์ว่างเก็บเป็นหลักฐานได้ และทำให้ยังไม่พร้อมขยายผล
+  await w.ok('ACC', 'backup.recordTest', { commits: 0, head: RRS.core.GENESIS, result: 'FAIL', note: 'ไฟล์สำรองว่าง' });
+  assert.equal(R.rolloutReadiness(await w.state(), { rollout: ro }).checks.find((c) => c.id === 'backup').ok, false);
+});
+
+test('รีวิว P6-5: ย้อนกลับการขยายผลคืนขอบเขตทดลองเดิม – กลุ่ม/คลังที่ทดลองอยู่ก่อนอนุมัติไม่ถูกถอดออก', async () => {
+  const w = await world();
+  await w.ok('LEAD', 'master.import', { items: [
+    { code: 'TST-001', name: 'ชิ้นทดสอบ 1', baseUnit: 'ชิ้น', type: 'PART', group: 'G0' },
+    { code: 'TST-002', name: 'ชิ้นทดสอบ 2', baseUnit: 'ชิ้น', type: 'PART', group: 'G1' }] });
+  await w.ok('MGR', 'settings.update', { patch: { pilot: { groups: ['G0'], warehouses: ['A'], note: 'ชุดทดลองแรก' } } });
+  const plan = { owner: 'LEAD', team: ['STORE1'], rollbackPlan: 'ปิดสวิตช์กลุ่มที่ขยาย กู้ข้อมูลจากสำรองล่าสุด แล้วคีย์เอกสารซ้ำ' };
+  const ro1 = await w.ok('LEAD', 'rollout.propose', { ...plan, title: 'G0 และ G1 ทั้งคลัง A และ B', groups: ['G0', 'G1'], warehouses: ['A', 'B'] });
+  const ro2 = await w.ok('LEAD', 'rollout.propose', { ...plan, title: 'G1 คลัง B', groups: ['G1'], warehouses: ['B'] });
+  await makeReady(w, [['STORE1', 'store']]);
+  await w.ok('MGR', 'rollout.approve', { id: ro1.result.id });
+  await w.ok('MGR', 'rollout.approve', { id: ro2.result.id });
+  const pilot = async () => (await w.state()).tables.settings.main.pilot;
+  let p = await pilot();
+  assert.deepEqual([p.groups, p.warehouses], [['G0', 'G1'], ['A', 'B']]);
+  // ย้อนกลับแผนแรก: G1/B ยังมีแผนที่สองครอบคลุม; G0/A เป็นขอบเขตทดลองก่อนขยาย ต้องอยู่ต่อ
+  await w.ok('MGR', 'rollout.rollback', { id: ro1.result.id, reason: 'ยอดคลัง B ไม่ตรงหลังขยาย' });
+  p = await pilot();
+  assert.deepEqual([p.groups, p.warehouses, p.note], [['G0', 'G1'], ['A', 'B'], 'ชุดทดลองแรก']);
+  // ย้อนกลับแผนที่สองด้วย: เหลือขอบเขตเดิมก่อนขยาย
+  await w.ok('MGR', 'rollout.rollback', { id: ro2.result.id, reason: 'ย้อนกลับทั้งหมด' });
+  p = await pilot();
+  assert.deepEqual([p.groups, p.warehouses], [['G0'], ['A']]);
+});
+
+test('รีวิว: เศษที่ระบุเศษต้นทาง – ต้นทางที่ยังพร้อมใช้ไม่ถูกนับซ้ำ และเศษที่เหลือต้องเข้ากับต้นทางจริง', async () => {
+  const w = await plateWorld();
+  await w.ok('STORE1', 'offcut.add', { code: 'TST-SHEET', width: 600, length: 1000, wh: 'A', bin: 'A-02', sourceLot: 'H-77' }); // OC-00001
+  const child = { code: 'TST-SHEET', width: 300, length: 300, wh: 'A', bin: 'A-02', parent: 'OC-00001' };
+  // ต้นทางยังพร้อมใช้: เหล็กชิ้นเดียวกันจะอยู่ในทะเบียนสองรายการ (เสนอใช้ซ้ำได้สองครั้ง)
+  const seq = (await w.state()).seq;
+  assert.equal(code(await w.exec('STORE1', 'offcut.add', { ...child, sourceLot: 'H-77' })), 'BAD_STATE');
+  assert.equal((await w.state()).seq, seq);
+  await w.ok('PROD', 'offcut.use', { id: 'OC-00001', usedFor: 'J-100', remaining: [{ width: 600, length: 400 }] }); // OC-00002
+  // เศษที่พบภายหลังจากการตัด: ต้องเป็นแผ่นเดียวกัน ล็อตเดียวกัน ขนาดเข้ากับต้นทาง และพื้นที่รวมน้อยกว่าต้นทาง
+  for (const [p, c] of [
+    [{ ...child, code: 'TST-SPHC' }, 'BAD_VALUE'],
+    [{ ...child, sourceLot: 'H-78' }, 'BAD_VALUE'],
+    [{ ...child, width: 700, length: 1000 }, 'TOO_BIG'],
+    [{ ...child, width: 600, length: 600 }, 'TOO_MUCH_AREA'],
+  ]) assert.equal(code(await w.exec('STORE1', 'offcut.add', p)), c, JSON.stringify(p));
+  const add = await w.ok('STORE1', 'offcut.add', child); // ล็อตตามเศษต้นทาง
+  let s = await w.state();
+  const o3 = s.tables.offcuts[add.result.id];
+  assert.deepEqual([o3.id, o3.parent, o3.sourceLot, o3.material, o3.thickness], ['OC-00003', 'OC-00001', 'H-77', 'SS400', 3]);
+  assert.deepEqual(s.tables.offcuts['OC-00001'].children, ['OC-00002', 'OC-00003']);
+  assert.deepEqual(s.tables.offcuts['OC-00001'].history.map((h) => h.action), ['ADD', 'USE', 'ADD_CHILD']);
+  // ยกเลิกการตัดต้นทาง: เศษที่เหลือทุกชิ้นเป็นยกเลิก ไม่ค้างเป็นพร้อมใช้
+  await w.ok('LEAD', 'offcut.undo', { id: 'OC-00001', reason: 'ตัดผิดแผ่น' });
+  s = await w.state();
+  assert.deepEqual(['OC-00001', 'OC-00002', 'OC-00003'].map((id) => s.tables.offcuts[id].status), ['AVAILABLE', 'VOID', 'VOID']);
+});
+
+test('รีวิว: เศษจากล็อตที่ยังไม่เคยผ่านตรวจรับ (มีแต่ของรอตรวจ) บันทึกเป็นเศษพร้อมใช้ไม่ได้', async () => {
+  const w = await plateWorld();
+  await w.ok('LEAD', 'item.upsert', { code: 'TST-QSHEET', name: 'แผ่น SS400 3 มม. (ตรวจรับ)', baseUnit: 'แผ่น', type: 'RM', material: 'SS400',
+    thickness: 3, width: 1220, length: 2440, trackLot: 'heat', qcIncoming: true });
+  await w.ok('LEAD', 'doc.post', { type: 'RR', lines: [{ code: 'TST-QSHEET', qty: 2, wh: 'A', bin: 'A-01', lot: 'HQ-1' }] });
+  const s = await w.state();
+  assert.equal(RRS.q.qty(s, { code: 'TST-QSHEET', status: 'QC_HOLD' }), 2);
+  const r = await w.exec('STORE1', 'offcut.add', { code: 'TST-QSHEET', width: 500, length: 500, wh: 'A', sourceLot: 'HQ-1' });
+  assert.equal(code(r), 'BAD_STATUS');
+  assert.match(r.errors[0].message, /HQ-1/);
+  assert.equal((await w.state()).seq, s.seq);
+  // ล็อตที่เคยเป็นของใช้ได้ (ยอดตั้งต้น/ผ่าน QC แล้ว) บันทึกได้
+  await stockIn(w, 'TST-QSHEET', 'A', 'A-02', 1, { lot: 'HQ-2' });
+  await w.ok('STORE1', 'offcut.add', { code: 'TST-QSHEET', width: 500, length: 500, wh: 'A', sourceLot: 'HQ-2' });
+});
+
+test('รีวิว: ส่งออก Google Sheet – ข้อความที่ดูเหมือนตัวเลข/วันที่ (รหัส 01, 01-0003, เลขที่ N.10) คงเป็นข้อความ', async () => {
+  const w = await world();
+  await w.ok('LEAD', 'warehouse.upsert', { code: 'A', name: 'คลัง A', expressCode: '01' });
+  await w.ok('LEAD', 'item.upsert', { code: 'TST-003', name: 'สาม', baseUnit: 'ชิ้น', countCode: '01-0003', expressCode: '000123' });
+  const lines = [];
+  for (let i = 0; i < 10; i++) lines.push({ code: 'TST-001', qty: 1, wh: 'A', bin: 'A-01' });
+  await w.ok('LEAD', 'doc.post', { type: 'AJ', lines });
+  const s = await w.state();
+  const ix = (tab, field) => RRS.schema.tables[tab].fields.findIndex((f) => f.name === field);
+  const exp = R.exportTables(s);
+  const ids = exp.movements.slice(1).map((r) => r[ix('movements', 'id')]);
+  assert.ok(ids.indexOf(`'${s.seq}.1`) >= 0 && ids.indexOf(`'${s.seq}.10`) >= 0, ids.join(' '));
+  const wa = exp.warehouses.find((r) => r[ix('warehouses', 'code')] === 'A');
+  assert.equal(wa[ix('warehouses', 'expressCode')], "'01");
+  const it3 = exp.items.find((r) => r[ix('items', 'id')] === 'TST-003');
+  assert.deepEqual([it3[ix('items', 'countCode')], it3[ix('items', 'expressCode')]], ["'01-0003", "'000123"]);
+  // numbers and dates keep their type; RAW export is untouched
+  const mv = exp.movements[1];
+  assert.equal(typeof mv[ix('movements', 'qty')], 'number');
+  assert.match(mv[ix('movements', 'date')], /^\d{4}-\d{2}-\d{2}$/);
+  assert.equal(R.exportTables(s, { safeText: false }).warehouses.find((r) => r[0] === 'A')[ix('warehouses', 'expressCode')], '01');
+});
+
+test('รีวิว: ข้อมูลผิดรูปแบบได้ข้อความภาษาไทยที่ชี้ช่อง (ไม่ใช่ข้อผิดพลาดภายใน) ผลไม่ผ่านต้องมีหมายเหตุ และไม่เปลี่ยนข้อมูล', async () => {
+  const w = await world();
+  const seq = (await w.state()).seq;
+  const plan = { groups: ['G1'], warehouses: ['B'], owner: 'LEAD', team: ['STORE1'], rollbackPlan: 'ปิดสวิตช์และกู้ข้อมูลจากสำรอง' };
+  for (const [u, k, p, c, field] of [
+    ['LEAD', 'rollout.propose', { ...plan, team: 'STORE1' }, 'BAD_VALUE', 'team'],
+    ['LEAD', 'rollout.propose', { ...plan, groups: 'G1' }, 'BAD_VALUE', 'groups'],
+    ['LEAD', 'rollout.propose', { ...plan, phases: '6' }, 'BAD_VALUE', 'phases'],
+    ['QC1', 'uat.record', { id: 'P1-1', status: 'FAIL', evidence: 'PD6911-0003' }, 'REQUIRED', 'note'],
+    ['LEAD', 'training.record', { userId: 'STORE1', role: 'store', topic: 'รับ–เบิก', trainedOn: '2026-02-30' }, 'BAD_VALUE', 'trainedOn'],
+  ]) {
+    const r = await w.exec(u, k, p);
+    assert.equal(code(r), c, JSON.stringify(p));
+    assert.equal(r.errors[0].field, field);
+    assert.ok(THAI.test(r.errors[0].message) && !/is not a function|undefined/.test(r.errors[0].message), r.errors[0].message);
+  }
+  assert.equal((await w.state()).seq, seq);
+  // the criterion "กู้ข้อมูลสำรองได้" points at the file that tests the restore; every named test file exists
+  assert.equal(byId(R.UAT_CRITERIA, 'id', 'P0-3').auto, 'tests/phase6.test.mjs');
+  for (const c of R.UAT_CRITERIA) assert.ok(fs.existsSync(path.join(engineDir, '..', '..', c.auto)), c.id + ' ' + c.auto);
+});
+
+test('รีวิว: เสนอแผ่นใหม่เมื่อไม่มีเศษ – แผ่นที่ถูกจองให้งานอื่นหมดไม่ถูกแนะนำ (งานที่จองไว้เองใช้ได้)', async () => {
+  const w = await plateWorld();
+  const s = clone(await w.state());
+  s.tables.reservations = {
+    'RS-00001': { id: 'RS-00001', jobNo: 'J-9', code: 'TST-SHEET', wh: 'A', qty: 5, issued: 0, status: 'OPEN' },
+    'RS-00002': { id: 'RS-00002', jobNo: 'J-8', code: 'TST-SHEET', wh: 'A', qty: 2, issued: 2, status: 'FILLED' },
+  };
+  const q = { material: 'SS400', thickness: 3, width: 1100, length: 2000 };
+  const r = R.suggestOffcuts(s, q);
+  assert.deepEqual(r.plates.map((p) => [p.code, p.available, p.reserved, p.free]), [['TST-SHEET', 5, 5, 0]]);
+  assert.doesNotMatch(r.advice, /ใช้แผ่นใหม่ TST-SHEET/);
+  assert.match(r.advice, /จอง/);
+  const own = R.suggestOffcuts(s, { ...q, job: 'J-9' });
+  assert.deepEqual(own.plates.map((p) => [p.reserved, p.free]), [[0, 5]]);
+  assert.match(own.advice, /ใช้แผ่นใหม่ TST-SHEET/);
+  s.tables.reservations['RS-00001'].issued = 3; // PARTIAL: 2 still kept for J-9
+  s.tables.reservations['RS-00001'].status = 'PARTIAL';
+  assert.deepEqual(R.suggestOffcuts(s, q).plates.map((p) => [p.reserved, p.free]), [[2, 3]]);
 });

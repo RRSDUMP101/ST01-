@@ -435,3 +435,26 @@ test('fingerprint ของงานเปลี่ยนเมื่อจำ�
   for (const c of w.store.commits) RRS.core.reduce(replay, JSON.parse(JSON.stringify(c)));
   assert.deepEqual(replay.tables.jobs, s.tables.jobs);
 });
+
+test('รหัสชิ้นส่วนเดียวกันสองบรรทัด: รายงานเป็นหนึ่งรายการ นับของจองครั้งเดียว และไม่รายงาน ready เกินจริง', async () => {
+  const w = await plant();
+  const id = 'production:ord-dup';
+  const key = keyOf('domestic', id);
+  await syncOk(w, command('domestic', id, 1));
+  await w.ok('PLAN', 'sales.mapJob', { jobKey: key, product: 'TST-FG', qty: 2 });
+  await stockIn(w, 'TST-001', 'A', 'A-01', 4);
+  await stockIn(w, 'TST-002', 'A', 'A-01', 2);
+  await w.ok('PLAN', 'reserve.create', { jobNo: key, code: 'TST-001', wh: 'A', qty: 4 });
+  await w.ok('PLAN', 'reserve.create', { jobNo: key, code: 'TST-002', wh: 'A', qty: 2 });
+  const state = await w.state();
+  assert.equal(S.statusFor(state, key, 0, { now: NOW }).materialStatus, 'ready');
+  // the same code on a second plan line (sales.mapJob never does this; a job edited elsewhere might): TST-001 now needs
+  // 4 + 2 while only 4 are reserved – one part, the reservation counted once, the rest short
+  const edited = structuredClone(state);
+  edited.tables.jobs[key].lines.push({ line: 9, code: 'TST-001', per: 1, required: 2, issued: 0, toMake: 0, finished: 0, received: 0, note: '' });
+  const st = S.statusFor(edited, key, 1, { now: NOW });
+  assert.ok(soAccepts(st));
+  assert.deepEqual(st.parts.map((p) => [p.partId, p.required, p.reserved, p.shortage]), [['TST-001', 6, 4, 2], ['TST-002', 2, 2, 0]]);
+  assert.equal(st.materialStatus, 'short');
+  assert.ok(st.blockers.includes('TST-001 ขาด 2 ชิ้น'));
+});

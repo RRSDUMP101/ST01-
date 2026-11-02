@@ -70,6 +70,11 @@
     return s && s.name ? `${s.name} (${id})` : id;
   }
   const sodOn = (state) => (((RRS.q.get(state, 'settings', 'main') || RRS.defaultSettings()).policies || {}).sod !== false);
+  /** A picture card (thumbnail + name) – src must be a safe link or a small inline image (imgSrc). */
+  function thumb(src, name, extra) {
+    const s = imgSrc(src);
+    return t`<div class="step">${s ? t`<a href="${s}" target="_blank" rel="noopener noreferrer"><img src="${s}" alt="${name || 'รูป'}" width="112" loading="lazy"></a>` : ''}<small class="muted">${name || ''}</small>${extra || ''}</div>`;
+  }
   function histTable(ctx, list) {
     const rows = (list || []).slice().reverse();
     return h.table({ rows, dense: true, scroll: rows.length > 8, empty: 'ยังไม่มีประวัติ', emptyText: 'ทุกการเปลี่ยนแปลงจะบันทึกผู้ทำและเวลาไว้ที่นี่',
@@ -81,7 +86,7 @@
       ] });
   }
   const K = {
-    dash, docView, ACTION_LABEL, safeUrl, imgSrc, fileLink, certState, certBadge, lotBadge, stockByLot, supplierName, sodOn, histTable,
+    dash, docView, ACTION_LABEL, safeUrl, imgSrc, fileLink, certState, certBadge, lotBadge, stockByLot, supplierName, sodOn, histTable, thumb,
     low: (s) => String(s == null ? '' : s).toLowerCase(),
     me: (ctx) => (ctx.user ? ctx.user.id : ''),
     docLink: (docNo) => (docNo ? h.link(h.code(docNo), 'docs', docView(docNo)) : dash),
@@ -118,6 +123,16 @@
   const RULES = 'กักกันล็อต: ของทุกตำแหน่งของล็อตนี้ที่ "ใช้ได้" หรือ "รอตรวจ" เปลี่ยนเป็น "กักกัน" (ของไม่ย้ายที่) และเบิก โอน ส่งมอบ ล็อตนี้ไม่ได้ทุกช่องทาง ยกเว้นตัดทิ้ง/คืนผู้ขายผ่าน NCR · ' +
     'ปลดกักกัน: ของกลับไปเป็น "รอตรวจ" ไม่กลับเป็น "ใช้ได้" ทันที – QC ต้องตรวจใหม่และหัวหน้า QC ปล่อยผ่านก่อนใช้';
 
+  /**
+   * Certificate pictures picked in this tab when files cannot be stored (demo / team mode): code|lot -> {no, file, name, src}.
+   * The record keeps the file name only; the small picture made by ctx.uploadFile is shown while this tab is open.
+   */
+  const certPreviews = new Map();
+  function certPreview(l) {
+    const p = certPreviews.get(l.code + '|' + l.lot);
+    const c = l.cert || {};
+    return p && p.no === c.no && p.file === c.file ? p : null;
+  }
   const selLot = (ctx) => (ctx.view.sel ? RRS.q.get(ctx.state, 'lots', ctx.view.sel) : null);
   const kindName = (l) => TRACK[l.kind] || 'ล็อต';
   const sumQ = (list) => util.round(util.sum(list, (x) => x.qty));
@@ -212,10 +227,12 @@
       certActs.push(h.btn('ตรวจสอบใบรับรอง', { act: 'verify', tone: 'primary', disabled: ownCert, id: 'lot-verify-btn',
         title: ownCert ? 'คุณเป็นผู้บันทึกใบรับรองนี้ – ให้ QC อีกคนตรวจ' : 'ยืนยันว่าใบรับรองตรงกับของที่รับ' }));
     }
+    const pv = certPreview(l);
     const certBox = t`${h.dl([
       ['สถานะ', h.badge(cs.label, cs.tone)], ['เลขที่ใบรับรอง', c.no], ['ไฟล์', c.file ? fileLink(c.file, 'เปิดไฟล์ใบรับรอง') : ''],
       ['บันทึกโดย', K.who(ctx, c.enteredBy, c.enteredAt)], ['ตรวจโดย', K.who(ctx, c.verifiedBy, c.verifiedAt)],
     ])}
+      ${pv ? t`<div class="form-actions" id="lot-cert-preview">${thumb(pv.src, pv.name)}</div><p class="hint">รูปใบรับรองย่อไว้ให้ดูในหน้าต่างนี้เท่านั้น – ระบบเก็บเฉพาะชื่อไฟล์ (เก็บไฟล์จริงได้เมื่อใช้เซิร์ฟเวอร์)</p>` : ''}
       ${cs.key === 'missing' ? h.note(`${l.code} ต้องมีใบรับรองวัสดุ – บันทึกใบรับรองแล้วให้ QC ตรวจ ก่อนปล่อยผ่านของล็อตนี้ได้`, 'warn') : ''}
       ${cs.key === 'entered' ? h.note(ownCert && canVerify ? 'คุณเป็นผู้บันทึกใบรับรองนี้ – ผู้ตรวจต้องเป็นคนละคน (แยกหน้าที่) ให้ QC อีกคนกด ตรวจสอบใบรับรอง' : 'รอ QC ตรวจใบรับรอง (ต้องเป็นคนละคนกับผู้บันทึก) – ก่อนตรวจ ปล่อยผ่าน QC ของล็อตนี้ไม่ได้', 'warn') : ''}
       ${certActs.length ? t`<div class="form-actions">${certActs}</div>` : !canCert && !canVerify ? t`<p class="hint">บันทึกใบรับรองโดยสโตร์/QC และตรวจโดย QC อีกคน</p>` : ''}`;
@@ -519,7 +536,7 @@
             : 'บันทึกแล้วต้องให้ QC อีกคนตรวจสอบใบรับรอง ก่อนปล่อยผ่านของล็อตนี้ได้',
           body: t`${h.field({ name: 'no', label: 'เลขที่ใบรับรอง (Mill cert / MTC)', value: c.no, required: true, wide: true, id: 'cert-no' })}
             ${h.field({ name: 'file', label: 'ไฟล์ใบรับรอง (รูปถ่ายหรือ PDF)', type: 'file', accept: server ? 'image/*,application/pdf' : null, wide: true, id: 'cert-file',
-              hint: server ? 'อัปโหลดเก็บบนเซิร์ฟเวอร์' : 'โหมดนี้เก็บเฉพาะชื่อไฟล์ (ไฟล์จริงเก็บได้เมื่อใช้เซิร์ฟเวอร์) – หรือใส่ลิงก์ไฟล์ที่เก็บไว้แล้วด้านล่าง' })}
+              hint: server ? 'อัปโหลดเก็บบนเซิร์ฟเวอร์' : 'โหมดนี้เก็บเฉพาะชื่อไฟล์ รูปถ่ายย่อไว้ให้ดูในหน้าต่างนี้ (ไฟล์จริงเก็บได้เมื่อใช้เซิร์ฟเวอร์) – หรือใส่ลิงก์ไฟล์ที่เก็บไว้แล้วด้านล่าง' })}
             ${h.field({ name: 'link', label: 'หรือลิงก์ไฟล์ที่เก็บไว้แล้ว', value: oldLink, placeholder: 'https://…', wide: true, id: 'cert-link' })}
             ${c.file ? t`<p class="hint wide">ไฟล์เดิม: ${fileLink(c.file)} – ไม่เลือกไฟล์ใหม่และไม่แก้ลิงก์ = ใช้ไฟล์เดิม</p>` : ''}
             ${h.field({ name: 'note', label: 'หมายเหตุของล็อต', value: l.note, wide: true, id: 'cert-note' })}`,
@@ -528,6 +545,7 @@
             if (!no) return { ok: false, errors: [{ message: 'ใส่เลขที่ใบรับรองตามที่พิมพ์บนเอกสาร' }] };
             const picked = form.querySelector('#cert-file').files[0];
             let file;
+            let preview = null;
             if (picked) {
               if (server) {
                 try {
@@ -535,7 +553,18 @@
                 } catch (e) {
                   return { ok: false, errors: [{ message: `อัปโหลดไฟล์ไม่สำเร็จ: ${(e && e.message) || e} – ลองใหม่ หรือใส่ลิงก์ไฟล์แทน` }] };
                 }
-              } else file = String(picked.name || '').slice(0, 200);
+              } else {
+                // the record keeps the name only; a picture is shrunk by ctx.uploadFile and shown in this tab
+                file = String(picked.name || 'ใบรับรอง').slice(0, 200);
+                if (/^image\//.test(picked.type || '')) {
+                  try {
+                    const up = await ctx.uploadFile(picked);
+                    if (up && imgSrc(up.url)) preview = { name: file, src: up.url };
+                  } catch (e) {
+                    ctx.toast(`ย่อรูป ${file} ไม่ได้ (${(e && e.message) || e}) – บันทึกเฉพาะชื่อไฟล์`, 'warn');
+                  }
+                }
+              }
             } else if (util.trim(vals.link) !== oldLink) {
               const link = util.trim(vals.link);
               if (link && !safeUrl(link)) return { ok: false, errors: [{ message: 'ลิงก์ต้องขึ้นต้นด้วย https:// (หรือเว้นว่างเพื่อลบไฟล์)' }] };
@@ -545,7 +574,14 @@
             if (file !== undefined) cert.file = file;
             const payload = { code: l.code, lot: l.lot, cert };
             if (util.trim(vals.note) !== util.trim(l.note)) payload.note = vals.note;
-            return ctx.exec('lot.update', payload, { quiet: true, done: `บันทึกใบรับรอง ${no} แล้ว – รอ QC ตรวจ` });
+            const r = await ctx.exec('lot.update', payload, { quiet: true, done: `บันทึกใบรับรอง ${no} แล้ว – รอ QC ตรวจ` });
+            if (r.ok && preview) {
+              const saved = RRS.q.get(ctx.state, 'lots', l.code + '|' + l.lot) || {};
+              const sc = saved.cert || {};
+              certPreviews.set(l.code + '|' + l.lot, Object.assign({ no: sc.no, file: sc.file }, preview));
+              ctx.set({});
+            }
+            return r;
           },
         });
       },
@@ -556,7 +592,7 @@
         const ok = await ctx.confirm({
           title: `ตรวจสอบใบรับรอง ${c.no}`, ok: 'ยืนยันว่าใบรับรองถูกต้อง',
           message: `ยืนยันว่าเลขที่ใบรับรอง ไฟล์ และ ${kindName(l)} ${l.lot} ตรงกับของที่รับเข้า (${l.code}) – ระบบบันทึกชื่อคุณเป็นผู้ตรวจ`,
-          body: c.file ? t`<p class="wide">${fileLink(c.file, 'เปิดไฟล์ใบรับรองเพื่อเทียบ')}</p>` : t`<p class="hint wide">ใบรับรองนี้ไม่มีไฟล์แนบ – เทียบกับเอกสารจริง</p>`,
+          body: t`${certPreview(l) ? t`<div class="form-actions wide">${thumb(certPreview(l).src, certPreview(l).name)}</div>` : ''}${c.file ? t`<p class="wide">${fileLink(c.file, 'เปิดไฟล์ใบรับรองเพื่อเทียบ')}</p>` : t`<p class="hint wide">ใบรับรองนี้ไม่มีไฟล์แนบ – เทียบกับเอกสารจริง</p>`}`,
         });
         if (!ok) return;
         await ctx.exec('lot.verifyCert', { code: l.code, lot: l.lot }, { done: `ตรวจใบรับรอง ${c.no} แล้ว` });

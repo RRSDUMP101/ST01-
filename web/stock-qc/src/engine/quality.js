@@ -19,16 +19,29 @@
  *    are stored; PASS waits for a release by another person with qc.release; FAIL opens an NCR and quarantines the qty.
  *    "ผลิตเสร็จ" is not "ผ่าน QC": FR of a qcFinal item lands in QC_HOLD and DL takes AVAILABLE stock only.
  *  - a re-inspection points at the earlier FAIL (or its NCR) of the same item + lot and keeps its drawing revision,
- *    unless the item's revision changed since (then revChanged and the current approved plan).
+ *    unless the item's revision changed since (then revChanged and the current approved plan). It looks at the very
+ *    pieces of that NCR: decided REWORK, fromStatus REWORK at the NCR's place (same job for in-process work), and no
+ *    more than the NCR still holds; the NCR closes when all of it was re-inspected.
+ *  - a PASS is bound to its drawing revision: once another revision is approved it cannot be released (REV_CHANGED)
+ *    and the next inspection of that place makes it void. A source document must have brought the item to the
+ *    inspected place, and sets the stage (RR → ตรวจรับ, FR → ก่อนส่งมอบ). Quantities may be given in any unit of the item.
  *  - NCR decisions: REWORK (→ รอแก้ไข, then re-inspect), RETURN (RV from QUARANTINE), SCRAP (SC from QUARANTINE),
  *    USE_AS_IS (ncr.useAsIs + conditions, not the inspector). Who/when/why and the document number are stored.
  *    ncr.open raises an NCR for stock already quarantined (e.g. a whole lot) so it can be returned or scrapped.
- *    Stock of an open NCR cannot leave QUARANTINE any other way (lot.release leaves it, direct SC/RV are refused);
- *    cancelling the SC/RV of a decision puts the NCR back to รอตัดสิน (history kept).
+ *    Stock of an NCR (QUARANTINE waiting for the decision, REWORK waiting for the re-inspection) cannot leave any other
+ *    way – lot.release leaves it, a direct SC/RV is refused (all lines of a place together), cancelling the receipt is
+ *    refused. Other QUARANTINE/REWORK stock is scrapped or returned only by someone who may decide NCRs there.
+ *    Cancelling the SC/RV of a decision puts the NCR back to รอตัดสิน (history kept).
+ *  - stock of a quarantined lot that comes back – a transfer received or cancelled, an issue cancelled – lands in
+ *    QUARANTINE; when the lot was quarantined and released meanwhile it lands in QC_HOLD (so does an RT of pieces the
+ *    job held during the quarantine): the rest of the lot is inspected again, so are they. A PASS whose stock is taken
+ *    back by a cancel is void. Cancelling the lot's first receipt moves the lot's receipt/supplier/PO link to the
+ *    receipts still standing.
  *  - status changes respect other modules' line checks (a count freeze refuses them), except lot.quarantine: the lot
  *    is blocked at once and a frozen bin keeps its balance until the count is approved (warning, quarantine again).
- *  - separation of duties: plan maker ≠ approver, cert entered by ≠ verified by, receipt poster ≠ inspector ≠
- *    releaser, quarantined by ≠ released by. Every row keeps a history list; nothing is deleted.
+ *  - separation of duties: plan maker ≠ approver, cert entered by ≠ verified by, receiver of the goods (with or
+ *    without a source document) ≠ inspector ≠ releaser, NCR raised by ≠ decided by, quarantined by ≠ released by.
+ *    Lot commands need the right in every warehouse that holds the lot. Every row keeps a history; nothing is deleted.
  * Every check is per warehouse (tx.need(perm, wh)). A failing command changes nothing.
  */
 (function (root) {
@@ -57,7 +70,7 @@
       ['quarantineDocNo', 'text', 'เอกสาร QS ที่กักกัน'], ['releasedBy', 'text', 'ผู้ปลดกักกัน'], ['releasedAt', 'datetime', 'ปลดกักกันเมื่อ'],
       ['releaseReason', 'text', 'เหตุผลปลดกักกัน'], ['releaseDocNo', 'text', 'เอกสาร QS ที่ปลดกักกัน'],
       ['createdBy', 'text', 'ผู้สร้าง'], ['createdAt', 'datetime', 'สร้างเมื่อ'],
-      ['history', 'json', 'ประวัติการเปลี่ยนแปลง {at, by, action, detail}']],
+      ['history', 'json', 'ประวัติการเปลี่ยนแปลง {at, seq, by, action, detail}']],
   });
   schema.define('qc_plans', {
     label: 'แผนตรวจ QC / เกณฑ์ตรวจ', phase: 5, key: 'id',
@@ -70,7 +83,7 @@
       ['status', 'enum', 'สถานะ', 'DRAFT/APPROVED/OBSOLETE'], ['createdBy', 'text', 'ผู้จัดทำ'], ['createdAt', 'datetime', 'จัดทำเมื่อ'],
       ['updatedBy', 'text', 'ผู้แก้ล่าสุด'], ['updatedAt', 'datetime', 'แก้ล่าสุดเมื่อ'], ['approvedBy', 'text', 'ผู้อนุมัติ'],
       ['approvedAt', 'datetime', 'อนุมัติเมื่อ'], ['obsoletedBy', 'text', 'ผู้ทำให้เลิกใช้'], ['obsoletedAt', 'datetime', 'เลิกใช้เมื่อ'],
-      ['replacedBy', 'text', 'แทนด้วยแผน'], ['history', 'json', 'ประวัติการเปลี่ยนแปลง {at, by, action, detail}']],
+      ['replacedBy', 'text', 'แทนด้วยแผน'], ['history', 'json', 'ประวัติการเปลี่ยนแปลง {at, seq, by, action, detail}']],
   });
   schema.define('inspections', {
     label: 'ผลตรวจ QC', phase: 5, key: 'id',
@@ -78,7 +91,8 @@
     fields: [['id', 'text', 'เลขที่ผลตรวจ (IN-00001)'], ['stage', 'enum', 'ขั้นตอน', 'INCOMING/IN_PROCESS/FINAL'],
       ['code', 'text', 'รหัสสินค้า'], ['wh', 'text', 'คลัง'], ['bin', 'text', 'ช่องเก็บ'], ['lot', 'text', 'ล็อต'],
       ['qty', 'number', 'จำนวนที่ตรวจ (หน่วยหลัก)'], ['fromStatus', 'enum', 'สถานะก่อนตรวจ', 'QC_HOLD/REWORK'],
-      ['sourceDoc', 'text', 'เอกสารต้นทาง'], ['jobNo', 'text', 'ใบงาน'], ['planId', 'text', 'แผนตรวจ'],
+      ['sourceDoc', 'text', 'เอกสารต้นทาง'], ['receivedBy', 'list', 'ผู้รับของนี้เข้าคลัง (ตรวจ/ปล่อยเองไม่ได้)'],
+      ['jobNo', 'text', 'ใบงาน'], ['planId', 'text', 'แผนตรวจ'],
       ['planRev', 'text', 'ฉบับแบบที่ใช้ตรวจ'], ['sourceRef', 'text', 'อ้างอิงแบบ/WI ของแผน'],
       ['results', 'json', 'ผลแต่ละหัวข้อ {char, name, kind, value, ok, min, max, unit}'], ['photos', 'json', 'รูปหลักฐาน {name, url}'],
       ['inspector', 'text', 'ผู้ตรวจ'], ['at', 'datetime', 'ตรวจเมื่อ'], ['result', 'enum', 'ผล', 'PASS/FAIL'],
@@ -100,9 +114,9 @@
       ['disposition', 'enum', 'การตัดสิน', 'REWORK/RETURN/SCRAP/USE_AS_IS'], ['dispositionBy', 'text', 'ผู้ตัดสิน'],
       ['dispositionAt', 'datetime', 'ตัดสินเมื่อ'], ['reason', 'text', 'เหตุผล'], ['conditions', 'text', 'เงื่อนไขการยอมรับ'],
       ['docNo', 'text', 'เอกสารที่เกิดจากการตัดสิน'], ['docType', 'text', 'ประเภทเอกสาร'],
-      ['reinspections', 'json', 'ผลตรวจซ้ำ {id, result, at, by}'], ['createdBy', 'text', 'ผู้เปิด'], ['createdAt', 'datetime', 'เปิดเมื่อ'],
+      ['reinspections', 'json', 'ผลตรวจซ้ำ {id, result, qty, at, by} – แก้ไขงานปิดได้เมื่อตรวจซ้ำครบจำนวน'], ['createdBy', 'text', 'ผู้เปิด'], ['createdAt', 'datetime', 'เปิดเมื่อ'],
       ['closedBy', 'text', 'ผู้ปิด'], ['closedAt', 'datetime', 'ปิดเมื่อ'], ['closeNote', 'text', 'บันทึกปิด'],
-      ['history', 'json', 'ประวัติ {at, by, action, detail}']],
+      ['history', 'json', 'ประวัติ {at, seq, by, action, detail}']],
   });
 
   // ---------------------------------------------------------------------------------------------------------
@@ -130,9 +144,13 @@
   const HOLD = [QC_HOLD, QUARANTINE, REWORK];
   const MAX_PHOTOS = 20;
   const MAX_URL = 2000;
+  /** A stored link is an http(s) address or a plain file name / path – never data:, javascript: or another scheme. */
+  const badLink = (u) => /^[a-z][a-z0-9+.-]*:/i.test(u) && !/^https?:\/\//i.test(u);
 
-  /** >0 while this module posts SC/RV for an NCR decision (prepare is synchronous). */
-  let ncrPosting = 0;
+  /** SC/RV document rows this module is posting for an NCR decision (the decision is their authorization). */
+  const ncrDocs = new WeakSet();
+  /** A receipt of this type is inspected at this stage (sourceDoc of an inspection). */
+  const DOC_STAGE = { RR: 'INCOMING', FR: 'FINAL' };
 
   // ---------------------------------------------------------------------------------------------------------
   // small helpers (work on a Tx or on a reader made from a state: {get, all, settings})
@@ -150,8 +168,35 @@
     return `${l.wh}${l.bin ? '/' + l.bin : ''}${l.lot ? ' ล็อต ' + l.lot : ''}`;
   }
   function hist(row, tx, action, detail) {
-    row.history = (row.history || []).concat([{ at: tx.now, by: tx.userId, action, detail: detail || '' }]);
+    row.history = (row.history || []).concat([{ at: tx.now, seq: tx.seq, by: tx.userId, action, detail: detail || '' }]);
     return row;
+  }
+  /** Separation of duties with a message that names both roles (off when policies.sod is false). */
+  function notSame(tx, otherUserId, message, where) {
+    if (!sodOn(tx) || !otherUserId || otherUserId !== tx.userId) return true;
+    return tx.error('SAME_PERSON', message, where);
+  }
+  /** A quantity in `unit` (default the base unit) → base unit; null (with an error) when it is not a positive number or the unit is unknown. */
+  function baseQty(tx, it, rawQty, rawUnit, what) {
+    const q = util.num(rawQty);
+    if (isNaN(q) || q <= 0) return tx.error('BAD_QTY', `${what || 'จำนวน'}ต้องเป็นตัวเลขมากกว่า 0`, { field: 'qty' }) && null;
+    const unit = util.trim(rawUnit) || it.baseUnit;
+    const f = RRS.unitFactor((t, k) => tx.get(t, k), it, unit);
+    if (f == null) return tx.error('NO_UNIT', `${it.id} ไม่มีตัวคูณของหน่วย "${unit}" (หน่วยหลัก ${it.baseUnit})`, { field: 'unit' }) && null;
+    return round(q * f);
+  }
+  /** Seq of the commit that posted a document (its first own movement); 0 when unknown. */
+  function postSeqOf(r, docNo, type) {
+    let s = 0;
+    for (const m of r.all('movements', (x) => x.docNo === docNo && x.docType === type && !x.reversalOf)) if (!s || m.seq < s) s = m.seq;
+    return s;
+  }
+  /** Was the lot quarantined after commit `seq` (or time `at` for rows written before history kept the seq)? */
+  function quarantinedSince(lot, seq, at) {
+    if (!lot) return false;
+    const hs = (lot.history || []).filter((h) => h.action === 'QUARANTINE');
+    if (hs.some((h) => (h.seq && seq ? h.seq > seq : !!at && String(h.at) > String(at)))) return true;
+    return !hs.length && !!lot.quarantinedAt && !!at && String(lot.quarantinedAt) > String(at);
   }
   function emptyCert() {
     return { no: '', file: '', enteredBy: '', enteredAt: '', verified: false, verifiedBy: '', verifiedAt: '' };
@@ -177,6 +222,47 @@
   function pendingRelease(r, loc, status) {
     return round(util.sum(r.all('inspections', (i) => i.status === 'OPEN' && STOCK_STAGES[i.stage] && i.fromStatus === status
       && sameLoc(i, loc)), (i) => i.qty - (i.releasedQty || 0)));
+  }
+  /** Quantity of an NCR already re-inspected (PASS or FAIL; a void result does not count). */
+  function reinspectedQty(r, ncrNo) {
+    return round(util.sum(r.all('inspections', (i) => i.reinspectionNcr === ncrNo && i.status !== 'VOID'), (i) => i.qty));
+  }
+  /** REWORK stock at a place that NCRs decided REWORK still wait to re-inspect. */
+  function reworkByNcr(r, loc) {
+    let s = 0;
+    for (const n of r.all('ncrs', (x) => x.status === 'DISPOSITIONED' && x.disposition === 'REWORK' && x.stockHeld && sameLoc(x, loc))) {
+      s += Math.max(0, round(n.qty - reinspectedQty(r, n.ncrNo)));
+    }
+    return round(s);
+  }
+  /** Stock at a QUARANTINE / REWORK place that belongs to an NCR (or to a re-inspection waiting for release). */
+  function heldAt(r, loc, status) {
+    if (status === QUARANTINE) return heldByNcr(r, loc);
+    if (status === REWORK) return round(reworkByNcr(r, loc) + pendingRelease(r, loc, REWORK));
+    return 0;
+  }
+  /**
+   * People who put the stock now at a place into this status: the newest receipts (not reversed) that cover the
+   * balance. Status changes (QS) have no receiver. Used for "the receiver does not inspect / release their own receipt".
+   */
+  function receiversAt(r, loc, status, have) {
+    const here = (m) => m.code === loc.code && m.wh === loc.wh && (m.bin || '') === (loc.bin || '') && (m.lot || '') === (loc.lot || '') && m.status === status;
+    const mvs = r.all('movements', here);
+    const reversed = new Set(mvs.filter((m) => m.reversalOf).map((m) => m.reversalOf));
+    const ins = mvs.filter((m) => m.qty > 0 && !m.reversalOf && !reversed.has(m.id))
+      .sort((a, b) => b.seq - a.seq || Number(String(b.id).split('.')[1]) - Number(String(a.id).split('.')[1]));
+    const out = [];
+    let left = round(have);
+    for (const m of ins) {
+      if (left <= 0) break;
+      if (m.docType !== 'QS' && m.by && out.indexOf(m.by) < 0) out.push(m.by);
+      left = round(left - m.qty);
+    }
+    return out;
+  }
+  /** Warehouses holding stock of a lot (any quality status, not in transit). */
+  function lotWarehouses(tx, code, lot) {
+    return Array.from(new Set(tx.all('balances', (b) => b.code === code && b.lot === lot && b.wh !== TRANSIT && b.qty > 0).map((b) => b.wh))).sort();
   }
   function getItem(tx, code, field) {
     const it = tx.item(code);
@@ -270,21 +356,8 @@
    * the stock lines (the type's own posting right is not asked again – the decision is the authorization).
    */
   function postForNcr(tx, doc) {
-    const td = typeDef(doc.type);
-    const docPerm = (td && td.perm) || 'doc.post';
-    const had = Object.prototype.hasOwnProperty.call(tx, 'can');
-    const prev = tx.can;
-    tx.can = function (perm, wh) {
-      return prev.call(this, perm === docPerm ? 'ncr.disposition' : perm, wh);
-    };
-    ncrPosting += 1;
-    try {
-      return inv.post(tx, doc);
-    } finally {
-      ncrPosting -= 1;
-      if (had) tx.can = prev;
-      else delete tx.can;
-    }
+    ncrDocs.add(doc);
+    return inv.post(tx, doc, { perm: 'ncr.disposition' });
   }
 
   /**
@@ -315,9 +388,16 @@
     const src = insp.sourceDoc ? r.get('documents', insp.sourceDoc) : null;
     if (sodOn(r) && src && src.postedBy && src.postedBy === userId) {
       add('SAME_PERSON', `ผู้อนุมัติปล่อยผ่าน ต้องเป็นคนละคนกับผู้บันทึกเอกสาร ${src.docNo} (แยกหน้าที่)`);
+    } else if (sodOn(r) && (insp.receivedBy || []).indexOf(userId) >= 0) {
+      add('SAME_PERSON', `ผู้อนุมัติปล่อยผ่าน ต้องเป็นคนละคนกับผู้รับของนี้เข้าคลัง (แยกหน้าที่)`);
+    }
+    // a PASS is bound to the drawing revision it was inspected against: a new approved revision needs a new inspection
+    const item = r.get('items', insp.code);
+    if (item && util.normCode(item.drawingRev) !== util.normCode(insp.planRev)) {
+      add('REV_CHANGED', `${insp.id} ตรวจตามแบบฉบับ "${insp.planRev || '-'}" แต่ฉบับแบบที่อนุมัติตอนนี้ของ ${insp.code} คือ "${item.drawingRev || '-'}" – ตรวจใหม่ตามแผนฉบับปัจจุบันก่อนปล่อย`);
     }
     if (STOCK_STAGES[insp.stage]) {
-      const it = r.get('items', insp.code);
+      const it = item;
       const lot = insp.lot ? r.get('lots', lotKey(insp.code, insp.lot)) : null;
       if (it && it.certRequired) {
         if (!tracked(it) || !insp.lot) add('CERT_MISSING', `${it.id} ต้องมีใบรับรองวัสดุ แต่ไม่ได้ติดตามล็อต – ตั้งการติดตามล็อตก่อน`);
@@ -356,7 +436,8 @@
         const no = util.trim(p.cert.no).slice(0, 80);
         if (!no) return tx.error('REQUIRED', 'ระบุเลขที่ใบรับรองวัสดุ', { field: 'cert.no' });
         const cur = row.cert || emptyCert();
-        const file = p.cert.file !== undefined ? util.trim(p.cert.file).slice(0, MAX_URL) : (no === cur.no ? cur.file : '');
+        const file = p.cert.file !== undefined ? util.trim(p.cert.file) : (no === cur.no ? cur.file : '');
+        if (file.length > MAX_URL || badLink(file)) return tx.error('BAD_VALUE', 'ไฟล์ใบรับรองต้องเป็นลิงก์ https:// ของไฟล์ที่อัปโหลดแล้ว หรือชื่อไฟล์', { field: 'cert.file' });
         if (no !== cur.no || file !== cur.file) {
           changes.push(cur.no
             ? `ใบรับรอง ${cur.no}${cur.verified ? ` (ตรวจแล้วโดย ${cur.verifiedBy})` : ''} → ${no} – ต้องตรวจใหม่`
@@ -419,7 +500,8 @@
           ? tx.error('COUNT_FREEZE', `${it.id} ${lot} ที่ ${skipped.map(locText).join(', ')} อยู่ระหว่างตรวจนับ – สั่งกักกันซ้ำหลังอนุมัติรอบนับ`)
           : tx.error('ALREADY', `${it.id} ${lot} ถูกกักกันอยู่แล้ว`);
       }
-      for (const w of Array.from(new Set(bals.map((b) => b.wh)))) if (!tx.need('qc.quarantine', w)) return;
+      // the person needs the right in every warehouse holding stock of the lot (also stock already held by an NCR)
+      for (const w of lotWarehouses(tx, it.id, lot)) if (!tx.need('qc.quarantine', w)) return;
       let qs = null;
       if (bals.length) {
         qs = writeQS(tx, { reason: `กักกันล็อต: ${reason}`, ref: `${it.id} ${lot}`, source: 'lot:' + lotKey(it.id, lot),
@@ -436,7 +518,7 @@
       hist(row, tx, again ? 'QUARANTINE_SWEEP' : 'QUARANTINE', `${reason}; ย้ายเข้ากักกัน ${moved} ${it.baseUnit}${qs ? ' (' + qs.docNo + ')' : ''}`);
       tx.putRow('lots', row);
       const transit = tx.qty({ code: it.id, wh: TRANSIT, lot });
-      if (transit > 0) tx.warn(`มี ${it.id} ล็อต ${lot} ระหว่างโอน ${transit} ${it.baseUnit} – รับปลายทางแล้วสั่งกักกันซ้ำ (ระหว่างนี้เบิกล็อตนี้ไม่ได้)`);
+      if (transit > 0) tx.warn(`มี ${it.id} ล็อต ${lot} ระหว่างโอน ${transit} ${it.baseUnit} – รับปลายทางแล้วจะเป็นสถานะกักกัน (ระหว่างนี้เบิกล็อตนี้ไม่ได้)`);
       for (const b of skipped) {
         tx.warn(`${locText(b)} อยู่ระหว่างตรวจนับ ${b.count} – ยอด ${b.qty} ${it.baseUnit} ยังไม่ย้ายเป็นกักกัน (เบิกล็อตนี้ไม่ได้แล้ว) สั่งกักกันซ้ำหลังอนุมัติรอบนับ`);
       }
@@ -463,7 +545,8 @@
         const free = round(b.qty - heldByNcr(tx, b)); // stock of an open NCR waits for its decision
         if (free > 0) lines.push({ code: it.id, wh: b.wh, bin: b.bin, lot, qty: free, from: QUARANTINE, to: QC_HOLD });
       }
-      for (const w of Array.from(new Set(lines.map((l) => l.wh)))) if (!tx.need('qc.release', w)) return;
+      // also where nothing moves (stock of an open NCR stays in quarantine): the lot becomes usable there too
+      for (const w of lotWarehouses(tx, it.id, lot)) if (!tx.need('qc.release', w)) return;
       let qs = null;
       if (lines.length) {
         qs = writeQS(tx, { reason: `ปลดกักกันล็อต (กลับไปรอตรวจ): ${reason}`, ref: `${it.id} ${lot}`, source: 'lot:' + lotKey(it.id, lot), lines });
@@ -600,8 +683,8 @@
       const stock = !!STOCK_STAGES[stage];
       const it = getItem(tx, p.code);
       if (!it) return;
-      const qty = util.num(p.qty);
-      if (isNaN(qty) || qty <= 0) return tx.error('BAD_QTY', 'จำนวนที่ตรวจต้องเป็นตัวเลขมากกว่า 0', { field: 'qty' });
+      const qty = baseQty(tx, it, p.qty, p.unit, 'จำนวนที่ตรวจ');
+      if (qty == null) return;
       const lot = util.trim(p.lot);
       if (lot && !tracked(it)) return tx.error('LOT_NOT_TRACKED', `${it.id} ไม่ได้ตั้งให้ติดตามล็อต – ลบล็อตออก`, { field: 'lot' });
       if (stock && tracked(it) && !lot) return tx.error('LOT_REQUIRED', `${it.id} ต้องระบุ${trackName(it)}`, { field: 'lot' });
@@ -624,8 +707,16 @@
         const d = tx.get('documents', util.normCode(p.sourceDoc));
         if (!d) return tx.error('NOT_FOUND', `ไม่พบเอกสาร ${p.sourceDoc}`, { field: 'sourceDoc' });
         if (!posted(d) || d.status === 'CANCELLED') return tx.error('BAD_STATE', `เอกสาร ${d.docNo} ยังไม่ได้บันทึกหรือถูกยกเลิก`, { field: 'sourceDoc' });
-        const ln = (d.lines || []).find((l) => l.code === it.id && (!lot || l.lot === lot));
-        if (!ln) return tx.error('NOT_IN_DOC', `เอกสาร ${d.docNo} ไม่มี ${it.id}${lot ? ' ล็อต ' + lot : ''}`, { field: 'sourceDoc' });
+        // the stage follows the document: a purchase receipt is inspected on receipt, a production receipt before delivery
+        if (DOC_STAGE[d.type] && DOC_STAGE[d.type] !== stage) {
+          return tx.error('STAGE_MISMATCH', `${d.docNo} เป็น${(typeDef(d.type) || {}).name || d.type} – ต้องตรวจขั้น${STAGES[DOC_STAGE[d.type]]} ไม่ใช่${STAGES[stage]}`, { field: 'stage' });
+        }
+        // for stock: the document must have brought the item to the place being inspected
+        const td = typeDef(d.type);
+        const atPlace = (l) => !stock || (l.wh === wh && (l.bin || '') === bin)
+          || (!!td && td.dir === 'T' && l.toWh === wh && (l.receivedBin != null ? l.receivedBin : l.toBin || '') === bin);
+        const ln = (d.lines || []).find((l) => l.code === it.id && (!lot || l.lot === lot) && atPlace(l));
+        if (!ln) return tx.error('NOT_IN_DOC', `เอกสาร ${d.docNo} ไม่มี ${it.id}${lot ? ' ล็อต ' + lot : ''}${stock ? ' ที่ ' + wh + (bin ? '/' + bin : '') : ''}`, { field: 'sourceDoc' });
         const djob = d.job || ln.jobNo || '';
         if (jobNo && djob && jobKey(jobNo) !== jobKey(djob)) return tx.error('JOB_MISMATCH', `เอกสาร ${d.docNo} เป็นของงาน ${djob} ไม่ใช่ ${jobNo}`, { field: 'jobNo' });
         jobNo = jobNo || djob;
@@ -643,6 +734,11 @@
       if (util.normCode(plan.drawingRev) !== util.normCode(it.drawingRev)) {
         return tx.error('PLAN_REV_STALE', `แผน ${plan.id} อ้างแบบฉบับ "${plan.drawingRev || '-'}" แต่ฉบับแบบที่อนุมัติปัจจุบันของ ${it.id} คือ "${it.drawingRev || '-'}" – อนุมัติแผนตรวจฉบับใหม่ก่อน`, { field: 'planId' });
       }
+      // a PASS still waiting for release but bound to an older drawing revision can never be released (REV_CHANGED):
+      // it no longer holds the stock, and this inspection makes it void
+      const stale = stock ? tx.all('inspections', (i) => i.status === 'OPEN' && STOCK_STAGES[i.stage] && i.fromStatus === fromStatus
+        && sameLoc(i, { code: it.id, wh, bin, lot }) && util.normCode(i.planRev) !== util.normCode(it.drawingRev)) : [];
+      const staleQty = round(util.sum(stale, (i) => i.qty - (i.releasedQty || 0)));
       // re-inspection: points at the earlier FAIL (or its NCR) of the same item + lot
       let orig = null;
       let viaNcr = null;
@@ -656,12 +752,30 @@
         }
         if (!orig && !viaNcr) return tx.error('NOT_FOUND', `ไม่พบผลตรวจหรือ NCR ${p.reinspectionOf} ที่ใช้ได้กับการตรวจซ้ำ`, { field: 'reinspectionOf' });
         if (orig && orig.result !== 'FAIL') return tx.error('NOT_FAIL', `${orig.id} ผลตรวจผ่าน – ตรวจซ้ำต้องอ้างผลตรวจที่ไม่ผ่าน`, { field: 'reinspectionOf' });
-        const ref0 = orig || viaNcr;
-        if (ref0.code !== it.id || (ref0.lot || '') !== lot || (orig && orig.stage !== stage)) {
-          return tx.error('REINSPECT_MISMATCH', `${orig ? orig.id : viaNcr.ncrNo} เป็นของ ${ref0.code}${ref0.lot ? ' ล็อต ' + ref0.lot : ''}${orig ? ' ' + STAGES[orig.stage] : ''} – ตรวจซ้ำต้องเป็นสินค้า ล็อต และขั้นตอนเดียวกัน`, { field: 'reinspectionOf' });
-        }
         if (!viaNcr && orig.ncrNo) viaNcr = tx.get('ncrs', orig.ncrNo);
-        if (viaNcr && viaNcr.status === 'CLOSED') return tx.error('BAD_STATE', `NCR ${viaNcr.ncrNo} ปิดแล้ว`, { field: 'reinspectionOf' });
+        if (!viaNcr) return tx.error('NOT_FOUND', `${orig.id} ไม่มี NCR – ตรวจซ้ำต้องอ้างผลไม่ผ่านที่เปิด NCR แล้ว`, { field: 'reinspectionOf' });
+        const ref0 = orig || viaNcr;
+        // the re-inspection looks at the very pieces of that NCR: same item, lot, stage, kind (stock / job work) and place
+        const samePlace = !stock || (viaNcr.wh === wh && (viaNcr.bin || '') === bin);
+        if (ref0.code !== it.id || (ref0.lot || '') !== lot || (orig && orig.stage !== stage) || !!viaNcr.stockHeld !== stock || !samePlace) {
+          return tx.error('REINSPECT_MISMATCH', `${orig ? orig.id : viaNcr.ncrNo} เป็นของ ${ref0.code}${ref0.lot ? ' ล็อต ' + ref0.lot : ''}${orig ? ' ' + STAGES[orig.stage] : ''}${viaNcr.stockHeld ? ' ที่ ' + viaNcr.wh + (viaNcr.bin ? '/' + viaNcr.bin : '') : ' (งานระหว่างผลิต)'} – ตรวจซ้ำต้องเป็นสินค้า ล็อต ขั้นตอน และตำแหน่งเดียวกัน`, { field: 'reinspectionOf' });
+        }
+        if (viaNcr.status === 'CLOSED') return tx.error('BAD_STATE', `NCR ${viaNcr.ncrNo} ปิดแล้ว`, { field: 'reinspectionOf' });
+        if (viaNcr.status !== 'DISPOSITIONED' || viaNcr.disposition !== 'REWORK') {
+          return tx.error('REINSPECT_STATE', `${viaNcr.ncrNo} ${viaNcr.status === 'OPEN' ? 'ยังรอตัดสิน' : 'ตัดสินเป็น' + (DISPOSITIONS[viaNcr.disposition] || viaNcr.disposition)} – ตรวจซ้ำได้เมื่อตัดสินให้แก้ไขงาน (REWORK) แล้วเท่านั้น`, { field: 'reinspectionOf' });
+        }
+        if (stock && fromStatus !== REWORK) {
+          return tx.error('REINSPECT_STATE', `ตรวจซ้ำตาม ${viaNcr.ncrNo} ต้องตรวจของสถานะรอแก้ไข (REWORK) ที่แก้ไขแล้ว ไม่ใช่ของ${STATUS_LABEL[fromStatus]}`, { field: 'fromStatus' });
+        }
+        if (viaNcr.jobNo && jobNo && jobKey(viaNcr.jobNo) !== jobKey(jobNo)) {
+          return tx.error('JOB_MISMATCH', `${viaNcr.ncrNo} เป็นของงาน ${viaNcr.jobNo} ไม่ใช่ ${jobNo}`, { field: 'jobNo' });
+        }
+        jobNo = jobNo || viaNcr.jobNo || '';
+        const staleOfNcr = round(util.sum(stale.filter((i) => i.reinspectionNcr === viaNcr.ncrNo), (i) => i.qty));
+        const left = round(viaNcr.qty - reinspectedQty(tx, viaNcr.ncrNo) + staleOfNcr);
+        if (qty > left) {
+          return tx.error('TOO_MUCH', `${viaNcr.ncrNo} แก้ไขงาน ${viaNcr.qty} ${it.baseUnit} ตรวจซ้ำแล้ว ${round(viaNcr.qty - left)} – ตรวจซ้ำได้อีกไม่เกิน ${Math.max(0, left)}`, { field: 'qty' });
+        }
         if (orig && util.normCode(orig.planRev) !== util.normCode(plan.drawingRev)) {
           if (util.normCode(it.drawingRev) === util.normCode(orig.planRev)) {
             return tx.error('REV_MISMATCH', `ตรวจซ้ำต้องใช้แบบฉบับเดิม "${orig.planRev || '-'}"`, { field: 'planId' });
@@ -672,13 +786,19 @@
         return tx.error('REINSPECTION_REQUIRED', 'ของรอแก้ไขต้องตรวจซ้ำโดยอ้างผลตรวจไม่ผ่านหรือ NCR เดิม', { field: 'reinspectionOf' });
       }
       // the quantity must be there (and not already inspected and waiting for release)
+      let receivedBy = [];
       if (stock) {
         const loc = { code: it.id, wh, bin, status: fromStatus, lot };
         const have = tx.balanceAt(loc).qty;
-        const pending = pendingRelease(tx, loc, fromStatus);
+        const pending = round(pendingRelease(tx, loc, fromStatus) - staleQty);
         const free = round(have - pending);
         if (round(qty) > free) {
           return tx.error('NOT_ENOUGH', `${it.id} ที่ ${locText(loc)} สถานะ${STATUS_LABEL[fromStatus]} มี ${have} ${it.baseUnit}${pending ? ` (ตรวจผ่านรอปล่อย ${pending})` : ''} – ตรวจได้ไม่เกิน ${Math.max(0, free)}`, { field: 'qty' });
+        }
+        // the person who received the goods does not inspect (or later release) them – also without a source document
+        if (fromStatus === QC_HOLD) {
+          receivedBy = receiversAt(tx, loc, QC_HOLD, have);
+          if (!notSame(tx, receivedBy.indexOf(tx.userId) >= 0 ? tx.userId : '', `ผู้ตรวจต้องเป็นคนละคนกับผู้รับ ${it.id} ที่ ${locText(loc)} เข้าคลัง (แยกหน้าที่)`, { field: 'qty' })) return;
         }
       }
       // results against the plan's characteristics
@@ -720,13 +840,13 @@
         const url = util.trim(ph && ph.url);
         const name = util.trim(ph && ph.name).slice(0, 120);
         if (!url && !name) return tx.error('BAD_VALUE', 'รูปหลักฐานต้องมีชื่อหรือลิงก์', { field: 'photos' });
-        if (url.length > MAX_URL || /^data:/i.test(url)) return tx.error('BAD_VALUE', 'แนบเป็นลิงก์ของรูปที่อัปโหลดแล้วเท่านั้น (ไม่ฝังรูปในข้อมูล)', { field: 'photos' });
+        if (url.length > MAX_URL || badLink(url)) return tx.error('BAD_VALUE', 'แนบเป็นลิงก์ https:// ของรูปที่อัปโหลดแล้วเท่านั้น (ไม่ฝังรูปในข้อมูล)', { field: 'photos' });
         photos.push({ name, url });
       }
       const result = results.every((r) => r.ok) ? 'PASS' : 'FAIL';
       const id = tx.nextId('IN');
       const row = {
-        id, stage, code: it.id, wh, bin, lot, qty: round(qty), fromStatus, sourceDoc, jobNo, planId: plan.id, planRev: plan.drawingRev,
+        id, stage, code: it.id, wh, bin, lot, qty: round(qty), fromStatus, sourceDoc, receivedBy, jobNo, planId: plan.id, planRev: plan.drawingRev,
         sourceRef: plan.sourceRef, results, photos, inspector: tx.userId, at: tx.now, result, reinspectionOf: orig ? orig.id : '',
         reinspectionNcr: viaNcr ? viaNcr.ncrNo : '', revChanged, ncrNo: '', qsDocNo: '', status: result === 'PASS' ? 'OPEN' : 'NCR',
         releasedQty: 0, releasedBy: '', releasedAt: '', releases: [], voidedBy: '', voidedAt: '', voidReason: '',
@@ -757,10 +877,15 @@
       }
       if (viaNcr) {
         const n = tx.get('ncrs', viaNcr.ncrNo);
-        tx.put('ncrs', n.ncrNo, hist(Object.assign(clone(n), { reinspections: (n.reinspections || []).concat([{ id, result, at: tx.now, by: tx.userId }]) }),
+        tx.put('ncrs', n.ncrNo, hist(Object.assign(clone(n), { reinspections: (n.reinspections || []).concat([{ id, result, qty: row.qty, at: tx.now, by: tx.userId }]) }),
           tx, 'REINSPECT', `ตรวจซ้ำ ${id}: ${result === 'PASS' ? 'ผ่าน' : 'ไม่ผ่าน'}${revChanged ? ' (แบบเปลี่ยนเป็นฉบับ ' + plan.drawingRev + ')' : ''}`));
       }
       if (revChanged) tx.warn(`ฉบับแบบเปลี่ยนจาก "${orig.planRev || '-'}" เป็น "${plan.drawingRev || '-'}" – ตรวจตามแผน ${plan.id} ฉบับปัจจุบัน`);
+      for (const i of stale) {
+        tx.put('inspections', i.id, Object.assign({}, i, { status: 'VOID', voidedBy: tx.userId, voidedAt: tx.now,
+          voidReason: `แบบเปลี่ยนจากฉบับ "${i.planRev || '-'}" เป็น "${it.drawingRev || '-'}" – ตรวจใหม่ ${id}` }));
+        tx.warn(`${i.id} (ผ่านตามแบบฉบับ "${i.planRev || '-'}" รอปล่อย) เป็นโมฆะ – ใช้ผลตรวจ ${id} ตามแบบฉบับปัจจุบันแทน`);
+      }
       tx.put('inspections', id, row);
       tx.result.id = id;
       tx.result.result = result;
@@ -782,10 +907,9 @@
       const left = round(insp.qty - (insp.releasedQty || 0));
       let qty = left;
       if (p.qty != null && p.qty !== '') {
-        qty = util.num(p.qty);
-        if (isNaN(qty) || qty <= 0) return tx.error('BAD_QTY', 'จำนวนที่ปล่อยต้องเป็นตัวเลขมากกว่า 0', { field: 'qty' });
-        if (round(qty) > left) return tx.error('TOO_MUCH', `ปล่อยได้ไม่เกิน ${left} ${it.baseUnit}`, { field: 'qty' });
-        qty = round(qty);
+        qty = baseQty(tx, it, p.qty, p.unit, 'จำนวนที่ปล่อย');
+        if (qty == null) return;
+        if (qty > left) return tx.error('TOO_MUCH', `ปล่อยได้ไม่เกิน ${left} ${it.baseUnit}`, { field: 'qty' });
       }
       let qs = null;
       if (STOCK_STAGES[insp.stage]) {
@@ -795,7 +919,7 @@
         if (!qs) return;
       }
       const releasedQty = round((insp.releasedQty || 0) + qty);
-      const done = releasedQty >= insp.qty;
+      const done = releasedQty >= round(insp.qty);
       tx.put('inspections', insp.id, Object.assign(clone(insp), {
         releasedQty, status: done ? 'RELEASED' : 'OPEN', releasedBy: tx.userId, releasedAt: tx.now,
         releases: (insp.releases || []).concat([{ qty, by: tx.userId, at: tx.now, docNo: qs ? qs.docNo : '' }]),
@@ -820,8 +944,8 @@
       const wh = util.normCode(p.wh);
       const bin = util.normCode(p.bin);
       if (!checkWh(tx, wh, bin, 'qc.inspect')) return;
-      const qty = util.num(p.qty);
-      if (isNaN(qty) || qty <= 0) return tx.error('BAD_QTY', 'จำนวนต้องเป็นตัวเลขมากกว่า 0', { field: 'qty' });
+      const qty = baseQty(tx, it, p.qty, p.unit, 'จำนวน');
+      if (qty == null) return;
       const defect = util.trim(p.defect).slice(0, 500);
       if (!defect) return tx.error('REQUIRED', 'ระบุข้อบกพร่อง', { field: 'defect' });
       const loc = { code: it.id, wh, bin, lot };
@@ -856,18 +980,20 @@
       const reason = needReason(tx, p.reason, 'เหตุผลการตัดสิน');
       if (!reason) return;
       const insp = ncr.inspectionId ? tx.get('inspections', ncr.inspectionId) : null;
+      // the person who raised the NCR (the inspector of a failed result) does not decide it
+      if (!notSame(tx, ncr.createdBy, `ผู้ตัดสิน NCR ต้องเป็นคนละคนกับผู้เปิด ${ncr.ncrNo} (แยกหน้าที่)`)) return;
       let conditions = '';
       if (disp === 'USE_AS_IS') {
         conditions = util.trim(p.conditions).slice(0, 500);
         if (conditions.length < 3) return tx.error('REQUIRED', 'ยอมรับแบบมีเงื่อนไขต้องระบุเงื่อนไข', { field: 'conditions' });
         if (insp && !tx.different(insp.inspector, 'ผู้อนุมัติยอมรับแบบมีเงื่อนไข')) return;
-        if (!tx.different(ncr.createdBy, 'ผู้อนุมัติยอมรับแบบมีเงื่อนไข')) return;
       }
       const it = tx.item(ncr.code);
       const lot = ncr.lot ? tx.get('lots', lotKey(ncr.code, ncr.lot)) : null;
       let doc = null;
       if (ncr.stockHeld) {
         if (!tx.need('ncr.disposition', ncr.wh, { field: 'ncrNo' })) return;
+        if (disp === 'USE_AS_IS' && !tx.need('ncr.useAsIs', ncr.wh, { field: 'ncrNo' })) return;
         const loc = { code: ncr.code, wh: ncr.wh, bin: ncr.bin, lot: ncr.lot, qty: ncr.qty };
         const note = `${ncr.ncrNo} ${DISPOSITIONS[disp]}: ${reason}`;
         if (disp === 'REWORK') {
@@ -910,8 +1036,11 @@
       if (!ncr) return tx.error('NOT_FOUND', `ไม่พบ NCR ${p.ncrNo || ''}`, { field: 'ncrNo' });
       if (ncr.status === 'CLOSED') return tx.error('BAD_STATE', `${ncr.ncrNo} ปิดแล้ว`);
       if (ncr.status !== 'DISPOSITIONED') return tx.error('NOT_DISPOSITIONED', `${ncr.ncrNo} ยังไม่ได้ตัดสิน – ตัดสินก่อนปิด`);
-      if (ncr.disposition === 'REWORK' && !(ncr.reinspections || []).length) {
-        return tx.error('REINSPECTION_PENDING', `${ncr.ncrNo} แก้ไขงานแล้วต้องตรวจซ้ำก่อนปิด`);
+      if (ncr.disposition === 'REWORK') {
+        const done = reinspectedQty(tx, ncr.ncrNo);
+        if (done < round(ncr.qty)) {
+          return tx.error('REINSPECTION_PENDING', `${ncr.ncrNo} แก้ไขงานแล้วต้องตรวจซ้ำก่อนปิด – ตรวจซ้ำแล้ว ${done} จาก ${ncr.qty}`);
+        }
       }
       const note = util.trim(p.note).slice(0, 500);
       tx.put('ncrs', ncr.ncrNo, hist(Object.assign(clone(ncr), { status: 'CLOSED', closedBy: tx.userId, closedAt: tx.now, closeNote: note }),
@@ -934,23 +1063,26 @@
       if (quarantined && !LOT_EXIT_TYPES[doc.type]) {
         return tx.error('LOT_QUARANTINED', `บรรทัด ${n}: ${line.code} ${line.lot} ถูกกักกัน (${lot.quarantineReason}) – เบิก/โอน/ส่งมอบไม่ได้ ยกเว้นตัดทิ้งหรือคืนผู้ขาย`, { line: n, field: 'lot' });
       }
-      if (!ncrPosting && (line.status === QUARANTINE || line.status === REWORK)) {
-        if (doc.type === 'SC' && !tx.can('ncr.disposition', line.wh)) {
-          return tx.error('NCR_REQUIRED', `บรรทัด ${n}: ตัดทิ้งของ${STATUS_LABEL[line.status]}ต้องตัดสินผ่าน NCR (หรือผู้มีสิทธิ์ตัดสิน NCR คลัง ${line.wh})`, { line: n });
-        }
-        if (line.status === QUARANTINE) {
-          const held = heldByNcr(tx, line);
-          const have = tx.balanceAt(line).qty;
-          if (held > 0 && absQ(line) > round(have - held)) {
-            return tx.error('NCR_HELD', `บรรทัด ${n}: ${line.code} ที่ ${locText(line)} มีของรอตัดสิน NCR ${held} – ใช้ได้ ${Math.max(0, round(have - held))} ตัดสินผ่าน NCR แทน`, { line: n });
-          }
-        }
-      }
+      // QUARANTINE / REWORK stock leaving outside an NCR decision: see doc.check (NCR_HELD, NCR_REQUIRED)
     } else if (quarantined && (line.status === AVAILABLE || line.status === QC_HOLD)) {
       line.status = QUARANTINE; // a new receipt of a quarantined lot is quarantined too
       tx.warn(`บรรทัด ${n}: ${line.code} ${line.lot} ถูกกักกัน – รับเข้าเป็นสถานะกักกัน`);
+    } else if (lot && doc.type === 'RT' && line.status === AVAILABLE && issuedBeforeQuarantine(tx, lot, doc.job || line.jobNo)) {
+      // pieces that were at the job while the lot was quarantined and released come back: the rest of the lot was
+      // inspected again, so are they
+      line.status = QC_HOLD;
+      tx.warn(`บรรทัด ${n}: ${line.code} ${line.lot} เบิกไปก่อนล็อตถูกกักกันและปลด – รับคืนเป็นรอตรวจ (ต้องตรวจใหม่)`);
     }
   });
+  /** Did the job (any job when none) take pieces of this lot before its last quarantine? */
+  function issuedBeforeQuarantine(tx, lot, job) {
+    const qs = (lot.history || []).filter((h) => h.action === 'QUARANTINE');
+    const last = qs[qs.length - 1];
+    if (!last) return false;
+    const jn = jobKey(job);
+    return tx.all('movements', (m) => m.code === lot.code && m.lot === lot.lot && (m.docType === 'PD' || m.docType === 'OU') && m.qty < 0
+      && !m.reversalOf && (!jn || jobKey(m.job) === jn) && (last.seq ? m.seq < last.seq : String(m.at) < String(last.at))).length > 0;
+  }
 
   RRS.hooks.on('doc.check', function qualityDocCheck(tx, doc, lines) {
     if (doc.type === 'QS') {
@@ -958,6 +1090,49 @@
     }
     if (doc.type === 'SC' && !util.trim(doc.remark) && !lines.every((l) => util.trim(l.remark))) {
       tx.error('REQUIRED', 'ใบตัดทิ้งต้องระบุเหตุผล (หมายเหตุ)', { field: 'remark' });
+    }
+    // QUARANTINE / REWORK stock leaves only through an NCR decision (ncr.disposition posts its own SC/RV). Outside it:
+    // nobody takes the quantity an NCR holds (all lines of a place together), and the rest needs the right to decide
+    // NCRs in that warehouse – a scrap or a return to the supplier is a decision with a reason and a decider.
+    if (ncrDocs.has(doc)) return;
+    const td = typeDef(doc.type);
+    const groups = {};
+    const order = [];
+    for (const ln of lines) {
+      if (!ln || !isOutLine(td, ln) || (ln.status !== QUARANTINE && ln.status !== REWORK)) continue;
+      const k = RRS.balanceKey(ln);
+      if (!groups[k]) { groups[k] = { loc: ln, need: 0, lines: [] }; order.push(k); }
+      groups[k].need = round(groups[k].need + absQ(ln));
+      groups[k].lines.push(ln.line);
+    }
+    for (const k of order) {
+      const g = groups[k];
+      const ls = g.lines.join(', ');
+      const held = heldAt(tx, g.loc, g.loc.status);
+      const have = tx.balanceAt(g.loc).qty;
+      if (held > 0 && g.need > round(have - held)) {
+        tx.error('NCR_HELD', `บรรทัด ${ls}: ${g.loc.code} ที่ ${locText(g.loc)} สถานะ${STATUS_LABEL[g.loc.status]} มีของของ NCR ${held} (${g.loc.status === REWORK ? 'รอตรวจซ้ำ/รอปล่อย' : 'รอตัดสิน'}) – ใช้ได้ ${Math.max(0, round(have - held))} ที่เหลือดำเนินการผ่าน NCR`, { line: g.lines[0] });
+      } else if (!tx.can('ncr.disposition', g.loc.wh)) {
+        tx.error('NCR_REQUIRED', `บรรทัด ${ls}: ${doc.type === 'SC' ? 'ตัดทิ้ง' : (typeDef(doc.type) || {}).name || doc.type}ของ${STATUS_LABEL[g.loc.status]}ต้องตัดสินผ่าน NCR (เปิด NCR ของกักกันแล้วให้ผู้มีสิทธิ์ตัดสิน NCR คลัง ${g.loc.wh} ตัดสิน)`, { line: g.lines[0] });
+      }
+    }
+  });
+
+  // a transfer line arriving: a lot quarantined in transit lands in QUARANTINE; one quarantined and released while in
+  // transit lands in QC_HOLD (the rest of the lot went back to รอตรวจ and is inspected again – so is this part)
+  RRS.hooks.on('transfer.receiveLine', function qualityTransferIn(tx, doc, line, info) {
+    if (!line.lot) return;
+    const lot = tx.get('lots', lotKey(line.code, line.lot));
+    if (!lot) return;
+    const st = info.status && STATUS[info.status] ? info.status : line.status;
+    if (lot.status === 'QUARANTINED' && (st === AVAILABLE || st === QC_HOLD)) {
+      info.status = QUARANTINE;
+      info.remark = `${info.remark || 'รับโอน'} – ล็อตถูกกักกัน รับเข้าเป็น${STATUS_LABEL[QUARANTINE]}`;
+      tx.warn(`บรรทัด ${line.line}: ${line.code} ${line.lot} ถูกกักกันระหว่างโอน – รับเข้าเป็นสถานะกักกัน`);
+    } else if (lot.status !== 'QUARANTINED' && st === AVAILABLE && quarantinedSince(lot, postSeqOf(tx, doc.docNo, doc.type), doc.postedAt)) {
+      info.status = QC_HOLD;
+      info.remark = `${info.remark || 'รับโอน'} – ล็อตถูกกักกันและปลดระหว่างโอน รับเข้าเป็น${STATUS_LABEL[QC_HOLD]}`;
+      tx.warn(`บรรทัด ${line.line}: ${line.code} ${line.lot} ถูกกักกันและปลดระหว่างโอน – รับเข้าเป็นรอตรวจ (ต้องตรวจใหม่เหมือนส่วนอื่นของล็อต)`);
     }
   });
 
@@ -976,6 +1151,8 @@
         row = newLot(tx, it, ln.lot, { supplier, poNo: ln.poNo || '', poLine: ln.poLine || '', docNo: doc.docNo, docType: doc.type,
           receivedAt: tx.now });
       } else {
+        // the lot's first receipt was cancelled (or the row predates it): this receipt becomes the first one
+        if (!row.docNo) Object.assign(row, { docNo: doc.docNo, docType: doc.type, receivedAt: tx.now });
         if (!row.supplier && supplier) row.supplier = supplier;
         if (!row.poNo && ln.poNo) Object.assign(row, { poNo: ln.poNo, poLine: ln.poLine || '' });
       }
@@ -1000,19 +1177,99 @@
         return tx.error('NCR_CLOSED', `${doc.docNo} เป็นผลการตัดสิน ${n.ncrNo} ที่ปิดแล้ว – ยกเลิกไม่ได้`);
       }
     }
-    // receipts: note it on the lot and void inspections of that receipt still waiting for release
+    // receipts: note it on the lot (its first receipt / PO link move to the receipts still standing) and void the
+    // inspections of that receipt still waiting for release
     const td = typeDef(doc.type);
     const touched = {};
     for (const ln of lines || []) {
       if (!ln.lot || !isInLine(td, ln)) continue;
       const k = lotKey(ln.code, ln.lot);
-      const row = touched[k] || (tx.get('lots', k) ? clone(tx.get('lots', k)) : null);
-      if (!row) continue;
-      touched[k] = hist(row, tx, 'RECEIPT_CANCELLED', `ยกเลิก ${doc.type} ${doc.docNo}: ${doc.cancelReason || ''}`);
+      if (!touched[k] && tx.get('lots', k)) touched[k] = clone(tx.get('lots', k));
     }
-    for (const k in touched) tx.put('lots', k, touched[k]);
+    for (const k in touched) {
+      const moved = relinkLot(tx, touched[k], doc);
+      tx.put('lots', k, hist(touched[k], tx, 'RECEIPT_CANCELLED', `ยกเลิก ${doc.type} ${doc.docNo}: ${doc.cancelReason || ''}${moved}`));
+    }
     voidInspections(tx, (i) => i.sourceDoc === doc.docNo, `ยกเลิกเอกสาร ${doc.docNo}`);
+    const mine = (x) => x.seq === tx.seq && x.docNo === doc.docNo && x.docType === doc.type && !!x.reversalOf && x.wh !== TRANSIT;
+    // stock coming back as ใช้ได้ (an issue / transfer taken back) of a lot quarantined since it left: back to QUARANTINE
+    // – or to QC_HOLD when the lot was quarantined and released since (the rest of it is inspected again) – with a QS
+    const back = {};
+    const backOrder = [];
+    for (const m of tx.all('movements', (x) => mine(x) && x.qty > 0 && x.lot && x.status === AVAILABLE)) {
+      const lot = tx.get('lots', lotKey(m.code, m.lot));
+      if (!lot) continue;
+      const origSeq = Number(String(m.reversalOf).split('.')[0]) || 0;
+      const to = lot.status === 'QUARANTINED' ? QUARANTINE : (quarantinedSince(lot, origSeq, doc.postedAt) ? QC_HOLD : '');
+      if (!to) continue;
+      const k = RRS.balanceKey(m) + '>' + to;
+      if (!back[k]) { back[k] = { code: m.code, wh: m.wh, bin: m.bin, lot: m.lot, qty: 0, from: AVAILABLE, to }; backOrder.push(k); }
+      back[k].qty = round(back[k].qty + m.qty);
+    }
+    if (backOrder.length) {
+      const qs = writeQS(tx, { reason: `ยกเลิก ${doc.docNo}: ของกลับเข้าคลังของล็อตที่ถูกกักกัน`, ref: doc.docNo, source: 'cancel:' + doc.docNo,
+        lines: backOrder.map((k) => back[k]) });
+      if (!qs) return;
+      for (const k of backOrder) {
+        const b = back[k];
+        tx.warn(`${b.code} ${b.lot} ${b.qty} ที่ ${locText(b)} กลับเข้าคลังเป็น "${STATUS_LABEL[b.to]}" (${b.to === QUARANTINE ? 'ล็อตถูกกักกัน' : 'ล็อตเคยถูกกักกันหลังเอกสารนี้ – ต้องตรวจใหม่'}) ${qs.docNo}`);
+      }
+    }
+    // stock leaving รอตรวจ / กักกัน / รอแก้ไข (a receipt taken back): an NCR keeps its stock – refuse; a PASS waiting
+    // for release whose stock is gone is void (it must never be released on stock that arrives later)
+    const places = {};
+    for (const m of tx.all('movements', (x) => mine(x) && x.qty < 0 && HOLD.indexOf(x.status) >= 0)) places[RRS.balanceKey(m)] = m;
+    for (const k of Object.keys(places).sort()) {
+      const m = places[k];
+      const loc = { code: m.code, wh: m.wh, bin: m.bin, lot: m.lot, status: m.status };
+      const have = tx.balanceAt(loc).qty;
+      const ncrQty = m.status === QUARANTINE ? heldByNcr(tx, loc) : (m.status === REWORK ? reworkByNcr(tx, loc) : 0);
+      if (ncrQty > have) {
+        return tx.error('NCR_HELD', `ยกเลิก ${doc.docNo} ไม่ได้: ${m.code} ที่ ${locText(loc)} สถานะ${STATUS_LABEL[m.status]} เป็นของ NCR ${ncrQty} แต่หลังยกเลิกจะเหลือ ${have} – ตัดสิน NCR ก่อน`);
+      }
+      let over = round(pendingRelease(tx, loc, m.status) - (have - ncrQty));
+      const open = tx.all('inspections', (i) => i.status === 'OPEN' && STOCK_STAGES[i.stage] && i.fromStatus === m.status && sameLoc(i, loc))
+        .sort((a, b) => String(b.at).localeCompare(String(a.at)) || String(b.id).localeCompare(String(a.id)));
+      for (const i of open) {
+        if (over <= 0) break;
+        tx.put('inspections', i.id, Object.assign({}, i, { status: 'VOID', voidedBy: tx.userId, voidedAt: tx.now,
+          voidReason: `ยกเลิกเอกสาร ${doc.docNo} – ไม่มีของที่ตรวจไว้แล้ว` }));
+        over = round(over - (i.qty - (i.releasedQty || 0)));
+      }
+    }
   });
+
+  /** After a receipt of the lot is cancelled: its first receipt, supplier and PO come from the receipts still standing. */
+  function relinkLot(tx, row, cancelled) {
+    const ofLot = (l) => l.code === row.code && (l.lot || '') === row.lot;
+    const hits = [];
+    for (const d of tx.all('documents', (x) => posted(x) && x.status !== 'CANCELLED' && x.docNo !== cancelled.docNo)) {
+      const td = typeDef(d.type);
+      const ls = (d.lines || []).filter((l) => ofLot(l) && isInLine(td, l));
+      if (ls.length) hits.push({ d, ls });
+    }
+    hits.sort((a, b) => String(a.d.postedAt).localeCompare(String(b.d.postedAt)) || String(a.d.docNo).localeCompare(String(b.d.docNo)));
+    const supOf = (d, l) => l.supplier || d.supplier || ((l.poNo && tx.get('pos', l.poNo)) || {}).supplier || '';
+    const gone = (cancelled.lines || []).filter(ofLot);
+    const notes = [];
+    if (row.docNo === cancelled.docNo) {
+      const first = hits[0];
+      Object.assign(row, first ? { docNo: first.d.docNo, docType: first.d.type, receivedAt: first.d.postedAt } : { docNo: '', docType: '' });
+      notes.push(`รับเข้าครั้งแรกเป็น ${row.docNo || '(ไม่มี)'}`);
+    }
+    if (row.poNo && gone.some((l) => l.poNo === row.poNo) && !hits.some((h) => h.ls.some((l) => l.poNo === row.poNo))) {
+      const nx = hits.map((h) => h.ls.find((l) => l.poNo)).find(Boolean);
+      row.poNo = nx ? nx.poNo : '';
+      row.poLine = nx ? nx.poLine || '' : '';
+      notes.push(`PO เป็น ${row.poNo || '(ไม่มี)'}`);
+    }
+    if (row.supplier && gone.some((l) => supOf(cancelled, l) === row.supplier) && !hits.some((h) => h.ls.some((l) => supOf(h.d, l) === row.supplier))) {
+      const nx = hits.map((h) => h.ls.map((l) => supOf(h.d, l)).find(Boolean)).find(Boolean);
+      row.supplier = nx || '';
+      notes.push(`ผู้ขายเป็น ${row.supplier || '(ไม่มี)'}`);
+    }
+    return notes.length ? '; ' + notes.join('; ') : '';
+  }
 
   // ---------------------------------------------------------------------------------------------------------
   // read helpers for screens (pure functions of a state)
@@ -1162,14 +1419,17 @@
       const lot = b.lot ? r.get('lots', lotKey(b.code, b.lot)) : null;
       const inspections = openInsp.filter((i) => STOCK_STAGES[i.stage] && i.fromStatus === b.status && sameLoc(i, b));
       const ncrs = openNcr.filter((n) => n.stockHeld && sameLoc(n, b));
-      const pending = round(util.sum(inspections, (i) => i.qty - (i.releasedQty || 0)));
-      const held = b.status === QUARANTINE ? heldByNcr(r, b) : 0;
+      // a PASS bound to an older drawing revision cannot be released (REV_CHANGED): the stock is to be inspected again
+      const staleRev = inspections.filter((i) => util.normCode(i.planRev) !== util.normCode(it.drawingRev));
+      const pending = round(util.sum(inspections.filter((i) => staleRev.indexOf(i) < 0), (i) => i.qty - (i.releasedQty || 0)));
+      const held = b.status === QUARANTINE ? heldByNcr(r, b) : (b.status === REWORK ? reworkByNcr(r, b) : 0);
       const lastDay = b.lastIn ? util.bkkDate(b.lastIn) : '';
       return {
         code: b.code, name: it.name || '', unit: it.baseUnit || '', wh: b.wh, bin: b.bin, lot: b.lot, status: b.status,
         statusLabel: STATUS_LABEL[b.status], qty: b.qty, lastIn: b.lastIn || '', ageDays: today && lastDay ? util.daysBetween(lastDay, today) : null,
         lotStatus: lot ? lot.status : '', certRequired: !!it.certRequired, certNo: (lot && lot.cert && lot.cert.no) || '',
         certVerified: !!(lot && lot.cert && lot.cert.verified), inspections, ncrs, waitingRelease: pending, ncrHeld: held,
+        staleRev: staleRev.map((i) => i.id),
         toInspect: b.status === QUARANTINE ? 0 : Math.max(0, round(b.qty - pending)),
       };
     }).sort((a, b) => (b.ageDays || 0) - (a.ageDays || 0) || (a.code + a.wh + a.bin + a.lot).localeCompare(b.code + b.wh + b.bin + b.lot));

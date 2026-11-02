@@ -32,6 +32,8 @@ test('health says which features are configured, never a value; every flag is of
   assert.ok(r.body.engine.files.includes('sales.js'));
   assert.equal(f.salesBridge.configured, false, 'only some connector values present');
   assert.ok(r.body.engine.files.includes('core.js') && r.body.engine.files.includes('inventory.js'));
+  // browser-only engine files (demo data, page self-test) are never part of the server
+  for (const f2 of ['fixture.js', 'selftest.js']) assert.ok(!r.body.engine.files.includes(f2), f2 + ' on the server');
   for (const v of [s.secrets.ownerUsername, s.secrets.ownerHash, s.secrets.sessionSecret, 'sales.invalid', 'x'.repeat(40)]) assert.ok(!r.text.includes(v), 'health leaks ' + v.slice(0, 6));
 });
 

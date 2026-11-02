@@ -1,5 +1,6 @@
 // Regenerates src/engine-imports.js from ../src/engine/order.json: one static import per engine file that exists, in
-// load order (the engine files are plain scripts that attach to globalThis.RRS, so order matters).
+// load order (the engine files are plain scripts that attach to globalThis.RRS, so order matters). Browser-only files
+// (fixture.js demo data, selftest.js) are left out.
 //   node scripts/sync-engine.mjs           write src/engine-imports.js when it changed
 //   node scripts/sync-engine.mjs --check   exit 1 when src/engine-imports.js is out of date (nothing written)
 // wrangler runs this before `wrangler dev` / `wrangler deploy` ([build] command in wrangler.toml).
@@ -11,10 +12,14 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const engineDir = path.resolve(here, '..', '..', 'src', 'engine');
 const target = path.resolve(here, '..', 'src', 'engine-imports.js');
 const BASE = ['core.js', 'ledger.js', 'master.js', 'inventory.js'];
+// Browser-only files never run on the server: fixture.js seeds demo data into an empty browser store (the server must
+// never be seeded – company rule) and selftest.js checks the page. They stay in order.json for the page build.
+const BROWSER_ONLY = ['fixture.js', 'selftest.js'];
 
 const order = JSON.parse(fs.readFileSync(path.join(engineDir, 'order.json'), 'utf8'));
 if (!Array.isArray(order)) throw new Error('order.json must be a list of file names');
-const files = order.filter((f) => typeof f === 'string' && /^[A-Za-z0-9_-]+\.js$/.test(f) && fs.existsSync(path.join(engineDir, f)));
+const files = order.filter((f) => typeof f === 'string' && /^[A-Za-z0-9_-]+\.js$/.test(f) && BROWSER_ONLY.indexOf(f) < 0
+  && fs.existsSync(path.join(engineDir, f)));
 const missing = BASE.filter((f) => files.indexOf(f) < 0);
 if (missing.length) throw new Error('engine base files missing: ' + missing.join(', '));
 

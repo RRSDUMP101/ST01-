@@ -48,6 +48,23 @@
   const late = (ctx, po, l) => (OPEN[po.status] && l.dueDate && l.dueDate < ctx.today && out(l) > 0
     ? h.badge(`เลยกำหนด ${U.daysBetween(l.dueDate, ctx.today)} วัน`, 'bad') : '');
   const fail = (msg) => ({ ok: false, errors: [{ message: msg }] });
+  /**
+   * ctx.set that also keeps a search typed less than 250 ms ago: its live update has not run yet, and without this the
+   * click would re-render the box empty and the late update would then wipe what the user typed into a form.
+   */
+  function set(ctx, patch) {
+    const p = Object.assign({}, patch);
+    for (const el of root.document.querySelectorAll('#main input[data-live][data-act]')) {
+      const k = el.dataset.act;
+      if (!(k in p) && (ctx.view[k] || '') !== el.value) p[k] = el.value;
+    }
+    ctx.set(p);
+  }
+  /** Live search box: re-render only when the text really changed (a click may already have kept it). */
+  const live = (key, extra) => (ctx, el) => {
+    if ((ctx.view[key] || '') === el.value) return;
+    ctx.set(Object.assign({ [key]: el.value }, extra || {}));
+  };
   const lotRef = (code, lot) => (RRS.ui.pages.lots ? h.link(lot, 'lots', { tab: 'list', sel: code + '|' + lot, _scroll: true }) : lot);
 
   function settings(state) {
@@ -680,38 +697,38 @@
       }
     },
     actions: {
-      tab: (ctx, el) => ctx.set({ tab: el.dataset.arg, _scroll: false }),
-      more: (ctx, el) => ctx.set({ [el.dataset.arg]: (ctx.view[el.dataset.arg] || LIMIT) + LIMIT }),
+      tab: (ctx, el) => set(ctx, { tab: el.dataset.arg, _scroll: false }),
+      more: (ctx, el) => set(ctx, { [el.dataset.arg]: (ctx.view[el.dataset.arg] || LIMIT) + LIMIT }),
       // ---- PR
-      prQ: (ctx, el) => ctx.set({ prQ: el.value }),
-      prSt: (ctx, el) => ctx.set({ prSt: el.value }),
-      pickPr: (ctx, el) => ctx.set({ pr: el.dataset.arg, prLines: null, prHead: null, prChecked: null, _scroll: true }),
-      newPr: (ctx) => ctx.set({ tab: 'pr', pr: '__new', prLines: null, prHead: null, prChecked: null, _scroll: true }),
-      prClose: (ctx) => ctx.set({ pr: null, prLines: null, prHead: null, prChecked: null }),
+      prQ: live('prQ'),
+      prSt: (ctx, el) => set(ctx, { prSt: el.value }),
+      pickPr: (ctx, el) => set(ctx, { pr: el.dataset.arg, prLines: null, prHead: null, prChecked: null, _scroll: true }),
+      newPr: (ctx) => set(ctx, { tab: 'pr', pr: '__new', prLines: null, prHead: null, prChecked: null, _scroll: true }),
+      prClose: (ctx) => set(ctx, { pr: null, prLines: null, prHead: null, prChecked: null }),
       prAdd(ctx) {
         const vals = h.parseForm(formOf('prSave'));
         const lines = vals.lines || [];
         const last = lines[lines.length - 1] || {};
         lines.push({ wh: last.wh || defWh(ctx), needDate: last.needDate || '', supplier: last.supplier || '' });
-        ctx.set({ prLines: lines, prHead: vals, prChecked: null });
+        set(ctx, { prLines: lines, prHead: vals, prChecked: null });
       },
       prRemove(ctx, el) {
         const vals = h.parseForm(formOf('prSave'));
         const lines = (vals.lines || []).filter((_, i) => i !== Number(el.dataset.arg));
-        ctx.set({ prLines: lines.length ? lines : [{ wh: defWh(ctx) }], prHead: vals, prChecked: null });
+        set(ctx, { prLines: lines.length ? lines : [{ wh: defWh(ctx) }], prHead: vals, prChecked: null });
       },
       async prCheck(ctx) {
         const vals = h.parseForm(formOf('prSave'));
         const pr = curPr(ctx);
         const r = await ctx.check('pr.create', prPayload(vals, pr && pr.prNo, false));
-        ctx.set({ prLines: vals.lines, prHead: vals, prChecked: r });
+        set(ctx, { prLines: vals.lines, prHead: vals, prChecked: r });
       },
       async prDraft(ctx) {
         const vals = h.parseForm(formOf('prSave'));
         const pr = curPr(ctx);
         const r = await ctx.exec('pr.create', prPayload(vals, pr && pr.prNo, true), { quiet: true, done: (x) => `บันทึกร่าง ${x.result.prNo} แล้ว – ยังไม่ได้ส่งขออนุมัติ` });
-        if (!r.ok) return ctx.set({ prLines: vals.lines, prHead: vals, prChecked: r });
-        ctx.set({ pr: r.result.prNo, prLines: null, prHead: null, prChecked: null });
+        if (!r.ok) return set(ctx, { prLines: vals.lines, prHead: vals, prChecked: r });
+        set(ctx, { pr: r.result.prNo, prLines: null, prHead: null, prChecked: null });
       },
       async prApprove(ctx) {
         const pr = curPr(ctx);
@@ -737,7 +754,7 @@
           message: rest ? 'ใบสั่งซื้อที่ออกไปแล้วไม่เปลี่ยน – เฉพาะจำนวนที่ยังไม่ได้ออก PO จะไม่ถูกสั่ง' : 'ใบนี้จะไม่ถูกนำไปออกใบสั่งซื้อ ประวัติยังอยู่',
           body: h.field({ name: 'reason', label: 'เหตุผล', required: true, wide: true }),
           onSubmit: (vv) => ctx.exec('pr.cancel', { prNo: pr.prNo, reason: vv.reason }, { quiet: true, done: 'ยกเลิกแล้ว' }) });
-        if (r && r.ok) ctx.set({ prLines: null, prHead: null, prChecked: null });
+        if (r && r.ok) set(ctx, { prLines: null, prHead: null, prChecked: null });
       },
       prToPo(ctx) {
         const pr = P().prOpen(ctx.state, ctx.view.pr);
@@ -752,41 +769,41 @@
         const so = sup ? RRS.q.get(ctx.state, 'suppliers', sup) : null;
         if (!so || so.active === false) sup = '';
         const pulled = sup ? pullLines(ctx, [pr.prNo], sup, ctx.today) : { lines: null, notes: [] };
-        ctx.set({ tab: 'po', po: '__new', poMode: 'pr', poPrs: [pr.prNo], poHead: { supplier: sup, date: ctx.today, remark: '' },
+        set(ctx, { tab: 'po', po: '__new', poMode: 'pr', poPrs: [pr.prNo], poHead: { supplier: sup, date: ctx.today, remark: '' },
           poLines: pulled.lines && pulled.lines.length ? pulled.lines : null, poNotes: sup ? pulled.notes : ['เลือกผู้ขายแล้วกด ดึงบรรทัดจากใบขอซื้อที่เลือก'],
           poPulled: !!sup, poChecked: null, _scroll: true });
       },
       // ---- PO
-      poQ: (ctx, el) => ctx.set({ poQ: el.value }),
-      poSt: (ctx, el) => ctx.set({ poSt: el.value }),
-      poSupF: (ctx, el) => ctx.set({ poSupF: el.value }),
-      pickPo: (ctx, el) => ctx.set({ po: el.dataset.arg, _scroll: true }),
-      newPo: (ctx) => ctx.set({ tab: 'po', po: '__new', poMode: 'pr', poPrs: [], poHead: null, poLines: null, poNotes: null, poPulled: false, poChecked: null, _scroll: true }),
-      poClose: (ctx) => ctx.set({ po: null, poHead: null, poLines: null, poNotes: null, poChecked: null }),
+      poQ: live('poQ'),
+      poSt: (ctx, el) => set(ctx, { poSt: el.value }),
+      poSupF: (ctx, el) => set(ctx, { poSupF: el.value }),
+      pickPo: (ctx, el) => set(ctx, { po: el.dataset.arg, _scroll: true }),
+      newPo: (ctx) => set(ctx, { tab: 'po', po: '__new', poMode: 'pr', poPrs: [], poHead: null, poLines: null, poNotes: null, poPulled: false, poChecked: null, _scroll: true }),
+      poClose: (ctx) => set(ctx, { po: null, poHead: null, poLines: null, poNotes: null, poChecked: null }),
       poAdd(ctx) {
         const vals = h.parseForm(formOf('poSave'));
         const lines = vals.lines || [];
         const last = lines[lines.length - 1] || {};
         lines.push({ wh: last.wh || defWh(ctx), dueDate: last.dueDate || '' });
-        ctx.set({ poLines: lines, poHead: poHead(vals), poPrs: vals.prNos, poChecked: null });
+        set(ctx, { poLines: lines, poHead: poHead(vals), poPrs: vals.prNos, poChecked: null });
       },
       poRemove(ctx, el) {
         const vals = h.parseForm(formOf('poSave'));
         const lines = (vals.lines || []).filter((_, i) => i !== Number(el.dataset.arg));
-        ctx.set({ poLines: lines.length ? lines : [{ wh: defWh(ctx) }], poHead: poHead(vals), poPrs: vals.prNos, poChecked: null });
+        set(ctx, { poLines: lines.length ? lines : [{ wh: defWh(ctx) }], poHead: poHead(vals), poPrs: vals.prNos, poChecked: null });
       },
       poMode(ctx, el) {
         const vals = h.parseForm(formOf('poSave'));
-        ctx.set({ poMode: el.value, poHead: poHead(vals), poLines: vals.lines, poPrs: vals.prNos, poChecked: null });
+        set(ctx, { poMode: el.value, poHead: poHead(vals), poLines: vals.lines, poPrs: vals.prNos, poChecked: null });
       },
       poSupChange(ctx) {
         const vals = h.parseForm(formOf('poSave'));
         const v = ctx.view;
         if (v.poMode !== 'hand' && v.poPulled && vals.supplier && (vals.prNos || []).length) {
           const p = pullLines(ctx, vals.prNos, vals.supplier, vals.date || ctx.today);
-          return ctx.set({ poHead: poHead(vals), poPrs: vals.prNos, poLines: p.lines.length ? p.lines : null, poNotes: p.notes, poChecked: null });
+          return set(ctx, { poHead: poHead(vals), poPrs: vals.prNos, poLines: p.lines.length ? p.lines : null, poNotes: p.notes, poChecked: null });
         }
-        ctx.set({ poHead: poHead(vals), poLines: vals.lines, poPrs: vals.prNos, poChecked: null });
+        set(ctx, { poHead: poHead(vals), poLines: vals.lines, poPrs: vals.prNos, poChecked: null });
       },
       poPull(ctx) {
         const vals = h.parseForm(formOf('poSave'));
@@ -794,12 +811,12 @@
         if (!(vals.prNos || []).length) return ctx.toast('ติ๊กเลือกใบขอซื้ออย่างน้อย 1 ใบ', 'bad');
         const p = pullLines(ctx, vals.prNos, vals.supplier, vals.date || ctx.today);
         if (!p.lines.length) p.notes.unshift('ใบขอซื้อที่เลือกไม่มีบรรทัดค้างออก PO สำหรับผู้ขายนี้');
-        ctx.set({ poHead: poHead(vals), poPrs: vals.prNos, poLines: p.lines.length ? p.lines : null, poNotes: p.notes, poPulled: true, poChecked: null });
+        set(ctx, { poHead: poHead(vals), poPrs: vals.prNos, poLines: p.lines.length ? p.lines : null, poNotes: p.notes, poPulled: true, poChecked: null });
       },
       async poCheck(ctx) {
         const vals = h.parseForm(formOf('poSave'));
         const r = await ctx.check('po.create', poPayload(vals));
-        ctx.set({ poHead: poHead(vals), poLines: vals.lines, poPrs: vals.prNos, poChecked: r });
+        set(ctx, { poHead: poHead(vals), poLines: vals.lines, poPrs: vals.prNos, poChecked: r });
       },
       async poIssue(ctx) {
         const po = curPo(ctx);
@@ -868,12 +885,12 @@
           .concat([['', '', '', '', '', 'รวม', po.total]]);
         await ctx.download(`${po.poNo}.csv`, h.csv(rows));
       },
-      toRecv: (ctx) => ctx.set({ tab: 'recv', rpo: ctx.view.po, rVals: null, rChecked: null, rDone: null, _scroll: true }),
-      toRv: (ctx) => ctx.set({ tab: 'rv', vpo: ctx.view.po, vVals: null, vChecked: null, vDone: null, _scroll: true }),
+      toRecv: (ctx) => set(ctx, { tab: 'recv', rpo: ctx.view.po, rVals: null, rChecked: null, rDone: null, _scroll: true }),
+      toRv: (ctx) => set(ctx, { tab: 'rv', vpo: ctx.view.po, vVals: null, vChecked: null, vDone: null, _scroll: true }),
       // ---- receive
-      rQ: (ctx, el) => ctx.set({ rQ: el.value }),
-      rSup: (ctx, el) => ctx.set({ rSup: el.value }),
-      pickRecv: (ctx, el) => ctx.set({ rpo: el.dataset.arg, rVals: null, rChecked: null, _scroll: true }),
+      rQ: live('rQ'),
+      rSup: (ctx, el) => set(ctx, { rSup: el.value }),
+      pickRecv: (ctx, el) => set(ctx, { rpo: el.dataset.arg, rVals: null, rChecked: null, rDone: el.dataset.arg === ctx.view.rpo ? ctx.view.rDone : null, _scroll: true }),
       recvFill(ctx) {
         const vals = h.parseForm(formOf('recv'));
         const po = RRS.q.get(ctx.state, 'pos', vals.poNo);
@@ -882,36 +899,36 @@
         (vals.lines || []).forEach((l, i) => {
           if (open[i]) l.qty = String(toBuy(out(open[i]), open[i]));
         });
-        ctx.set({ rVals: Object.assign({ poNo: po.poNo }, vals), rChecked: null });
+        set(ctx, { rVals: Object.assign({ poNo: po.poNo }, vals), rChecked: null });
       },
       // ---- return
-      vQ: (ctx, el) => ctx.set({ vQ: el.value }),
-      vSup: (ctx, el) => ctx.set({ vSup: el.value }),
-      pickRv: (ctx, el) => ctx.set({ vpo: el.dataset.arg, vVals: null, vChecked: null, _scroll: true }),
+      vQ: live('vQ'),
+      vSup: (ctx, el) => set(ctx, { vSup: el.value }),
+      pickRv: (ctx, el) => set(ctx, { vpo: el.dataset.arg, vVals: null, vChecked: null, vDone: el.dataset.arg === ctx.view.vpo ? ctx.view.vDone : null, _scroll: true }),
     },
     forms: {
       async prSave(ctx, vals) {
         const pr = curPr(ctx);
         const r = await ctx.exec('pr.create', prPayload(vals, pr && pr.prNo, false), { quiet: true,
           done: (x) => `ส่ง ${x.result.prNo} ขออนุมัติแล้ว – รอ${whoCan('pr.approve')} (คนละคนกับผู้ขอ)` });
-        if (!r.ok) return ctx.set({ prLines: vals.lines, prHead: vals, prChecked: r });
-        ctx.set({ pr: r.result.prNo, prLines: null, prHead: null, prChecked: null });
+        if (!r.ok) return set(ctx, { prLines: vals.lines, prHead: vals, prChecked: r });
+        set(ctx, { pr: r.result.prNo, prLines: null, prHead: null, prChecked: null });
       },
       async poSave(ctx, vals) {
         const r = await ctx.exec('po.create', poPayload(vals), { quiet: true, done: (x) => `สร้างร่าง ${x.result.poNo} แล้ว – ตรวจแล้วกด ออกใบสั่งซื้อ` });
-        if (!r.ok) return ctx.set({ poHead: poHead(vals), poLines: vals.lines, poPrs: vals.prNos, poChecked: r });
-        ctx.set({ po: r.result.poNo, poHead: null, poLines: null, poPrs: null, poNotes: null, poPulled: false, poChecked: null });
+        if (!r.ok) return set(ctx, { poHead: poHead(vals), poLines: vals.lines, poPrs: vals.prNos, poChecked: r });
+        set(ctx, { po: r.result.poNo, poHead: null, poLines: null, poPrs: null, poNotes: null, poPulled: false, poChecked: null });
       },
       async recv(ctx, vals, form) {
         const po = RRS.q.get(ctx.state, 'pos', vals.poNo);
         if (!po) return;
         const keep = Object.assign({ poNo: po.poNo }, vals);
         const picked = (vals.lines || []).map((l, i) => Object.assign({ i }, l)).filter((l) => U.trim(l.qty) !== '');
-        if (!picked.length) return ctx.set({ rVals: keep, rChecked: Object.assign({ poNo: po.poNo }, fail('ยังไม่ได้ใส่จำนวน – ใส่จำนวนที่รับในบรรทัดที่ของมาถึง (บรรทัดที่ไม่ได้รับเว้นว่างไว้)')) });
+        if (!picked.length) return set(ctx, { rVals: keep, rChecked: Object.assign({ poNo: po.poNo }, fail('ยังไม่ได้ใส่จำนวน – ใส่จำนวนที่รับในบรรทัดที่ของมาถึง (บรรทัดที่ไม่ได้รับเว้นว่างไว้)')) });
         const payload = { poNo: po.poNo, date: vals.date, supplierDoc: vals.supplierDoc, remark: vals.remark,
           lines: picked.map((l) => ({ line: Number(l.line), qty: l.qty, wh: l.wh, bin: l.bin, lot: l.lot || '' })) };
         const chk = await ctx.check('po.receive', payload);
-        if (!chk.ok) return ctx.set({ rVals: keep, rChecked: Object.assign({ poNo: po.poNo }, chk) });
+        if (!chk.ok) return set(ctx, { rVals: keep, rChecked: Object.assign({ poNo: po.poNo }, chk) });
         const rows = picked.map((l) => {
           const pl = lineOf(po, l.line);
           const it = itemOf(ctx, pl.code);
@@ -930,9 +947,9 @@
           ${rows.some((x) => x.it.qcIncoming) ? t`<p class="wide hint">ของสถานะ รอตรวจ ยังเบิก/จอง/ใช้ไม่ได้ จนกว่า QC ตรวจและปล่อยผ่าน</p>` : ''}
           ${noCert.length ? t`<div class="wide">${h.note(`ยังไม่มีเลขใบรับรองของ ${noCert.map((x) => x.code).join(', ')} – รับได้ แต่ QC ปล่อยผ่านไม่ได้จนกว่าจะบันทึกใบรับรอง`, 'warn')}</div>` : ''}
           ${(chk.warnings || []).length ? t`<div class="wide">${h.note(t`<ul>${chk.warnings.map((w) => t`<li>${w}</li>`)}</ul>`, 'warn')}</div>` : ''}` });
-        if (!ok) return ctx.set({ rVals: keep, rChecked: null });
+        if (!ok) return set(ctx, { rVals: keep, rChecked: null });
         const r = await ctx.exec('po.receive', payload, { quiet: true, done: (x) => `รับเข้าแล้ว ${x.result.docNo}` });
-        if (!r.ok) return ctx.set({ rVals: keep, rChecked: Object.assign({ poNo: po.poNo }, r) });
+        if (!r.ok) return set(ctx, { rVals: keep, rChecked: Object.assign({ poNo: po.poNo }, r) });
         const docNo = r.result.docNo;
         const certs = [];
         for (const x of rows) {
@@ -954,13 +971,13 @@
           const same = !cr.ok && (cr.errors || []).every((e) => e.code === 'NO_CHANGE');
           certs.push({ code: x.code, lot: x.lot, no: x.cert, ok: cr.ok || same, msg: cr.ok || same ? '' : (cr.errors || []).map((e) => e.message).join(' / ') });
         }
-        ctx.set({ rVals: null, rChecked: null, rDone: { kind: 'RR', docNo, poNo: po.poNo, certs, noCert: noCert.map((x) => `${x.code}${x.lot ? ' ' + x.lot : ''}`) } });
+        set(ctx, { rVals: null, rChecked: null, rDone: { kind: 'RR', docNo, poNo: po.poNo, certs, noCert: noCert.map((x) => `${x.code}${x.lot ? ' ' + x.lot : ''}`) } });
       },
       async rv(ctx, vals) {
         const po = RRS.q.get(ctx.state, 'pos', vals.poNo);
         if (!po) return;
         const keep = Object.assign({ poNo: po.poNo }, vals);
-        const bad = (msg) => ctx.set({ vVals: keep, vChecked: Object.assign({ poNo: po.poNo }, fail(msg)) });
+        const bad = (msg) => set(ctx, { vVals: keep, vChecked: Object.assign({ poNo: po.poNo }, fail(msg)) });
         const picked = (vals.lines || []).filter((l) => l && U.trim(l.qty) !== '');
         if (!picked.length) return bad('ยังไม่ได้ใส่จำนวนคืน – ใส่จำนวนในบรรทัดที่จะคืน');
         const bal = ctx.state.tables.balances || {};
@@ -972,11 +989,11 @@
           if (l.replace !== '1' && l.replace !== '0') errs.push({ message: `บรรทัด ${l.line}: เลือกว่าขอของทดแทนหรือไม่` });
           return { line: Number(l.line), qty: l.qty, wh: b ? b.wh : '', bin: b ? b.bin : '', lot: b ? b.lot : '', status: b ? b.status : '', replace: l.replace === '1', pl, b };
         });
-        if (errs.length) return ctx.set({ vVals: keep, vChecked: { poNo: po.poNo, ok: false, errors: errs } });
+        if (errs.length) return set(ctx, { vVals: keep, vChecked: { poNo: po.poNo, ok: false, errors: errs } });
         const payload = { poNo: po.poNo, reason: vals.reason, supplierDoc: vals.supplierDoc,
           lines: lines.map((l) => ({ line: l.line, qty: l.qty, wh: l.wh, bin: l.bin, lot: l.lot, status: l.status, replace: l.replace })) };
         const chk = await ctx.check('po.return', payload);
-        if (!chk.ok) return ctx.set({ vVals: keep, vChecked: Object.assign({ poNo: po.poNo }, chk) });
+        if (!chk.ok) return set(ctx, { vVals: keep, vChecked: Object.assign({ poNo: po.poNo }, chk) });
         const ok = await ctx.confirm({ title: `คืนผู้ขาย ${po.supplierName || po.supplier}`, ok: 'บันทึกคืนผู้ขาย', danger: true,
           message: `ของออกจากคลังทันที (ใบคืนสินค้าผู้ขาย RV) · เหตุผล: ${U.trim(vals.reason)}`,
           body: t`<div class="wide">${h.table({ rows: lines, dense: true, cols: [
@@ -986,10 +1003,10 @@
             { label: 'สถานะของ', render: (l) => h.statusBadge(l.status) },
             { label: 'ผู้ขายส่งใหม่', get: (l) => (l.replace ? 'ขอของทดแทน – ยอดกลับเป็นค้างรับ' : 'ไม่ขอ – ลดหนี้/คืนเงิน') },
           ] })}</div>` });
-        if (!ok) return ctx.set({ vVals: keep, vChecked: null });
+        if (!ok) return set(ctx, { vVals: keep, vChecked: null });
         const r = await ctx.exec('po.return', payload, { quiet: true, done: (x) => `คืนผู้ขายแล้ว ${x.result.docNo}` });
-        if (!r.ok) return ctx.set({ vVals: keep, vChecked: Object.assign({ poNo: po.poNo }, r) });
-        ctx.set({ vVals: null, vChecked: null, vDone: { kind: 'RV', docNo: r.result.docNo, poNo: po.poNo } });
+        if (!r.ok) return set(ctx, { vVals: keep, vChecked: Object.assign({ poNo: po.poNo }, r) });
+        set(ctx, { vVals: null, vChecked: null, vDone: { kind: 'RV', docNo: r.result.docNo, poNo: po.poNo } });
       },
     },
   });

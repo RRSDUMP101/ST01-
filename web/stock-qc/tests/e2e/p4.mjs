@@ -122,32 +122,75 @@ const today = await page.evaluate(() => window.RRS.util.bkkDate(new Date().toISO
 const EVIL = '<img src=x onerror=alert(1)>';
 const ctxIds = {};
 
-await step('empty states', async () => {
-  const empty = await state((s) => !Object.keys(s.tables.suppliers || {}).length && !Object.keys(s.tables.prs || {}).length && !Object.keys(s.tables.pos || {}).length);
-  if (!empty) return; // sample data present (fixture build) – the smoke test covers empty pages
-  await go('suppliers');
-  await waitText('ยังไม่มีผู้ขาย');
-  await waitText('เพิ่มผู้ขายรายแรก');
-  await tab('rules');
-  await waitText('ยังไม่ได้ตั้งเงื่อนไขเติมสต็อก');
-  await go('purchasing');
-  await tab('pr');
-  await waitText('ยังไม่มีใบขอซื้อ');
-  await tab('po');
-  await waitText('ยังไม่มีใบสั่งซื้อ');
-  await tab('recv');
-  await waitText('ไม่มีใบสั่งซื้อที่รอรับของ');
-  await tab('rv');
-  await waitText('ยังไม่มีของที่รับจากใบสั่งซื้อให้คืน');
-  await go('replenish');
-  const noItems = await state((s) => !Object.values(s.tables.items || {}).some((i) => i.active !== false));
-  if (noItems) await waitText('ยังไม่มีสินค้า');
-  await page.setViewportSize({ width: 390, height: 844 });
-  for (const id of ['suppliers', 'purchasing', 'replenish']) {
-    await go(id);
-    await noOverflow(`${id} ว่าง`);
+// ---- empty screens without sample data (own browser context: the sample loader is switched off) -----------------
+await step('empty states (no sample data, desktop and phone)', async () => {
+  const ctx2 = await browser.newContext({ viewport: { width: 1366, height: 900 } });
+  await ctx2.addInitScript(() => {
+    document.addEventListener('DOMContentLoaded', () => { if (window.RRS) window.RRS.fixture = null; }, { once: true });
+  });
+  const p = await ctx2.newPage();
+  p.on('pageerror', (e) => problems.push(`pageerror (empty): ${e.message}`));
+  p.on('dialog', async (d) => { problems.push(`browser dialog (empty): ${d.message()}`); await d.dismiss().catch(() => {}); });
+  const pReady = () => p.waitForFunction(() => window.RRS && window.RRS.app && window.RRS.app.loading === false && window.RRS.app.ledger, null, { timeout: 60000 });
+  await p.goto(file);
+  await pReady();
+  await p.evaluate(() => localStorage.clear());
+  await p.reload();
+  await pReady();
+  const counts = await p.evaluate(() => ['suppliers', 'prs', 'pos', 'items', 'reorder_rules'].map((k) => Object.keys(window.RRS.app.ledger.state.tables[k] || {}).length));
+  assert(counts.every((x) => x === 0), `ไม่ควรมีข้อมูลตัวอย่าง ${counts}`);
+  const see = async (id, tabId, texts) => {
+    await p.evaluate((x) => { location.hash = x; }, id);
+    await p.waitForSelector(`.page[data-page="${id}"]`);
+    if (tabId) await p.click(`#main .tabs button[data-arg="${tabId}"]`);
+    for (const x of texts) {
+      await p.waitForFunction((y) => document.querySelector('#main').innerText.indexOf(y) >= 0, x, { timeout: 5000 })
+        .catch(async () => { throw new Error(`${id}/${tabId}: ไม่พบ "${x}"\n${(await p.locator('#main').innerText()).slice(0, 600)}`); });
+    }
+    assert(!(await p.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 1)), `${id}/${tabId} ว่าง: หน้ากว้างเกินจอ`);
+  };
+  for (const w of [1366, 390]) {
+    await p.setViewportSize({ width: w, height: w > 400 ? 900 : 844 });
+    await see('suppliers', 'sup', ['ยังไม่มีผู้ขาย', 'เพิ่มผู้ขายรายแรก']);
+    await see('suppliers', 'terms', ['ยังไม่มีสินค้า', 'ไปทะเบียนสินค้า']);
+    await see('suppliers', 'rules', ['ยังไม่ได้ตั้งเงื่อนไขเติมสต็อก', 'ตั้งเงื่อนไขเติมสต็อก']);
+    await see('purchasing', 'pr', ['ยังไม่มีใบขอซื้อ', 'สร้างใบขอซื้อ', 'ผู้ขออนุมัติใบของตัวเองไม่ได้']);
+    await see('purchasing', 'po', ['ยังไม่มีใบสั่งซื้อ', 'สร้างใบสั่งซื้อ']);
+    await see('purchasing', 'recv', ['ไม่มีใบสั่งซื้อที่รอรับของ', 'รอตรวจ']);
+    await see('purchasing', 'rv', ['ยังไม่มีของที่รับจากใบสั่งซื้อให้คืน']);
+    await see('replenish', null, ['ยังไม่มีสินค้า', 'ไปทะเบียนสินค้า']);
   }
-  await page.setViewportSize({ width: 1366, height: 900 });
+  if (shots) await p.screenshot({ path: path.join(shots, 'empty-replenish-phone.png'), fullPage: true });
+  // one item without stock, Min/Max or supplier: the plan and the late-PO box say when rows will appear
+  await p.evaluate(async () => {
+    const st = window.RRS.app.ledger.state;
+    const admin = Object.values(st.tables.users).find((u) => u.roles.indexOf('admin') >= 0).id;
+    await window.RRS.app.ledger.execute({ kind: 'item.upsert', payload: { code: 'P4-EMPTY', name: 'ทดสอบพีสี่ ว่าง', baseUnit: 'ชิ้น', type: 'PART' } }, { user: admin });
+  });
+  await p.setViewportSize({ width: 1366, height: 900 });
+  await see('replenish', 'order', ['ยังไม่มีรายการที่ต้องสั่ง', 'ไม่มีบรรทัด PO ที่เลยกำหนด']);
+  await see('suppliers', 'terms', ['มีสินค้า 1 รายการที่ยังไม่มีผู้ขาย', 'เลือกสินค้าจากรายการ']);
+  await ctx2.close();
+});
+
+// ---- the main page: sample data (when the build has RRS.fixture) + this test's own data --------------------------
+const sample = await state((s) => Object.keys(s.tables.suppliers || {}).length > 0);
+
+await step('sample data: suppliers, open POs, late PO lines with the jobs they hold up', async () => {
+  if (!sample) return; // build without RRS.fixture
+  await go('suppliers');
+  await tab('sup');
+  await page.waitForSelector('#sup-list tr[data-act="pickSup"]');
+  await go('purchasing');
+  await tab('po');
+  await page.waitForSelector('#po-list tr[data-act="pickPo"]');
+  await go('replenish');
+  await page.waitForSelector('#rp-late tbody tr');
+  const late = await page.locator('#rp-late').innerText();
+  assert(/เลย \d+ วัน/.test(late), `ตัวอย่างมี PO เลยกำหนด: ${late.slice(0, 400)}`);
+  const affected = await state((s, R, t) => R.purchasing.affectedJobs(s, { today: t }).filter((l) => l.late && l.jobs.length).length, today);
+  if (affected) assert(/ต้องใช้ .* ต้องการ/.test(late), `PO เลยกำหนดต้องบอกใบงานที่รอของ: ${late.slice(0, 400)}`);
+  await noOverflow('replenish ข้อมูลตัวอย่าง');
 });
 
 await step('setup master data and users', async () => {
@@ -241,7 +284,7 @@ await step('suppliers: price, buy unit, factor, MOQ, pack, preferred', async () 
 
 await step('suppliers: reorder rule', async () => {
   await tab('rules');
-  await waitText('ยังไม่ได้ตั้งเงื่อนไขเติมสต็อก');
+  if (!(await state((s) => Object.keys(s.tables.reorder_rules || {}).length))) await waitText('ยังไม่ได้ตั้งเงื่อนไขเติมสต็อก');
   await page.click('#main button[data-act="newRule"]');
   await dlgOpen();
   await page.fill('#rule-code', 'P4-BOLT');
@@ -336,7 +379,7 @@ await step('PR: written by hand, checked, and the requester cannot approve it', 
   await page.fill('#pr-lines input[name="lines[0][reason]"]', 'ทดสอบแยกหน้าที่');
   await page.click('form[data-form="prSave"] button[type="submit"]');
   await toast('ขออนุมัติแล้ว');
-  const mine = await state((s) => Object.values(s.tables.prs).find((x) => x.requestedBy === 'ADMIN'));
+  const mine = await state((s) => Object.values(s.tables.prs).find((x) => x.requestedBy === 'ADMIN' && x.lines.some((l) => l.code === 'P4-PAINT')));
   assert(mine && mine.status === 'SUBMITTED', 'ใบของผู้ดูแลต้องรออนุมัติ');
   ctxIds.prAdmin = mine.prNo;
   await waitText('คุณเป็นผู้ขอใบนี้ – อนุมัติหรือไม่อนุมัติเองไม่ได้');
@@ -379,7 +422,7 @@ await step('PO from the approved PR, rounded to buy units, issued', async () => 
   await asUser('P4PUR');
   await go('purchasing');
   await tab('po');
-  await waitText('ยังไม่มีใบสั่งซื้อ');
+  if (!(await state((s) => Object.keys(s.tables.pos || {}).length))) await waitText('ยังไม่มีใบสั่งซื้อ');
   await page.click('#main button[data-act="newPo"]');
   await page.selectOption('#po-sup', 'P4-SUP1');
   await page.check(`#main input[name="prNos[]"][value="${ctxIds.pr}"]`);
@@ -741,7 +784,7 @@ await step('lots of data: the lists scroll in their own box', async () => {
   await go('suppliers');
   await tab('terms');
   await page.fill('#term-q', '');
-  await page.waitForSelector('#term-list');
+  await page.waitForFunction(() => document.querySelectorAll('#term-list tbody tr').length > 100); // the cleared search has applied
   const box2 = await page.evaluate(() => { const b = document.querySelector('#term-list'); return [b.scrollHeight, b.clientHeight]; });
   assert(box2[0] > box2[1] + 50, `ตารางสินค้า–ผู้ขายต้องเลื่อนในกรอบ ${box2}`);
   await page.setViewportSize({ width: 390, height: 844 });

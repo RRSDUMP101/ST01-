@@ -45,17 +45,18 @@
     if (!(jobNo in cache.map)) cache.map[jobNo] = P.readiness(ctx.state, jobNo, { today: ctx.today });
     return cache.map[jobNo];
   }
-  /** Share of what the job needs that is issued, reserved or free to reserve now (null = nothing planned yet). */
+  /** Average over the job's lines of the part that is issued, reserved or free to reserve now (null = nothing planned yet). */
   function pctOf(rd) {
     if (!rd) return null;
-    let req = 0;
-    let miss = 0;
+    // every line counts the same (units differ: 500 bolts must not hide 2 missing sheets)
+    let n = 0;
+    let sum = 0;
     for (const l of rd.lines) {
       if (!(l.required > 0)) continue;
-      req += l.required;
-      miss += Math.min(l.required, l.missing);
+      n++;
+      sum += (l.required - Math.min(l.required, Math.max(0, l.missing))) / l.required;
     }
-    return req > 0 ? (req - miss) / req : null;
+    return n > 0 ? sum / n : null;
   }
   function approvedBoms(ctx) {
     return RRS.q.rows(ctx.state, 'boms', (b) => b.status === 'APPROVED')
@@ -99,8 +100,10 @@
     const items = job.salesItems || [];
     const blockers = salesBlockers(ctx, job);
     const started = comp(job).some((l) => l.issued > 0 || l.finished > 0 || l.received > 0);
-    const canMap = ctx.can('job.manage') && !!RRS.sales && !job.cancelled && OPEN[job.status] && !started;
-    const why = !ctx.can('job.manage') ? 'ฝ่ายวางแผนเป็นผู้จับคู่กับ BOM' : job.cancelled ? 'SO ถูกยกเลิกแล้ว' : !OPEN[job.status] ? 'ใบงานปิดแล้ว' : started ? 'งานเริ่มเบิก/ผลิตแล้ว – เปลี่ยน BOM ไม่ได้' : '';
+    const hasRes = P.reservations(ctx.state, { jobNo: job.jobNo, open: true }).length > 0;
+    const canMap = ctx.can('job.manage') && !!RRS.sales && !job.cancelled && OPEN[job.status] && !started && !hasRes;
+    const why = !ctx.can('job.manage') ? 'ฝ่ายวางแผนเป็นผู้จับคู่กับ BOM' : job.cancelled ? 'SO ถูกยกเลิกแล้ว' : !OPEN[job.status] ? 'ใบงานปิดแล้ว'
+      : started ? 'งานเริ่มเบิก/ผลิตแล้ว – เปลี่ยน BOM ไม่ได้' : hasRes ? 'ใบงานนี้มีของจองอยู่ – ปล่อยการจองก่อนจับคู่ใหม่' : '';
     const facts = h.dl([
       ['พื้นที่ขาย', h.badge(wsLabel, ws === 'export' ? 'accent' : 'info')],
       ['เลขที่ SO', job.orderNumber || job.soNo],
@@ -130,7 +133,7 @@
     const block = blockers.length
       ? h.note(t`<b>ยังเริ่มผลิตไม่ได้ – สิ่งที่ระบบสต็อกจะรายงานกลับ Sales Office:</b><ul class="errs">${blockers.map((b) => t`<li>${b}</li>`)}</ul>`, 'warn')
       : h.note('ไม่มีเงื่อนไขค้าง – ผูก BOM ฉบับที่อนุมัติแล้ว และจองของครบทุกรายการ', 'ok');
-    return h.section('ข้อมูลจาก Sales Office', t`${facts}
+    return h.section('ข้อมูลจาก Sales Office', t`${!canMap && why && RRS.sales ? t`<p class="hint" id="jb-map-why">จับคู่กับ BOM ไม่ได้ตอนนี้: ${why}</p>` : ''}${facts}
       ${job.cancelled ? h.note('Sales Office ยกเลิก SO นี้แล้ว – ของที่จองถูกปล่อยคืน ของที่เบิกไปแล้วให้คืนเข้าคลัง (RT) ที่หน้า ใบจัดชุด', 'bad') : ''}
       ${job.salesChanged ? h.note('รายการใน SO เปลี่ยนหลังผูก BOM – ตรวจรายการด้านล่างแล้วจับคู่กับ BOM ใหม่', 'warn') : ''}
       <h3>รายการ SO ตามที่ได้รับ</h3>${soTable}
@@ -207,7 +210,7 @@
     return h.kpis([
       h.kpi('งานที่ยังไม่ปิด', h.fmt.num(open.length), 'เปิด + กำลังทำ', 'info'),
       h.kpi('พร้อมผลิต', h.fmt.num(ready), 'เบิก/จอง/พร้อมเบิกครบทุกรายการ', ready ? 'ok' : ''),
-      h.kpi('ขาดของ', h.fmt.num(short), short ? 'ดูว่าขาดอะไรที่หน้า สต็อก 6 ช่อง' : 'ไม่มีงานที่ขาดของ', short ? 'bad' : 'ok'),
+      h.kpi('ขาดของ', h.fmt.num(short), short ? 'ดูว่าขาดอะไรที่ ความพร้อมรายใบงาน' : 'ไม่มีงานที่ขาดของ', short ? 'bad' : 'ok'),
       h.kpi('เลยกำหนด', h.fmt.num(late), 'วันต้องใช้ผ่านมาแล้ว', late ? 'warn' : ''),
       unmapped ? h.kpi('SO รอผูก BOM', h.fmt.num(unmapped), 'งานจาก Sales Office', 'warn') : '',
     ]);
@@ -230,6 +233,17 @@
       cols: [
         { label: '#', key: 'line' },
         { label: 'รายการ', render: (l) => { const it = ctx.item(l.code) || {}; return t`${h.code(l.code)}${l.output ? t` ${h.badge('สินค้าที่ผลิต', 'accent')}` : ''}${l.extra ? t` ${h.badge('เบิกนอกแผน', 'warn')}` : ''}${it.name ? t`<br><small class="muted">${it.name}</small>` : ''}`; } },
+        // the actions sit right after the item, so a phone shows them without scrolling sideways
+        { label: 'ทำรายการ', render: (l) => {
+          const r = byLine[l.line];
+          const need = r ? U.round(r.required - r.issued - r.reservedRemaining) : 0;
+          const b = [];
+          if (open && canRes && !l.output && need > 0) b.push(h.btn('จอง', { act: 'reserve', arg: l.line, small: true, tone: 'primary', title: `ยังต้องจองอีก ${need}` }));
+          if (open && canJob && !(l.output && isSales(job) && !job.product)) b.push(h.btn('ตั้งผลิตเอง', { act: 'setMake', arg: l.line, small: true, tone: 'ghost' }));
+          if (open && canRec && l.toMake > 0) b.push(h.btn('บันทึกผลิตเสร็จ', { act: 'record', arg: l.line, small: true, tone: 'ghost' }));
+          if (canFr && l.finished > l.received) b.push(h.btn('รับเข้าคลัง (FR)', { act: 'fr', arg: l.line, small: true, tone: 'quiet' }));
+          return b.length ? t`<span class="form-actions">${b}</span>` : dash;
+        } },
         { label: 'ต่อชุด', num: true, render: (l) => (l.output ? dash : n0(l.per)) },
         { label: 'ต้องใช้', num: true, render: (l) => (l.output ? dash : t`<b>${h.fmt.num(l.required)}</b>`) },
         { label: 'เบิกแล้ว', num: true, render: (l) => (l.output ? dash : n0(l.issued)) },
@@ -239,16 +253,6 @@
         { label: 'จองคงเหลือ', num: true, render: (l) => (l.output ? dash : n0((byLine[l.line] || {}).reservedRemaining)) },
         { label: 'พร้อมเบิกตอนนี้', num: true, render: (l) => (l.output ? dash : n0((byLine[l.line] || {}).freeNow)) },
         { label: 'สถานะ', render: (l) => { const r = byLine[l.line]; return !open || !r ? '' : t`${h.badge(r.status, READY_TONE[r.statusCode])}${r.missing > 0 ? t`<br><small class="muted">ขาด ${h.fmt.num(r.missing)}</small>` : ''}`; } },
-        { label: '', render: (l) => {
-          const r = byLine[l.line];
-          const need = r ? U.round(r.required - r.issued - r.reservedRemaining) : 0;
-          const b = [];
-          if (open && canRes && !l.output && need > 0) b.push(h.btn('จอง', { act: 'reserve', arg: l.line, small: true, tone: 'primary', title: `ยังต้องจองอีก ${need}` }));
-          if (open && canJob && !(l.output && isSales(job) && !job.product)) b.push(h.btn('ตั้งผลิตเอง', { act: 'setMake', arg: l.line, small: true, tone: 'ghost' }));
-          if (open && canRec && l.toMake > 0) b.push(h.btn('บันทึกผลิตเสร็จ', { act: 'record', arg: l.line, small: true, tone: 'ghost' }));
-          if (canFr && l.finished > l.received) b.push(h.btn('รับเข้าคลัง (FR)', { act: 'fr', arg: l.line, small: true, tone: 'quiet' }));
-          return b.length ? t`<span class="form-actions">${b}</span>` : '';
-        } },
       ],
     });
   }
@@ -329,7 +333,7 @@
       ${h.table({ rows: v.logAll ? log : log.slice(0, 5), dense: true, empty: 'ยังไม่มีประวัติ', emptyText: '',
         cols: [{ label: 'เวลา', get: (x) => h.fmt.dt(x.at) }, { label: 'ผู้ทำ', get: (x) => ctx.userName(x.by) }, { label: 'รายการ', get: (x) => LOG_LABEL[x.action] || x.action }, { label: 'รายละเอียด', key: 'detail' }] })}
       ${log.length > 5 ? t`<p class="hint">${h.btn(v.logAll ? 'แสดง 5 รายการล่าสุด' : `แสดงทั้งหมด ${log.length} รายการ`, { act: 'logAll', tone: 'quiet', small: true })}</p>` : ''}`,
-    { id: 'jb-detail', actions: t`${h.link('ใบจัดชุดและหยิบของ', 'picking', { job: job.jobNo, vals: null, errs: null })} ${h.link('ความพร้อมผลิต', 'readiness', { tab: 'jobs', job: job.jobNo })} ${h.btn('ปิด', { act: 'close', tone: 'quiet', small: true })}` });
+    { id: 'jb-detail', actions: t`${h.link('ใบจัดชุดและหยิบของ', 'picking', { job: job.jobNo, vals: null, errs: null })} ${open ? h.link('ความพร้อมผลิต', 'readiness', { tab: 'jobs', job: job.jobNo }) : ''} ${h.btn('ปิด', { act: 'close', tone: 'quiet', small: true })}` });
   }
   function autoNote(a) {
     return h.note(t`จองอัตโนมัติ ${a.created.length} ใบ${a.created.length ? t`: ${a.created.map((c) => `${c.code} ${h.fmt.num(c.qty)} @${c.wh}`).join(', ')}` : ''}
@@ -368,13 +372,15 @@
       ];
     } else {
       body = [
-        h.field({ name: 'qty', label: 'จำนวนชุด', type: 'number', value: d.qty == null ? 1 : d.qty, required: true, id: 'jb-n-qty', hint: 'ต้องใช้ = จำนวนต่อชุด × จำนวนชุด' }),
+        h.field({ name: 'qty', label: 'จำนวนชุด', type: 'number', value: d.qty == null || d.qty === '' ? 1 : d.qty, required: true, id: 'jb-n-qty', hint: 'ต้องใช้ = จำนวนต่อชุด × จำนวนชุด' }),
         t`<div class="wide">${h.lineEditor({ name: 'lines', cols: MANUAL_COLS, lines: d.lines })}</div>`,
       ];
     }
+    const errs = ctx.view.createErrs || [];
     return h.form({
       name: 'create', submit: 'สร้างใบงาน', cancel: 'close',
       body: [
+        errs.length ? t`<div class="wide" id="jb-n-errs">${h.note(t`<b>ยังสร้างใบงานไม่ได้ – ยังไม่มีอะไรบันทึก</b><ul class="errs">${errs.map((e) => t`<li>${e}</li>`)}</ul>`, 'bad')}</div>` : '',
         h.field({ name: 'soNo', label: 'เลขที่ SO', value: d.soNo, required: true, id: 'jb-n-so', hint: 'ใช้เลข SO ตรงตัว ระบบไม่จับคู่จากชื่อลูกค้า' }),
         h.field({ name: 'jobNo', label: 'เลขที่ใบงาน', value: d.jobNo, id: 'jb-n-no', hint: 'เว้นว่าง = ระบบออกเลข JB… ให้' }),
         h.field({ name: 'dueDate', label: 'วันต้องใช้ / กำหนดเสร็จ', type: 'date', value: d.dueDate, required: true, id: 'jb-n-due' }),
@@ -431,7 +437,7 @@
       ];
       const more = rows.length > limit
         ? t`<p class="hint">แสดง ${h.fmt.num(limit)} จาก ${h.fmt.num(rows.length)} ใบงาน ${h.btn(`แสดงเพิ่มอีก ${h.fmt.num(Math.min(STEP, rows.length - limit))} ใบ`, { act: 'more', tone: 'ghost', small: true })}</p>`
-        : t`<p class="hint">${h.fmt.num(rows.length)} ใบงาน · ความพร้อม = ส่วนที่เบิกแล้ว + จองไว้ + พร้อมเบิกที่จองเพิ่มได้ทันที เทียบกับที่ต้องใช้ (ของรอตรวจ/กำลังผลิต/ยังไม่เข้า ไม่นับ)</p>`;
+        : t`<p class="hint">${h.fmt.num(rows.length)} ใบงาน · ความพร้อม = เฉลี่ยทุกรายการของงาน: ส่วนที่เบิกแล้ว + จองไว้ + พร้อมเบิกที่จองเพิ่มได้ทันที เทียบกับที่ต้องใช้ (ของรอตรวจ/กำลังผลิต/ยังไม่เข้า ไม่นับ)</p>`;
       const allNote = v.autoNote && !v.autoNote.jobNo ? autoNote(v.autoNote) : '';
       return t`${kpis(ctx)}${allNote}
         ${h.toolbar(filters, right)}
@@ -448,8 +454,8 @@
     },
     actions: {
       pick: (ctx, el) => ctx.set({ sel: el.dataset.arg, _scroll: true, autoNote: null, resAll: false, logAll: false }),
-      close: (ctx) => ctx.set({ sel: null, draft: null }),
-      new: (ctx) => ctx.set({ sel: '__new', draft: null }),
+      close: (ctx) => ctx.set({ sel: null, draft: null, createErrs: null }),
+      new: (ctx) => ctx.set({ sel: '__new', draft: null, createErrs: null }),
       more: (ctx) => ctx.set({ limit: (ctx.view.limit || STEP) + STEP }),
       resAll: (ctx) => ctx.set({ resAll: !ctx.view.resAll }),
       logAll: (ctx) => ctx.set({ logAll: !ctx.view.logAll }),
@@ -503,6 +509,14 @@
           const w = whs.find((x) => x.wh === c);
           return [c, `${l} – พร้อมเบิก ${h.fmt.num(w ? Math.max(0, w.free) : 0)} ${it.baseUnit}`];
         });
+        // why nothing can be reserved: no free stock anywhere, or only in warehouses this person may not reserve from
+        const elsewhere = whs.filter((w) => w.free > 0 && !ctx.can('reserve.manage', w.wh));
+        let why = '';
+        if (need <= 0) why = h.note('บรรทัดนี้จอง/เบิกครบแล้ว – ไม่ต้องจองเพิ่ม', 'info');
+        else if (!whs.some((w) => w.free > 0)) why = h.note('ตอนนี้ไม่มีของพร้อมเบิกให้จองในคลังใดเลย – ส่วนนี้ขึ้นเป็น ขาด ที่หน้าความพร้อมผลิต (ดูของรอตรวจ กำลังผลิต และจะเข้า ได้ที่หน้า สต็อก 6 ช่อง)', 'warn');
+        else if (!mine.some((w) => w.free > 0) && elsewhere.length) {
+          why = h.note(`มีของพร้อมเบิกที่คลัง ${elsewhere.map((w) => `${w.wh} (${h.fmt.num(w.free)})`).join(', ')} แต่คุณจองได้เฉพาะคลัง ${whOpts.map(([c]) => c).join(', ') || '–'} – ให้ผู้มีสิทธิ์ของคลังนั้นจอง หรือโอนของมาคลังของคุณก่อน`, 'warn');
+        }
         const freeTbl = h.table({ rows: whs, dense: true, empty: 'ไม่มีของสถานะใช้ได้ในคลังใดเลย', emptyText: 'จองไม่ได้ตอนนี้ – ดูของรอตรวจ/กำลังผลิต/จะเข้าได้ที่หน้า สต็อก 6 ช่อง',
           cols: [{ label: 'คลัง', render: (w) => h.code(w.wh) }, { label: 'ใช้ได้', num: true, key: 'available' }, { label: 'จองให้งานอื่น', num: true, key: 'other' },
             { label: 'งานนี้จองแล้ว', num: true, key: 'own' }, { label: 'พร้อมเบิก', num: true, render: (w) => t`<b>${h.fmt.num(Math.max(0, w.free))}</b>` }] });
@@ -511,7 +525,7 @@
           body: t`<div class="wide">${h.dl([['รายการ', t`${h.code(jl.code)} ${it.name || ''}`], ['ต้องใช้', h.qty(jl.required, it.baseUnit)], ['เบิกแล้ว', h.qty(jl.issued, it.baseUnit)],
             ['งานนี้จองไว้แล้ว', h.qty(rd.reservedRemaining || 0, it.baseUnit)], ['ยังต้องจอง', t`<b>${h.qty(need, it.baseUnit)}</b>`]])}</div>
             ${jl.toMake > 0 ? t`<p class="hint wide">ตั้งให้ผลิตเอง ${h.fmt.num(jl.toMake)} – ส่วนนี้ไม่ต้องจองจากสต็อก (จองอัตโนมัติเว้นให้)</p>` : ''}
-            <div class="wide">${freeTbl}<p class="hint">พร้อมเบิก = ใช้ได้ − จองให้งานอื่น − งานนี้จองแล้ว · ของรอตรวจ/กักกัน กำลังผลิต และของที่ยังไม่เข้า จองไม่ได้</p></div>
+            <div class="wide">${freeTbl}<p class="hint">พร้อมเบิก = ใช้ได้ − จองให้งานอื่น − งานนี้จองแล้ว · ของรอตรวจ/กักกัน กำลังผลิต และของที่ยังไม่เข้า จองไม่ได้</p>${why}</div>
             ${h.field({ name: 'wh', label: 'จองจากคลัง', type: 'select', value: best ? best.wh : '', options: whOpts, required: true })}
             ${h.field({ name: 'qty', label: `จำนวนจอง (${it.baseUnit || 'หน่วยหลัก'})`, type: 'number', value: best ? Math.min(need, Math.max(0, best.free)) || '' : '', required: true, hint: `ไม่เกิน ${h.fmt.num(need)} ที่ยังต้องจอง` })}
             ${h.field({ name: 'needDate', label: 'วันต้องใช้', type: 'date', value: job.dueDate })}
@@ -589,14 +603,20 @@
         if (!jl) return;
         const it = ctx.item(jl.code) || { baseUnit: '' };
         const left = U.round(jl.finished - jl.received);
+        const whOpts = h.whOptions(ctx.state).filter(([c]) => ctx.can('doc.draft', c) || ctx.can('doc.post', c));
         const r = await ctx.dialog({ title: `สร้างร่างรับเข้าคลัง (FR): ${jl.code}`, submit: 'สร้างร่างแล้วไปหน้าเอกสาร',
-          body: t`${h.field({ name: 'wh', label: 'เข้าคลัง', type: 'select', options: h.whOptions(ctx.state), required: true })}
+          body: t`${h.field({ name: 'wh', label: 'เข้าคลัง', type: 'select', options: whOpts, required: true })}
             ${h.field({ name: 'bin', label: 'ช่องเก็บ', list: 'dl-bins' })}
-            ${h.field({ name: 'qty', label: `จำนวนรับเข้า (${it.baseUnit})`, type: 'number', value: left, required: true, hint: `ผลิตเสร็จรอรับ ${h.fmt.num(left)}` })}
+            ${h.field({ name: 'qty', label: `จำนวนรับเข้า (${it.baseUnit})`, type: 'number', value: left, required: true, hint: `ผลิตเสร็จรอรับ ${h.fmt.num(left)} – รับเกินนี้ไม่ได้` })}
             ${h.field({ name: 'lot', label: 'ล็อต / Serial' })}
-            <p class="hint wide">ร่างยังไม่เข้ายอด – สโตร์ตรวจและกด บันทึก ที่หน้าเอกสาร</p>`,
+            <p class="hint wide">ร่างยังไม่เข้ายอด – สโตร์ตรวจและกด บันทึก ที่หน้าเอกสาร${it.qcFinal ? ' · สินค้านี้ต้องตรวจเมื่อผลิตเสร็จ: รับเข้าแล้วเป็น รอตรวจ จนกว่า QC ปล่อย (ยังเบิกหรือส่งมอบไม่ได้)' : ''}</p>`,
           onSubmit: (vv) => {
-            if (!vv.wh) return { ok: false, errors: [{ message: 'เลือกคลังที่รับเข้า' }] };
+            const errors = [];
+            const q = U.num(vv.qty);
+            if (!vv.wh) errors.push({ message: 'เลือกคลังที่รับเข้า' });
+            if (!(q > 0)) errors.push({ message: 'ใส่จำนวนรับเข้าเป็นตัวเลขมากกว่า 0' });
+            else if (U.round(q) > left) errors.push({ message: `รับเข้าได้ไม่เกิน ${h.fmt.num(left)} ${it.baseUnit} (ผลิตเสร็จ ${h.fmt.num(jl.finished)} รับเข้าแล้ว ${h.fmt.num(jl.received)}) – บันทึกผลิตเสร็จเพิ่มก่อน` });
+            if (errors.length) return { ok: false, errors };
             return ctx.exec('doc.saveDraft', { type: 'FR', job: job.jobNo, ref: job.soNo, lines: [{ code: jl.code, qty: vv.qty, wh: vv.wh, bin: vv.bin, lot: vv.lot }] }, { quiet: true });
           } });
         if (r && r.ok && r.result && r.result.docNo) {
@@ -662,11 +682,17 @@
         const payload = mode === 'manual'
           ? Object.assign(base, { lines: h.cleanLines(vals.lines, 'code').map((l) => ({ code: l.code, qty: l.qty, unit: l.unit, note: l.note })) })
           : Object.assign(base, { product: vals.product });
-        if (mode === 'manual' && !payload.lines.length) return ctx.toast('ใส่รายการชิ้นส่วนอย่างน้อย 1 บรรทัด (รหัส + จำนวนต่อชุด)', 'bad');
-        if (mode === 'bom' && !vals.product) return ctx.toast('เลือกสินค้าที่ผลิต (ต้องมี BOM ที่อนุมัติแล้ว)', 'bad');
-        ctx.view.draft = vals;
-        const r = await ctx.exec('job.create', payload, { done: (x) => `สร้างใบงาน ${x.result.jobNo} แล้ว (${x.result.lines} บรรทัด)` });
-        if (r.ok) ctx.set({ sel: r.result.jobNo, draft: null, st: 'open', _scroll: true });
+        // everything that is missing at once, in the form (the engine stops at the first problem)
+        const miss = [];
+        if (!U.trim(vals.soNo)) miss.push('ใส่เลขที่ SO');
+        if (!U.trim(vals.dueDate)) miss.push('เลือกวันต้องใช้ / กำหนดเสร็จ');
+        if (mode === 'bom' && !vals.product) miss.push('เลือกสินค้าที่ผลิต (ต้องมี BOM ที่อนุมัติแล้ว)');
+        if ((mode === 'bom' || U.trim(vals.qty) !== '') && !(U.num(vals.qty) > 0)) miss.push('ใส่จำนวนชุดเป็นตัวเลขมากกว่า 0');
+        if (mode === 'manual' && !payload.lines.length) miss.push('ใส่รายการชิ้นส่วนอย่างน้อย 1 บรรทัด (รหัส + จำนวนต่อชุด)');
+        if (miss.length) return ctx.set({ draft: vals, createErrs: miss });
+        const r = await ctx.exec('job.create', payload, { quiet: true, done: (x) => `สร้างใบงาน ${x.result.jobNo} แล้ว (${x.result.lines} บรรทัด)` });
+        if (!r.ok) return ctx.set({ draft: vals, createErrs: (r.errors || []).map((e) => e.message) });
+        ctx.set({ sel: r.result.jobNo, draft: null, createErrs: null, st: 'open', _scroll: true });
       },
     },
   });

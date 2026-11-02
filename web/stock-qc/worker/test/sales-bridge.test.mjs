@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 import { createHash, randomBytes } from 'node:crypto';
 import { startServer, outboundRouter, replay, rid } from './helpers.mjs';
 import { fakeSales } from './fake-sales.mjs';
+import { packEvents, POST_BODY_BYTES, EVENTS_PER_POST } from '../src/sales-bridge.js';
 
 const SYNC_CRON = '*/15 * * * *';
 const CUSTOMER = 'บริษัท ลูกค้าห้ามเก็บ จำกัด';
@@ -101,6 +102,21 @@ test('ปิดเป็นค่าเริ่มต้น และตั้�
     assert.ok(short.f.log.length > 0 && short.f.log.every((x) => x.mode === 'domestic'), 'only Domestic talked to Sales Office');
   } finally {
     await s.dispose();
+  }
+  // a mode that is not exactly pull / pull_push is off (fails closed): no request
+  for (const mode of ['PULL_PUSH', ' pull', 'push', 'on', 'true']) {
+    const m = salesSetup({ SQ_SALES_BRIDGE: mode });
+    m.f.addCommand('domestic', { productionJobId: 'production:so-1', orderId: 'so-1', payload: soPayload() });
+    s = await startServer({ outbound: m.router, bindings: m.bindings });
+    try {
+      const owner = await plant(s);
+      const r = await sync(s, owner);
+      assert.equal(r.body.code, 'BRIDGE_OFF', mode);
+      await s.scheduled(SYNC_CRON);
+      assert.equal(m.router.requests.length, 0, mode);
+    } finally {
+      await s.dispose();
+    }
   }
   const http = salesSetup({ SQ_SALES_URL: 'http://sales.test' });
   s = await startServer({ outbound: http.router, bindings: http.bindings });
@@ -466,4 +482,104 @@ test('สิทธิ์และความปลอดภัย: เฉพา
   } finally {
     await u.dispose();
   }
+});
+
+test('ตัวจำลอง Sales Office ใช้กฎจริง: ready ต้องจองครบ, sourceVersion ไม่ใหม่กว่า = stale_status, event id เดิมเนื้อหาต่าง = event_conflict', async () => {
+  const { f, secrets, connectorId } = salesSetup();
+  const cmd = f.addCommand('domestic', { productionJobId: 'production:so-a', orderId: 'so-a', payload: soPayload() });
+  const post = async (events, o = {}) => {
+    const ws = o.mode || 'domestic';
+    const res = await f.handle(new Request('https://sales.test/api/rrs/partlist/bridge?mode=' + ws, { method: 'POST',
+      headers: { authorization: 'Bearer ' + (o.secret || secrets[ws]), 'x-rrs-connector-id': connectorId, 'content-type': 'application/json' },
+      body: JSON.stringify({ events }) }));
+    return { status: res.status, body: await res.json() };
+  };
+  const ev = (eventId, sourceVersion, over = {}) => ({ eventId, commandId: cmd.commandId, commandVersion: cmd.version, payloadHash: cmd.payloadHash,
+    workspace: 'domestic', orderId: cmd.orderId, productionJobId: cmd.productionJobId, status: Object.assign({ externalJobId: 'SO-DOMESTIC-X', sourceVersion,
+      bomRevision: null, drawingRevision: null, bomFingerprint: null, revisionApproved: false, revisionEvidence: null, materialStatus: 'unknown', parts: [],
+      station: null, good: null, scrap: null, rework: null, blockers: [], eta: null, observedAt: new Date().toISOString() }, over) });
+  const part = (o) => Object.assign({ partId: 'P1', required: 4, reserved: 4, shortage: 0, unit: 'ชิ้น' }, o);
+  // validateStatus(): each of these refuses the whole request with 400
+  for (const bad of [
+    { materialStatus: 'ready', parts: [part({ reserved: 3 })] }, // ready without a full reservation
+    { materialStatus: 'ready', parts: [part({ shortage: 1 })] }, // ready with a shortage
+    { materialStatus: 'ready', parts: [] }, // ready without parts
+    { materialStatus: 'ready', parts: [part({ reserved: null })] }, // ready with an unknown reservation
+    { parts: [part({ reserved: 5 })] }, // reserved above required
+    { parts: [part({}), part({})] }, // the same partId twice
+    { revisionApproved: true, bomRevision: 'A', drawingRevision: 'A', bomFingerprint: 'a'.repeat(64), revisionEvidence: ' ' }, // no evidence
+    { observedAt: new Date(Date.now() + 3600e3).toISOString() }, // in the future
+  ]) {
+    const r = await post([ev('bad', 1, bad)]);
+    assert.equal(r.status, 400, JSON.stringify(bad));
+  }
+  assert.equal((await post([Object.assign(ev('extra-key', 1), { extra: 1 })])).status, 400, 'strict event keys');
+  assert.equal((await post([ev('x', 1)], { secret: secrets.export })).status, 401, 'the other workspace secret');
+  assert.equal(f.eventCount('domestic'), 0);
+  // a fully reserved ready status is accepted; the same event again is accepted once
+  const good = ev('e-1', 1, { materialStatus: 'ready', parts: [part({ completed: 0 })] });
+  assert.deepEqual((await post([good])).body.accepted, ['e-1']);
+  assert.deepEqual((await post([good])).body.accepted, ['e-1']);
+  assert.equal(f.eventCount('domestic'), 1);
+  const rejected = async (e) => (await post([e])).body.rejected;
+  assert.deepEqual(await rejected(Object.assign({}, good, { status: Object.assign({}, good.status, { blockers: ['อื่น'] }) })), [{ eventId: 'e-1', code: 'event_conflict' }]);
+  assert.deepEqual(await rejected(ev('e-2', 1)), [{ eventId: 'e-2', code: 'stale_status' }]);
+  assert.deepEqual(await rejected(Object.assign(ev('e-3', 2), { workspace: 'export' })), [{ eventId: 'e-3', code: 'workspace_mismatch' }]);
+  assert.deepEqual(await rejected(Object.assign(ev('e-4', 2), { commandVersion: 2 })), [{ eventId: 'e-4', code: 'stale_command' }]);
+  assert.deepEqual(await rejected(ev('e-5', 2, { externalJobId: 'SO-DOMESTIC-OTHER' })), [{ eventId: 'e-5', code: 'mapping_conflict' }]);
+  assert.deepEqual(await rejected(ev('e-6', 2, { observedAt: '2020-01-01T00:00:00.000Z' })), [{ eventId: 'e-6', code: 'stale_status' }]);
+  assert.deepEqual((await post([ev('e-7', 2)])).body.accepted, ['e-7']);
+  assert.equal(f.statusOf('domestic', cmd.productionJobId).sourceVersion, 2);
+});
+
+test('push: Sales Office ตอบ conflict (สถานะชั่วคราวของเขา) = ส่งเหตุการณ์เดิมรอบถัดไป; เกิน 20 เหตุการณ์แบ่ง POST', async () => {
+  const { f, router, bindings } = salesSetup();
+  for (let i = 0; i < 25; i++) {
+    f.addCommand('domestic', { productionJobId: 'production:so-' + String(i).padStart(2, '0'), orderId: 'so-' + i, payload: soPayload({ orderNumber: 'SO-' + i }) });
+  }
+  f.forceReject.push('conflict');
+  const s = await startServer({ outbound: router, bindings });
+  try {
+    const owner = await plant(s);
+    let r = await sync(s, owner, { workspace: 'domestic' });
+    let d = resultOf(r, 'domestic');
+    assert.deepEqual([d.applied, d.queued, d.posts, d.accepted, d.rejected, d.retryLater], [25, 25, 2, 24, 0, 1]);
+    const posts = f.log.filter((x) => x.method === 'POST');
+    assert.deepEqual(posts.map((x) => x.events), [20, 5], 'at most 20 events per POST');
+    assert.ok(posts.every((x) => x.bytes <= POST_BODY_BYTES));
+    const waiting = (await s.d1.prepare("SELECT event_id, error, source_version FROM sq_bridge_events WHERE result='pending'").all()).results;
+    assert.equal(waiting.length, 1);
+    assert.deepEqual([waiting[0].error, waiting[0].source_version], ['conflict', 1]);
+    const st = await s.callJson('/api/sales/status', { cookie: owner });
+    assert.deepEqual(st.body.workspaces.domestic.events, { accepted: 24, pending: 1 });
+    // next run: nothing new is built, the stored event goes again with the same id and is accepted
+    r = await sync(s, owner, { workspace: 'domestic' });
+    d = resultOf(r, 'domestic');
+    assert.deepEqual([d.queued, d.posts, d.accepted, d.retryLater], [0, 1, 1, 0]);
+    assert.deepEqual(await s.d1.prepare('SELECT result, error FROM sq_bridge_events WHERE event_id=?').bind(waiting[0].event_id).first(), { result: 'accepted', error: '' });
+    assert.equal(f.eventCount('domestic'), 25);
+    assert.deepEqual(f.badRequests, []);
+    assert.deepEqual(router.blocked, []);
+  } finally {
+    await s.dispose();
+  }
+});
+
+test('packEvents: ไม่เกิน 20 เหตุการณ์และ 1 MB ต่อคำขอ ตามลำดับเดิม; เหตุการณ์ที่ใหญ่เกินส่งเดี่ยว', () => {
+  const row = (i, n) => ({ event_id: 'e' + i, payload: JSON.stringify({ eventId: 'e' + i, pad: 'x'.repeat(n) }) });
+  const bodyBytes = (batch) => Buffer.byteLength(JSON.stringify({ events: batch.map((r) => JSON.parse(r.payload)) }));
+  const check = (rows, expectSizes) => {
+    const batches = packEvents(rows, EVENTS_PER_POST, POST_BODY_BYTES);
+    assert.deepEqual(batches.flat().map((r) => r.event_id), rows.map((r) => r.event_id), 'every row once, in order');
+    for (const b of batches) {
+      assert.ok(b.length >= 1 && b.length <= EVENTS_PER_POST);
+      if (b.length > 1) assert.ok(bodyBytes(b) <= POST_BODY_BYTES, 'body ' + bodyBytes(b));
+    }
+    assert.deepEqual(batches.map((b) => b.length), expectSizes);
+  };
+  check(Array.from({ length: 45 }, (_, i) => row(i, 100)), [20, 20, 5]);
+  check(Array.from({ length: 10 }, (_, i) => row(i, 300000)), [3, 3, 3, 1]);
+  check([row(0, 100), row(1, 1200000), row(2, 100)], [1, 1, 1]);
+  check([], []);
+  assert.ok(POST_BODY_BYTES < 1048576, 'under Sales Office\'s 1 MiB limit');
 });

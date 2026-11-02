@@ -28,25 +28,32 @@
   const fld = (label, input, hint) => t`<label class="fld"><span class="fld-l">${label}</span>${input}${hint ? t`<small class="hint">${hint}</small>` : ''}</label>`;
 
   // ---- model ---------------------------------------------------------------------------------------------------------
-  /** Pick rows: one per suggested bin of each reservation (+ rows the picker added). Keys are stable for one state. */
+  /**
+   * Pick rows: one per suggested bin of each reservation (+ rows the picker added). The key of a row is its reservation
+   * + its place among that reservation's rows (RS-00001_0, RS-00001_1 …), so what was typed stays with its reservation
+   * even when another person's commit adds or removes reservations of the job before the pick is saved.
+   */
   function pickModel(ctx, jobNo) {
     const entries = P.pickList(ctx.state, jobNo);
     const extra = ((ctx.view.extra || {})[jobNo]) || {};
     const rows = [];
     entries.forEach((e, i) => {
+      let n = 0;
+      const key = () => `${e.reservationId}_${n++}`;
       const sug = e.suggest.length ? e.suggest : [{ bin: '', lot: '', qty: '' }];
-      sug.forEach((s) => rows.push({ k: rows.length, e, i, bin: s.bin, lot: s.lot, qty: s.qty, none: !e.bins.length }));
-      for (let x = 0; x < (extra[e.reservationId] || 0); x++) rows.push({ k: rows.length, e, i, bin: '', lot: '', qty: '', added: true, none: !e.bins.length });
+      sug.forEach((s) => rows.push({ k: key(), e, i, bin: s.bin, lot: s.lot, qty: s.qty, none: !e.bins.length }));
+      for (let x = 0; x < (extra[e.reservationId] || 0); x++) rows.push({ k: key(), e, i, bin: '', lot: '', qty: '', added: true, none: !e.bins.length });
     });
     return { entries, rows };
   }
-  function jobChoices(ctx) {
+  /** Open jobs and closed jobs with material still out; the job on screen is always in the list. */
+  function jobChoices(ctx, current) {
     const out = [];
     for (const j of P.jobs(ctx.state)) {
       const left = P.reservations(ctx.state, { jobNo: j.jobNo, open: true }).filter((r) => P.remaining(r) > 0).length;
       const issued = comp(j).some((l) => l.issued > 0);
-      if (!OPEN[j.status] && !issued) continue;
-      const what = OPEN[j.status] ? (left ? `ค้างหยิบ ${left} รายการ` : 'ยังไม่มีของจองค้าง') : `${P.JOB_STATUS[j.status]} · คืนของได้`;
+      if (!OPEN[j.status] && !issued && j.jobNo !== current) continue;
+      const what = OPEN[j.status] ? (left ? `ค้างหยิบ ${left} รายการ` : 'ยังไม่มีของจองค้าง') : `${P.JOB_STATUS[j.status]}${issued ? ' · คืนของได้' : ''}`;
       out.push([j.jobNo, `${j.jobNo} · SO ${j.soNo || '–'}${j.product ? ' · ' + j.product : ''} · ${what}`, OPEN[j.status] ? 0 : 1]);
     }
     return out.sort((a, b) => a[2] - b[2]).map((x) => [x[0], x[1]]);
@@ -150,8 +157,10 @@
   function rtSection(ctx, job) {
     const v = ctx.view;
     const lines = comp(job).filter((l) => l.issued > 0);
+    // the confirmation of the last return stays visible, also when it gave back everything that was issued
+    const lastRt = v.lastRt && v.rtJob === job.jobNo ? h.note(t`รับคืนแล้วเป็น ${docLink(v.lastRt)} – ยอดเบิกของงานลดลงแล้ว`, 'ok') : '';
     if (!lines.length) {
-      return h.section('คืนของเหลือเข้าคลัง (RT)', h.empty('ยังไม่มีของที่เบิกให้งานนี้', 'ของที่เบิกไปแล้วแต่เหลือจากการผลิต คืนเข้าคลังได้ที่นี่ – ระบบลดยอดเบิกของงานให้'), { id: 'pk-rt' });
+      return h.section('คืนของเหลือเข้าคลัง (RT)', t`${lastRt}${h.empty(lastRt ? 'คืนของที่เบิกให้งานนี้ครบแล้ว' : 'ยังไม่มีของที่เบิกให้งานนี้', 'ของที่เบิกไปแล้วแต่เหลือจากการผลิต คืนเข้าคลังได้ที่นี่ – ระบบลดยอดเบิกของงานให้')}`, { id: 'pk-rt' });
     }
     const canRt = ctx.can('doc.post');
     if (!canRt) {
@@ -164,8 +173,8 @@
     const cards = lines.map((l, i) => {
       const it = ctx.item(l.code) || {};
       const last = lastIssue(ctx, job.jobNo, l.code) || {};
-      const x = (vals && vals.rt && vals.rt[i]) || {};
-      const mine = errs.filter((e) => e.k === i);
+      const x = (vals && (vals.rt || []).find((r) => r && r.code === l.code)) || {};
+      const mine = errs.filter((e) => e.k === l.code);
       return t`<div class="step" data-rt="${i}"${h.safe(mine.length ? ' data-err="1"' : '')}>
         <span class="step-n">${l.code}</span><div><b>${it.name || ''}</b></div>
         <p>เบิกไปแล้ว ${h.qty(l.issued, it.baseUnit)} <span class="muted">· คืนได้ไม่เกินนี้</span></p>
@@ -179,7 +188,6 @@
         ${mine.length ? h.note(t`<ul class="errs">${mine.map((e) => t`<li>${e.message}</li>`)}</ul>`, 'bad') : ''}
       </div>`;
     });
-    const lastRt = v.lastRt && v.rtJob === job.jobNo ? h.note(t`รับคืนแล้วเป็น ${docLink(v.lastRt)} – ยอดเบิกของงานลดลงแล้ว`, 'ok') : '';
     return h.section('คืนของเหลือเข้าคลัง (RT)', t`${lastRt}
       ${errs.length ? h.note(t`<b>บันทึกรับคืนไม่ได้ – ยังไม่มีอะไรเปลี่ยน</b><ul class="errs">${errs.map((e) => t`<li>${e.message}</li>`)}</ul>`, 'bad') : ''}
       <form class="form" data-form="rt" novalidate id="rt-form">
@@ -204,7 +212,7 @@
     sub: 'หยิบตามใบจองของงาน: ช่องเก็บที่มีของ เข้าก่อนหยิบก่อน สแกนรหัสตรวจของ/ข้าง แล้วตัดยอดเป็นใบ PD ใบเดียว · คืนของเหลือเข้าคลังด้วยใบ RT ของงาน',
     render(ctx) {
       const v = ctx.view;
-      const choices = jobChoices(ctx);
+      const choices = jobChoices(ctx, U.normCode(v.job));
       if (!choices.length) {
         return h.empty('ยังไม่มีงานที่จะจัดชุด', 'ใบจัดชุดสร้างจากการจองของใบงาน – สร้างใบงานและจองของที่หน้า งาน/SO และการจอง แล้วกลับมาหยิบที่นี่ (ใช้มือถือสแกนรหัสได้)',
           h.link('ไปหน้า งาน/SO และการจอง', 'jobs'));
@@ -261,22 +269,8 @@
         const mine = Object.assign({}, extra[jobNo] || {});
         mine[el.dataset.arg] = (mine[el.dataset.arg] || 0) + 1;
         extra[jobNo] = mine;
-        // the added row goes after the rows of its reservation: keep what was typed, by reservation
-        const before = pickModel(ctx, jobNo).rows;
-        ctx.view.extra = extra;
-        const after = pickModel(ctx, jobNo).rows;
-        let moved = null;
-        if (vals && vals.p) {
-          moved = { remark: vals.remark, p: [] };
-          const seen = {};
-          for (const r of after) {
-            const n = seen[r.e.reservationId] || 0;
-            seen[r.e.reservationId] = n + 1;
-            const old = before.filter((b) => b.e.reservationId === r.e.reservationId)[n];
-            moved.p[r.k] = old ? vals.p[old.k] : null;
-          }
-        }
-        ctx.set({ extra, vals: moved, errs: null, errsJob: jobNo });
+        // rows are keyed by reservation: the added row gets the next key, what was typed stays where it was
+        ctx.set({ extra, vals, errs: null, errsJob: jobNo });
       },
       async csv(ctx) {
         const jobNo = U.normCode(ctx.view.job);
@@ -292,11 +286,21 @@
       async pick(ctx, vals) {
         const jobNo = U.normCode(ctx.view.job);
         const model = pickModel(ctx, jobNo);
+        // a row that was typed but is no longer in the pick list: someone picked or changed the reservations meanwhile
+        const known = {};
+        for (const row of model.rows) known[row.k] = row;
+        const gone = Object.keys(vals.p || {}).filter((k) => {
+          const x = vals.p[k] || {};
+          return U.trim(x.qty) && U.num(x.qty) !== 0 && (!known[k] || known[k].none || (x.rid && x.rid !== known[k].e.reservationId));
+        });
+        if (gone.length) {
+          return ctx.set({ vals, errsJob: jobNo, errs: [{ k: null, message: `ใบจัดชุดเปลี่ยนระหว่างที่กรอก (มีคนบันทึกหยิบหรือเปลี่ยนการจองของงานนี้) – ${gone.length} แถวที่กรอกไว้ไม่อยู่ในรายการแล้ว ตรวจตัวเลขในแต่ละใบจองอีกครั้งแล้วกดบันทึก` }] });
+        }
         const lines = [];
         const map = [];
         for (const row of model.rows) {
           if (row.none) continue;
-          const x = (vals.p || [])[row.k] || {};
+          const x = (vals.p || {})[row.k] || {};
           const raw = U.trim(x.qty);
           if (!raw || U.num(raw) === 0) continue;
           const parts = String(x.binlot || '').split('|');
@@ -313,8 +317,14 @@
         const pre = ctx.check('pick.post', payload);
         if (!pre.ok) return ctx.set({ vals, errsJob: jobNo, errs: mapErrs(pre.errors, map, label) });
         const total = lines.length;
+        const unscanned = lines.filter((l) => !l.scannedCode).length;
+        const what = map.map((row, n) => {
+          const l = lines[n];
+          return `${row.e.code} ${h.fmt.num(U.num(l.qty))} ${row.e.baseUnit} จาก ${row.e.wh}/${l.bin || '(ไม่ระบุช่อง)'}${l.lot ? ' ล็อต ' + l.lot : ''}${l.scannedCode ? '' : ' · ยังไม่สแกน'}`;
+        });
         const ok = await ctx.confirm({ title: `บันทึกหยิบให้ ${jobNo}`, ok: 'บันทึกหยิบ',
-          message: `ตัดยอด ${total} แถวเป็นใบจ่ายเพื่อผลิต (PD) 1 ใบ – ยอดคงเหลือในช่องเก็บและยอดจองของงานลดทันที ทั้งใบหรือไม่บันทึกเลย` });
+          message: `ตัดยอด ${total} แถวเป็นใบจ่ายเพื่อผลิต (PD) 1 ใบ – ยอดคงเหลือในช่องเก็บและยอดจองของงานลดทันที ทั้งใบหรือไม่บันทึกเลย`,
+          body: t`<div class="wide" id="pk-confirm"><ul>${what.map((w) => t`<li>${w}</li>`)}</ul>${unscanned ? h.note(`ยังไม่สแกน ${unscanned} แถว – ระบบตรวจรหัสและข้างเฉพาะแถวที่สแกน ตรวจของกับใบจองให้ตรงก่อนบันทึก`, 'warn') : ''}</div>` });
         if (!ok) return;
         const r = await ctx.exec('pick.post', payload, { quiet: true });
         if (!r.ok) return ctx.set({ vals, errsJob: jobNo, errs: mapErrs(r.errors, map, label) });
@@ -330,10 +340,10 @@
         const reason = U.trim(vals.reason);
         const lines = [];
         const map = [];
-        (vals.rt || []).forEach((x, i) => {
+        (vals.rt || []).forEach((x) => {
           if (!x || !U.trim(x.qty) || U.num(x.qty) === 0) return;
           lines.push({ code: x.code, qty: U.trim(x.qty), wh: x.wh, bin: x.bin, lot: x.lot || '', remark: reason });
-          map.push({ k: i, code: x.code });
+          map.push({ k: x.code, code: x.code });
         });
         const set = (errs) => ctx.set({ rtVals: vals, rtErrs: errs, rtJob: jobNo });
         if (!lines.length) return set([{ k: null, message: 'ใส่จำนวนที่คืนอย่างน้อย 1 รายการ' }]);

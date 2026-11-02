@@ -6,7 +6,8 @@
 //   every part reserved ≥ required and shortage 0, revisionApproved needs revisions + fingerprint + evidence, quantities
 //   ≤ required, observedAt not in the future), then per event: workspace_mismatch, event_conflict (same id, other
 //   content), unknown_job, blocked_command, stale_command, stale_status (sourceVersion not above the last, observedAt
-//   going back), mapping_conflict (externalJobId changed / linked to another job).
+//   going back), mapping_conflict (externalJobId changed / linked to another job). f.forceReject: codes that Sales
+//   Office returns from its own state (e.g. 'conflict'), applied to the next events after validation.
 import { createHash } from 'node:crypto';
 
 const sha = (s) => createHash('sha256').update(s).digest('hex');
@@ -74,7 +75,8 @@ function validateStatus(e) {
 
 export function fakeSales({ connectorId, secrets }) {
   const ws = () => ({ commands: new Map(), events: new Map(), jobs: new Map(), links: new Map(), lastPollAt: null });
-  const f = { enabled: true, unavailable: false, postUnavailable: false, pageSize: 50, pageBytes: 1500000, log: [], badRequests: [], space: { domestic: ws(), export: ws() } };
+  const f = { enabled: true, unavailable: false, postUnavailable: false, pageSize: 50, pageBytes: 1500000, log: [], badRequests: [], forceReject: [],
+    space: { domestic: ws(), export: ws() } };
   /** Adds the next version of a job's command, built like partlist-store.ts. → the command object as sent. */
   f.addCommand = (workspace, { productionJobId, orderId, payload, blocked }) => {
     const sp = f.space[workspace];
@@ -123,6 +125,8 @@ export function fakeSales({ connectorId, secrets }) {
   function acceptEvent(mode, sp, e) {
     if (e.workspace !== mode) return 'workspace_mismatch';
     validateStatus(e);
+    // f.forceReject: codes Sales Office returns from its own state (e.g. 'conflict' after 3 lost CAS rounds), next events first
+    if (f.forceReject.length) return f.forceReject.shift();
     const hash = sha(JSON.stringify(canonical(e)));
     const seen = sp.events.get(e.eventId);
     if (seen) return seen.hash === hash ? null : 'event_conflict';
@@ -172,6 +176,8 @@ export function fakeSales({ connectorId, secrets }) {
     if (req.method === 'POST') {
       if (f.postUnavailable) return json({ error: 'ระบบยังไม่พร้อม กรุณาลองซิงก์อีกครั้ง', code: 503 }, 503);
       const text = await req.text();
+      const entry = f.log[f.log.length - 1];
+      entry.bytes = Buffer.byteLength(text);
       if (Buffer.byteLength(text) > 1048576) return json({ error: 'ข้อมูลครั้งละไม่เกิน 1 MB', code: 413 }, 413);
       const accepted = [];
       const rejected = [];
@@ -181,6 +187,7 @@ export function fakeSales({ connectorId, secrets }) {
           throw new Bad('events');
         }
         const events = body.events.map(parseEvent);
+        entry.events = events.length;
         for (const e of events) {
           const code = acceptEvent(mode, sp, e);
           if (code) rejected.push({ eventId: e.eventId, code });

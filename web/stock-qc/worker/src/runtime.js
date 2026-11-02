@@ -23,13 +23,16 @@ export function str(env, name) {
   const v = env ? env[name] : undefined;
   return typeof v === 'string' ? v : '';
 }
-/** true only for the exact text "true" (anything else, including empty, is off). */
+/**
+ * true only for the exact text "true" (like Sales Office's RRS_PARTLIST_ENABLED==='true'): "TRUE", " true", "1" and
+ * empty are all off, so a mistyped live flag fails closed.
+ */
 export function flag(env, name) {
-  return str(env, name).trim().toLowerCase() === 'true';
+  return str(env, name) === 'true';
 }
-/** Sales Office connector mode: off (default) | pull | pull_push. Unknown text is off. */
+/** Sales Office connector mode: off (default) | pull | pull_push – exact text only; anything else is off. */
 export function bridgeMode(env) {
-  const v = str(env, 'SQ_SALES_BRIDGE').trim().toLowerCase();
+  const v = str(env, 'SQ_SALES_BRIDGE');
   return v === 'pull' || v === 'pull_push' ? v : 'off';
 }
 

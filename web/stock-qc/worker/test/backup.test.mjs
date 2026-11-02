@@ -80,6 +80,20 @@ test('ปิดอยู่เป็นค่าเริ่มต้น: สั
   } finally {
     await t.dispose();
   }
+  // fully configured but the flag is not exactly "true": off (fails closed like Sales Office's ==='true')
+  for (const value of ['TRUE', ' true', '1', 'yes']) {
+    const { router, bindings } = googleSetup({ SQ_DRIVE_BACKUP_ENABLED: value });
+    const u = await startServer({ outbound: router, bindings });
+    try {
+      const owner = await bootstrapped(u, { masters: false });
+      const run = await u.callJson('/api/backup/run', { cookie: owner, body: {} });
+      assert.equal(run.body.code, 'DISABLED', value);
+      await u.scheduled(BACKUP_CRON);
+      assert.equal(router.requests.length, 0, value);
+    } finally {
+      await u.dispose();
+    }
+  }
 });
 
 test('สำรองด้วยมือ: JSONL ไม่เกินขนาดไฟล์ย่อย + manifest (sha256 ทุกไฟล์ + head) และกู้คืนตรวจผ่าน RRS.reports.verifyBackup', async () => {
@@ -183,7 +197,12 @@ test('ส่งซ้ำหลังผลไม่แน่นอนไม่�
     assert.equal(new Set(files.map((f) => f.name)).size, files.length);
     assert.ok(g.faults.every((f) => f.times === 0), 'both injected failures happened');
     const ops = g.log.map((x) => x.op);
-    assert.equal(ops[ops.indexOf('upload') + 1], 'get', 'after an uncertain upload the reserved id is looked up first');
+    const firstUp = ops.indexOf('upload');
+    const firstId = g.log[firstUp].id;
+    const nextUp = ops.indexOf('upload', firstUp + 1);
+    assert.ok(g.log.slice(firstUp + 1, nextUp).some((x) => x.op === 'get' && x.path.endsWith('/' + firstId)),
+      'after an uncertain upload the reserved id is looked up before anything else is sent');
+    assert.equal(g.log.filter((x) => x.op === 'upload' && x.id === firstId).length, 1, 'the file Drive stored is not sent again');
     // one upload per file, plus one re-send for the part whose first attempt Drive did not store
     assert.equal(ops.filter((x) => x === 'upload').length, files.length + 1);
     // Drive keeps failing: the run fails after 3 attempts, the folder has no manifest (= incomplete backup)
@@ -233,6 +252,54 @@ test('ปลายทางไม่เป็นส่วนตัว / สิ�
     const runs = (await s.d1.prepare("SELECT status,error FROM sq_backup_runs ORDER BY started_at").all()).results;
     assert.deepEqual(runs.map((x) => x.error), ['DESTINATION_NOT_PRIVATE', 'AUTH_REAUTHORIZE_REQUIRED', 'LEDGER_INTEGRITY']);
     assert.ok(runs.every((x) => x.status === 'failed'));
+  } finally {
+    await s.dispose();
+  }
+});
+
+test('ตรวจปลายทางก่อนเขียนทุกไฟล์: แชร์โฟลเดอร์หรือย้ายโฟลเดอร์ระหว่างสำรอง = หยุดก่อนเขียนไฟล์ถัดไป', async () => {
+  const { creds, g, router, bindings } = googleSetup({ SQ_BACKUP_PART_BYTES: '4096' });
+  const s = await startServer({ outbound: router, bindings });
+  try {
+    const owner = await ledgerWithCommits(s, 10);
+    // somebody shares the backup root while the run is going (right after the first part is stored)
+    let uploads = 0;
+    g.afterUpload = () => {
+      uploads += 1;
+      if (uploads === 1) {
+        const root = g.files.get(creds.rootId);
+        root.shared = true;
+        root.permissions.push({ id: 'anyone', type: 'anyone', role: 'reader' });
+      }
+    };
+    let r = await s.callJson('/api/backup/run', { cookie: owner, body: {} });
+    assert.equal(r.body.code, 'DESTINATION_NOT_PRIVATE', r.text);
+    assert.equal(r.body.run.status, 'failed');
+    assert.equal(uploads, 1, 'nothing more is written once the folder is shared');
+    const first = g.children(creds.rootId)[0];
+    assert.ok(!g.children(first.id).some((f) => f.name === 'manifest.json'), 'no manifest = incomplete backup');
+    assert.equal(r.body.run.parts, 1);
+    const root = g.files.get(creds.rootId);
+    root.shared = false;
+    root.permissions.pop();
+    // the run folder is moved out of the backup root mid-run (into a private folder outside it)
+    const otherId = 'otherfolder' + randomBytes(6).toString('hex');
+    g.files.set(otherId, { id: otherId, name: 'อื่น', mimeType: 'application/vnd.google-apps.folder', parents: [], trashed: false, shared: false,
+      ownedByMe: true, permissions: [{ id: 'owner-permission', type: 'user', role: 'owner' }], capabilities: { canAddChildren: true }, appProperties: {} });
+    uploads = 0;
+    g.afterUpload = (f) => {
+      uploads += 1;
+      if (uploads === 1) g.files.get(f.parents[0]).parents = [otherId];
+    };
+    r = await s.callJson('/api/backup/run', { cookie: owner, body: {} });
+    assert.equal(r.body.code, 'DESTINATION_OUTSIDE_BACKUP_FOLDER', r.text);
+    assert.match(r.body.message, /โฟลเดอร์สำรอง/);
+    assert.equal(uploads, 1);
+    // back to normal: a full backup works again
+    g.afterUpload = null;
+    r = await s.callJson('/api/backup/run', { cookie: owner, body: {} });
+    assert.equal(r.status, 200, r.text);
+    assert.deepEqual(router.blocked, []);
   } finally {
     await s.dispose();
   }

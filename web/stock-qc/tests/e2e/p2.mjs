@@ -217,7 +217,8 @@ await step('jobs: create from an approved BOM × sets', async () => {
   assert(lineOf(j, 'P2-PNL').required === 4 && lineOf(j, 'P2-BLT').required === 8, 'ต้องใช้ = BOM × ชุด');
   await waitText('สินค้าที่ผลิต', 4000, '#jb-detail');
   const c = await rowCells('#jb-lines tbody tr', 'P2-BLT');
-  assert(c && c[2] === '4' && c[3] === '8', `บรรทัด P2-BLT: ${c}`);
+  // # | รายการ | ทำรายการ | ต่อชุด | ต้องใช้ …
+  assert(c && c[3] === '4' && c[4] === '8', `บรรทัด P2-BLT: ${c}`);
 });
 
 await step('jobs: create with own lines (add / remove line)', async () => {
@@ -351,7 +352,7 @@ await step('readiness: per job – what is missing and where', async () => {
   await page.click(`#rd-jobs tr[data-arg="${J2}"]`);
   await page.waitForSelector('#rd-job');
   await waitText('ขาด 1 รายการ', 4000, '#rd-job');
-  await waitText('รอตรวจ/กักกัน 2 (ต้องให้ QC ปล่อยก่อน)', 4000, '#rd-job');
+  await waitText('รอตรวจ 2 (QC ต้องตรวจปล่อยก่อน)', 4000, '#rd-job');
   const l = await rowCells('#rd-lines tbody tr', 'P2-PNL');
   // รายการ | ต้องใช้ | เบิกแล้ว | จองไว้ | ยังไม่จอง | พร้อมเบิกตอนนี้ | จัดให้งานนี้ได้ | ขาด
   assert(l && l[1] === '12' && l[4] === '12' && l[6] === '10' && l[7] === '2' && l[9] === 'รอตรวจ', `ความพร้อม ${J2}: ${l}`);
@@ -432,7 +433,7 @@ await step('picking: post the pick as one PD, reservations and job follow', asyn
   await dlgSubmit();
   await dlgClosed();
   await waitText('บันทึกหยิบแล้วเป็น');
-  const doc = await state((s) => Object.values(s.tables.documents).find((d) => d.type === 'PD' && d.source === 'pick'));
+  const doc = await state((s, R, n) => Object.values(s.tables.documents).find((d) => d.type === 'PD' && d.source === 'pick' && d.job === n), J1);
   assert(doc && doc.status === 'POSTED' && doc.lines.length === 4, `ใบ PD: ${doc && doc.lines.length}`);
   pdDoc = doc.docNo;
   const j = await job(J1);

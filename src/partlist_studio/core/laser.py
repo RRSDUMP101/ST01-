@@ -667,6 +667,8 @@ def make_programs(groups: list[NestGroup], queue: CutQueue, params: LaserParams,
     for g in groups:
         runs: list[tuple[tuple, object, int]] = []
         for sheet in g.sheets:
+            if not sheet.placements:
+                continue  # a sheet added by hand that nothing was laid out on: not cut
             sig = _layout_signature(g, sheet)
             if runs and runs[-1][0] == sig:
                 runs[-1] = (sig, runs[-1][1], runs[-1][2] + 1)

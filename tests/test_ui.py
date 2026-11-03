@@ -1288,3 +1288,57 @@ def test_mobile_page_online_link_from_outside(window, app):
     app.processEvents()
     assert not hub.online and hub.service.online_url == "" and page.address.findData(page_mod.ONLINE) < 0
     hub.stop()
+
+
+def test_laser_add_sheets_each_size_a_new_row(window, app, monkeypatch):
+    """+ เพิ่มแผ่น: sheets of several sizes (at most 20 at a time) for the material/thickness of the row - each size
+    a new row of the plan with its own drop-down (change the count, take it out)."""
+    from partlist_studio.core import dwg_io, production
+    from partlist_studio.ui.pages import nesting as page_mod
+
+    state = window.state
+    data = dwg_io.read_drawing(SAMPLES / "RRS-T-SET_frame_parts.dxf")
+    parts = [c.part for c in dwg_io.drawing_to_candidates(data)]
+    state.flats.add_parts(parts)
+    state.jobs.append(production.job_from_parts("SO6910-023", parts, 1, None, False))
+    state.save_jobs()
+    state.settings.custom_sheets = [(2121.0, 2533.0, 0.0, ""), (2333.0, 2440.0, 0.0, "")]
+    page = window.pages["nesting"]
+    page.source.setCurrentIndex(page.source.findData(page_mod.SRC_JOBS))
+    page.run()
+    row = next(r for r, g in enumerate(page._row_group) if g.thickness == 3)
+    page.table.selectRow(row)
+    assert page.add_sheets_btn.isEnabled()
+
+    def choose(dialog):
+        def size(combo, w, h):
+            combo.setCurrentIndex(next(i for i in range(combo.count())
+                                       if combo.itemData(i)[:2] == (w, h) and not combo.itemData(i)[2]))
+        size(dialog.table.cellWidget(0, 0), 2121, 2533)
+        dialog.table.cellWidget(0, 1).setValue(2)
+        dialog.add_row()
+        size(dialog.table.cellWidget(1, 0), 2333, 2440)
+        dialog.table.cellWidget(1, 1).setValue(19)
+        assert not dialog.ok.isEnabled() and "เกิน 20" in dialog.total.text()  # 21 sheets: too many at a time
+        dialog.table.cellWidget(1, 1).setValue(3)
+        assert dialog.ok.isEnabled() and dialog.total.text() == "รวม 5 แผ่น"
+        return 1
+
+    monkeypatch.setattr(page_mod.AddSheetsDialog, "exec", choose)
+    page.add_sheets()
+    group = next(g for g in page.groups if g.thickness == 3)
+    first = page._row_group.index(group)
+    sizes = [c[0] for c in group.sheet_counts()]
+    assert sizes[:2] == ["2121x2533", "2333x2440"]  # a row each, before the rest
+    col = page_mod.nesting.PLAN_HEADERS.index("แผ่นที่ใช้")
+    box = page.table.cellWidget(first + 1, col)
+    assert box.currentText() == "เพิ่มเอง 3มม. 7.65x8ฟุต 2333x2440 · เพิ่มเอง 3 แผ่น"
+    assert page.table.item(first + 1, 2).text() == "เพิ่มเอง 3มม. 7.65x8ฟุต 2333x2440"
+    monkeypatch.setattr(page_mod.QInputDialog, "getInt", lambda *a, **k: (1, True))
+    page._extra_picked(group, 1, "count")  # 3 -> 1 sheet
+    group = next(g for g in page.groups if g.thickness == 3)
+    assert page.sheet_extra[group.key] == [(2121.0, 2533.0, "", 2), (2333.0, 2440.0, "", 1)]
+    page._extra_picked(group, 0, "remove")
+    group = next(g for g in page.groups if g.thickness == 3)
+    assert [e[:2] for e in page.sheet_extra[group.key]] == [(2333.0, 2440.0)]
+    assert group.sheet_counts()[0][0] == "2333x2440"

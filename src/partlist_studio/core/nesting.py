@@ -106,6 +106,7 @@ class NestGroup:
     options: list = field(default_factory=list)  # (width, length, code, name) sizes it could be cut from
     chosen: bool = False  # the sheet size was chosen by the user (not the one with the least steel)
     overflow: list = field(default_factory=list)  # sheets picked by hand for the parts too big for the main sheet
+    extra: list = field(default_factory=list)  # sheets added by hand (width, length, code, name, count): filled first
 
     @property
     def key(self) -> tuple[str, float]:
@@ -117,7 +118,8 @@ class NestGroup:
 
     @property
     def sheet_area(self) -> float:
-        return sum(s.width * s.height for s in self.sheets)
+        """The sheets that are cut (a sheet added by hand with nothing on it is not)."""
+        return sum(s.width * s.height for s in self.sheets if s.placements)
 
     def sheet_counts(self) -> list[tuple[str, str, str, int]]:
         """(size, code, name, sheets) per sheet size used."""
@@ -138,9 +140,10 @@ class NestGroup:
     @property
     def last_sheet_use(self) -> float:
         """Share of the last sheet that is used (the rest can be kept as an offcut)."""
-        if not self.sheets:
+        cut = [s for s in self.sheets if s.placements]
+        if not cut:
             return 0
-        s = self.sheets[-1]
+        s = cut[-1]
         return sum(self.parts[p.part].area for p in s.placements) / (s.width * s.height)
 
     @property
@@ -510,14 +513,39 @@ def overflow_options(group: NestGroup, size: str, params: NestParams | None = No
     return out
 
 
+MAX_EXTRA = 20  # sheets added by hand at a time (แผ่นที่เพิ่มเอง)
+
+
+def _pack_extra(items: list[NestPart], extra: list[tuple], params: NestParams
+                ) -> tuple[list[SheetLayout], list[NestPart], list[int]]:
+    """The sheets added by hand, in their order, each size as many as asked: the pieces go on them first (a sheet no
+    piece needs stays empty, to be laid out by hand). Returns those sheets, the parts with the pieces still to lay
+    out (same order as items) and the indexes of the parts that have some."""
+    left = [p.qty for p in items]
+    out: list[SheetLayout] = []
+    for w, h, code, name, count in extra:
+        which = [i for i, n in enumerate(left) if n > 0]
+        keep: list[SheetLayout] = []
+        if which:
+            pool = [replace(p, qty=n) for p, n in zip(items, left)]
+            keep = _pack_on(pool, which, (w, h, code, name), params)[0][:count]
+            for s in keep:
+                for pl in s.placements:
+                    left[pl.part] -= 1
+        out += keep + [SheetLayout(w, h, code=code, name=name) for _ in range(count - len(keep))]
+    return out, [replace(p, qty=n) for p, n in zip(items, left)], [i for i, n in enumerate(left) if n > 0]
+
+
 def plan(parts: list[NestPart], stock: StockList | None = None, params: NestParams | None = None,
          densities: dict[str, float] | None = None, custom: list | None = None,
          chosen: dict[tuple[str, float], tuple] | None = None,
-         overflow: dict[tuple[str, float], list[tuple]] | None = None) -> list[NestGroup]:
+         overflow: dict[tuple[str, float], list[tuple]] | None = None,
+         extra: dict[tuple[str, float], list[tuple]] | None = None) -> list[NestGroup]:
     """custom: sheet sizes added by hand (custom_options) · chosen: (family, thickness) -> (width, length) or
     (width, length, stock code) the user picked for that group, instead of the sheet with the least steel ·
     overflow: (family, thickness) -> the sheets picked for the parts too big for the main sheet, tried in that
-    order before the smallest size they fit."""
+    order before the smallest size they fit · extra: (family, thickness) -> [(width, length, code, count)] sheets
+    added by hand: the parts go on them first, each size one row of the plan."""
     params = params or NestParams()
     stock = stock or StockList()
     groups: dict[tuple[str, float], list[NestPart]] = {}
@@ -540,6 +568,9 @@ def plan(parts: list[NestPart], stock: StockList | None = None, params: NestPara
             primaries, group.chosen = [pick], True
         group.options = options
         group.overflow = [_typed(options, w) for w in (overflow or {}).get((family, thk), [])]
+        group.extra = [(*_typed(options, e[:3])[:4], max(1, int(e[3]))) for e in (extra or {}).get((family, thk), [])
+                       if len(e) > 3 and int(e[3]) > 0]
+        added, pool, todo = _pack_extra(items, group.extra, gp)  # pool: the pieces not on them
         best = None
         tried: set = set()
         for primary in primaries:
@@ -547,16 +578,17 @@ def plan(parts: list[NestPart], stock: StockList | None = None, params: NestPara
             if size_key in tried:
                 continue  # another item of a size already tried (the one with more on hand came first)
             tried.add(size_key)
-            sheets, left = _pack_on(items, list(range(len(items))), primary, gp)
+            sheets, left = _pack_on(pool, todo, primary, gp) if todo else ([], [])
+            sheets = added + sheets  # the sheets added by hand come first (the same for every size tried)
             for pick in group.overflow:  # the sheets picked for them first
                 if left:
-                    more, left = _pack_on(items, left, pick, gp)
+                    more, left = _pack_on(pool, left, pick, gp)
                     sheets += more
             # parts too big for this size go on the smallest size they fit
             for bigger in sorted(plain, key=lambda o: o[0] * o[1]):
                 if not left or bigger[0] * bigger[1] <= primary[0] * primary[1]:
                     continue
-                more, left = _pack_on(items, left, bigger, gp)
+                more, left = _pack_on(pool, left, bigger, gp)
                 sheets += more
             area = sum(x.width * x.height for x in sheets)
             placed = sum(items[pl.part].area for x in sheets for pl in x.placements)
@@ -566,7 +598,7 @@ def plan(parts: list[NestPart], stock: StockList | None = None, params: NestPara
                 best = (rank, primary, sheets, left)
         _rank, primary, group.sheets, left = best
         group.sheet_w, group.sheet_h, group.sheet_code, group.sheet_name = primary
-        group.too_big = [items[i] for i in left]
+        group.too_big = [pool[i] for i in left]
         sheet_kg = group.sheet_w * group.sheet_h * thk * density_for(group.material, densities) * 1e-6
         part_kg = sum((p.weight or p.area * thk * density_for(p.material, densities) * 1e-6) * p.qty for p in items)
         group.by_weight = part_kg / sheet_kg if sheet_kg else 0
@@ -591,8 +623,9 @@ def plan_rows(groups: list[NestGroup]) -> list[list]:
         for k, (size, code, name, n) in enumerate(counts):
             first = k == 0
             w, h = (float(v) for v in size.split("x"))
+            empty = sum(1 for s in g.sheets if s.size == size and s.code == code and not s.placements)
             rows.append([g.material, g.thickness, sheet_title(name, code, w, h, g.thickness), code,
-                         size.replace("x", " x "), n,
+                         size.replace("x", " x "), f"{n - empty} (+{empty} ว่าง)" if empty else n,
                          round(g.by_weight, 2) if first else "", g.pieces if first else "",
                          round(g.utilization * 100, 1) if first else "", round(g.scrap_pct, 1) if first else "",
                          round(g.last_sheet_use * 100, 1) if first else "",

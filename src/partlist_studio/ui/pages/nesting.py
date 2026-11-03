@@ -12,8 +12,8 @@ from pathlib import Path
 from PySide6.QtCore import QPointF, Qt, QUrl
 from PySide6.QtGui import QBrush, QColor, QDesktopServices, QPainter, QPen, QPolygonF
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox, QFileDialog, QGroupBox,
-                               QFormLayout, QFrame, QGraphicsScene, QGraphicsView, QGridLayout, QHBoxLayout, QLabel,
-                               QLineEdit, QListWidget, QListWidgetItem, QMenu, QMessageBox, QScrollArea, QSpinBox,
+                               QFormLayout, QFrame, QGraphicsScene, QGraphicsView, QGridLayout, QHBoxLayout,
+                               QHeaderView, QInputDialog, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMenu, QMessageBox, QScrollArea, QSpinBox,
                                QSplitter, QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget)
 
 from ...core import laser, nesting
@@ -574,6 +574,86 @@ class SheetSizesDialog(QDialog):
         return out
 
 
+class AddSheetsDialog(QDialog):
+    """+ เพิ่มแผ่น: sheets for one material/thickness - several sizes, at most MAX_EXTRA sheets at a time; each size
+    becomes a row of the plan and the parts go on them first."""
+
+    def __init__(self, title: str, options: list[tuple[str, tuple]], parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("เพิ่มแผ่นเหล็กในแผนตัด")
+        fit_to_screen(self, 760, 420)
+        self.options = options
+        lay = QVBoxLayout(self)
+        head = QLabel(f"<b>{title}</b> · เลือกแผ่นและจำนวน ได้หลายขนาด (รวมครั้งละไม่เกิน {nesting.MAX_EXTRA} แผ่น) – "
+                      "แต่ละขนาดขึ้นเป็นแถวใหม่ในแผนตัด ชิ้นงานลงแผ่นเหล่านี้ก่อน ที่เหลือลงแผ่นหลัก · "
+                      "ขนาดที่ยังไม่มีในรายการ เพิ่มที่ <i>ขนาดแผ่นเพิ่มเอง…</i>")
+        head.setWordWrap(True)
+        lay.addWidget(head)
+        self.table = QTableWidget(0, 2)
+        self.table.setHorizontalHeaderLabels(["แผ่น", "จำนวน (แผ่น)"])
+        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.table.setColumnWidth(1, 110)
+        self.table.verticalHeader().setVisible(False)
+        lay.addWidget(self.table, 1)
+        tools = QHBoxLayout()
+        self.add_row_btn = button("+ เพิ่มขนาด", tooltip="เพิ่มอีกบรรทัด (อีกขนาด)")
+        self.add_row_btn.clicked.connect(self.add_row)
+        tools.addWidget(self.add_row_btn)
+        remove = button("ลบบรรทัดที่เลือก")
+        remove.clicked.connect(self._remove)
+        tools.addWidget(remove)
+        tools.addStretch(1)
+        self.total = QLabel()
+        tools.addWidget(self.total)
+        lay.addLayout(tools)
+        box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        self.ok = box.button(QDialogButtonBox.Ok)
+        self.ok.setText("เพิ่มแผ่น")
+        self.ok.setProperty("kind", "primary")
+        box.button(QDialogButtonBox.Cancel).setText("ยกเลิก")
+        box.accepted.connect(self.accept)
+        box.rejected.connect(self.reject)
+        lay.addWidget(box)
+        first = next((i for i, (_label, data) in enumerate(options) if not data[2]), 0)  # a size added by hand first
+        self.add_row(first)
+
+    def add_row(self, at: int | bool = 0) -> None:
+        r = self.table.rowCount()
+        self.table.insertRow(r)
+        combo = QComboBox()
+        for label, data in self.options:
+            combo.addItem(label, data)
+        combo.setCurrentIndex(at if isinstance(at, int) and not isinstance(at, bool) and at < combo.count() else 0)
+        self.table.setCellWidget(r, 0, combo)
+        spin = QSpinBox()
+        spin.setRange(1, nesting.MAX_EXTRA)
+        spin.valueChanged.connect(self._count)
+        self.table.setCellWidget(r, 1, spin)
+        self._count()
+
+    def _remove(self) -> None:
+        for r in sorted({i.row() for i in self.table.selectedIndexes()}, reverse=True):
+            self.table.removeRow(r)
+        self._count()
+
+    def picks(self) -> list[tuple[float, float, str, int]]:
+        out = []
+        for r in range(self.table.rowCount()):
+            data = self.table.cellWidget(r, 0).currentData()
+            if data:
+                w, h, code = data
+                out.append((float(w), float(h), code or "", self.table.cellWidget(r, 1).value()))
+        return out
+
+    def _count(self, *_args) -> None:
+        n = sum(p[3] for p in self.picks())
+        ok = 0 < n <= nesting.MAX_EXTRA
+        self.total.setText(f"รวม {n} แผ่น" + ("" if ok else f" – เกิน {nesting.MAX_EXTRA} แผ่นต่อครั้ง" if n else ""))
+        self.total.setStyleSheet("" if ok or not n else f"color: {theme.STATUS_COLORS['ขาด']}; font-weight: 700;")
+        self.ok.setEnabled(ok)
+        self.add_row_btn.setEnabled(n < nesting.MAX_EXTRA)
+
+
 class FillDialog(QDialog):
     """เพิ่มชิ้นลงที่ว่าง: pick a flat pattern of the same material and thickness and nest it by hand in the free
     space of a sheet (as many as asked, or as many as fit). The parts already there do not move."""
@@ -718,6 +798,7 @@ class NestingPage(QWidget):
         self._row_group: list[nesting.NestGroup] = []
         self.sheet_chosen: dict[tuple[str, float], tuple[float, float]] = {}  # (family, thk) -> (w, l) picked by hand
         self.sheet_overflow: dict[tuple[str, float], list[tuple]] = {}  # sheets picked for the parts too big for it
+        self.sheet_extra: dict[tuple[str, float], list[tuple]] = {}  # (w, l, code, count) sheets added by hand
         self._nest_params = nesting.NestParams()
         self._programs: list[laser.CutProgram] = []
         lay = QVBoxLayout(self)
@@ -845,6 +926,12 @@ class NestingPage(QWidget):
                                      "รายการมาจากแผ่นเหล็กในสต็อก และขนาดที่เพิ่มเอง")
         self.sheet_choice.setEnabled(False)
         self.sheet_choice.activated.connect(self._sheet_chosen)
+        self.add_sheets_btn = button("+ เพิ่มแผ่น…", tooltip="เพิ่มแผ่น (ขนาดที่เพิ่มเอง หรือแผ่นในสต็อก) ให้วัสดุ/ความหนาของแถว"
+                                                           "ที่เลือก ได้หลายขนาด ครั้งละไม่เกิน 20 แผ่น – ขึ้นเป็นแถวใหม่ "
+                                                           "ชิ้นงานลงแผ่นเหล่านี้ก่อน")
+        self.add_sheets_btn.clicked.connect(self.add_sheets)
+        self.add_sheets_btn.setEnabled(False)
+        plan_tools.addWidget(self.add_sheets_btn)
         self.sizes_btn = button("ขนาดแผ่นเพิ่มเอง…", tooltip="เพิ่มขนาดแผ่นเหล็กที่ใช้วางแผนได้ นอกจากที่มีในสต็อก")
         self.sizes_btn.clicked.connect(self.edit_sheet_sizes)
         plan_tools.addWidget(self.sizes_btn)
@@ -1090,7 +1177,8 @@ class NestingPage(QWidget):
         demand = self.demand
         self._nest_params = params.nest_params()
         self.groups = nesting.plan(demand.parts, self.state.stock, self._nest_params, self.state.settings.densities,
-                                   self.state.settings.custom_sheets, self.sheet_chosen, self.sheet_overflow)
+                                   self.state.settings.custom_sheets, self.sheet_chosen, self.sheet_overflow,
+                                   self.sheet_extra)
         self.issues = laser.check_parts(demand.parts, params, self.groups)
         rows = nesting.plan_rows(self.groups)
         self._row_group = []
@@ -1098,7 +1186,7 @@ class NestingPage(QWidget):
             self._row_group += [g] * max(1, len(g.sheet_counts()))
         fill(self.table, rows)
         self._sheet_boxes()
-        sheets = sum(len(g.sheets) for g in self.groups)
+        sheets = sum(1 for g in self.groups for s in g.sheets if s.placements)  # empty sheets are not cut
         by_weight = sum(g.by_weight for g in self.groups)
         area = sum(g.sheet_area for g in self.groups)
         used = sum(g.parts_area for g in self.groups)
@@ -1143,6 +1231,7 @@ class NestingPage(QWidget):
         if group is not None:
             self.view.show_group(group)
         self.fill_plan_btn.setEnabled(bool(rows))
+        self.add_sheets_btn.setEnabled(group is not None)
         self._show_sheet_choice(group)
 
     def _sheet_label(self, option: tuple, thickness: float = 0) -> str:
@@ -1212,11 +1301,15 @@ class NestingPage(QWidget):
         col = self._drop_sheet_boxes()
         row = 0
         for group in self.groups:
+            extra_rows, main_k = self._row_kinds(group)
             for k in range(max(1, len(group.sheet_counts()))):
                 box = QComboBox()
                 box.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
                 box.view().setMinimumWidth(560)
-                if k == 0:
+                if k in extra_rows:
+                    self._fill_extra_box(box, group, k)
+                    box.activated.connect(lambda i, b=box, g=group, k=k: self._extra_picked(g, k, b.itemData(i)))
+                elif k == main_k:
                     self._fill_sheet_box(box, group, in_table=True)
                     box.activated.connect(lambda i, b=box, key=group.key: self._sheet_picked(key, b.itemData(i)))
                 else:
@@ -1224,6 +1317,75 @@ class NestingPage(QWidget):
                     box.activated.connect(lambda i, b=box, g=group, k=k: self._overflow_picked(g, k, b.itemData(i)))
                 self.table.setCellWidget(row + k, col, box)
             row += max(1, len(group.sheet_counts()))
+
+    # ---- แผ่นที่เพิ่มเอง: sheets added by hand to a material/thickness, each size a row of its own ----------------
+    def _extra_entry(self, group: nesting.NestGroup, size: str, code: str) -> tuple | None:
+        w, h = (float(v) for v in size.split("x"))
+        return next((e for e in group.extra if (e[2] or "") == (code or "") and nesting.same_size(e, (w, h))), None)
+
+    def _row_kinds(self, group: nesting.NestGroup) -> tuple[set[int], int | None]:
+        """The rows of a material/thickness that are sheets added by hand, and the row of its main sheet (the
+        first other row; the rest are the sheets of the parts too big for it)."""
+        counts = group.sheet_counts()
+        extra = {k for k, (size, code, _name, _n) in enumerate(counts) if self._extra_entry(group, size, code)}
+        main = next((k for k in range(max(1, len(counts))) if k not in extra), None)
+        return extra, main
+
+    def _fill_extra_box(self, box: QComboBox, group: nesting.NestGroup, k: int) -> None:
+        size, code, name, used = group.sheet_counts()[k]
+        entry = self._extra_entry(group, size, code)
+        w, h = (float(v) for v in size.split("x"))
+        box.addItem(f"{nesting.sheet_title(name, code, w, h, group.thickness)} · เพิ่มเอง {entry[4]} แผ่น", None)
+        box.addItem("เปลี่ยนจำนวนแผ่น…", "count")
+        box.addItem("เอาแผ่นนี้ออกจากแผน", "remove")
+        box.setToolTip(f"แผ่นที่เพิ่มเอง {entry[4]} แผ่น (มีชิ้นงาน {sum(1 for s in group.sheets if s.size == size and s.placements)}"
+                       " แผ่น) – ชิ้นงานลงแผ่นเหล่านี้ก่อน · แผ่นที่ยังว่างใช้ เพิ่มชิ้นลงที่ว่าง… วางเองได้ "
+                       "(แผ่นว่างไม่สร้างโปรแกรมตัด)")
+
+    def _extra_picked(self, group: nesting.NestGroup, k: int, action) -> None:
+        if not action or self.demand is None:
+            return
+        size, code, _name, _n = group.sheet_counts()[k]
+        w, h = (float(v) for v in size.split("x"))
+        entries = self.sheet_extra.get(group.key, [])
+        at = next((i for i, e in enumerate(entries) if (e[2] or "") == (code or "") and nesting.same_size(e, (w, h))), None)
+        if at is None:
+            return
+        if action == "remove":
+            entries.pop(at)
+        else:
+            n, ok = QInputDialog.getInt(self, "จำนวนแผ่น", f"แผ่น {size} (ครั้งละไม่เกิน {nesting.MAX_EXTRA} แผ่น)",
+                                        int(entries[at][3]), 1, nesting.MAX_EXTRA)
+            if not ok:
+                self._sheet_boxes()
+                return
+            entries[at] = (*entries[at][:3], n)
+        if entries:
+            self.sheet_extra[group.key] = entries
+        else:
+            self.sheet_extra.pop(group.key, None)
+        self._lay_out(self.laser_params(), group.key)
+
+    def add_sheets(self) -> None:
+        """+ เพิ่มแผ่น…: sheets of several sizes (at most 20 at a time) for the material/thickness of the row."""
+        group = self._group()
+        if group is None or self.demand is None:
+            return
+        dialog = AddSheetsDialog(f"{group.material} หนา {group.thickness:g} มม.",
+                                 [(self._sheet_label(o, group.thickness), (o[0], o[1], o[2])) for o in group.options], self)
+        if dialog.exec():
+            entries = list(self.sheet_extra.get(group.key, []))
+            for w, h, code, n in dialog.picks():
+                at = next((i for i, e in enumerate(entries) if (e[2] or "") == code and nesting.same_size(e, (w, h))), None)
+                if at is None:
+                    entries.append((w, h, code, n))
+                else:
+                    entries[at] = (*entries[at][:3], entries[at][3] + n)
+            self.sheet_extra[group.key] = entries
+            self._lay_out(self.laser_params(), group.key)
+            self.state.notify(f"{group.material} หนา {group.thickness:g} มม.: เพิ่ม {sum(n for *_x, n in dialog.picks())} แผ่น"
+                              " – ชิ้นงานลงแผ่นที่เพิ่มก่อน")
+        dialog.deleteLater()
 
     def _drop_sheet_boxes(self) -> int:
         """Take the drop-downs of the last plan out of the table (hidden at once: Qt deletes them later)."""
@@ -1267,7 +1429,10 @@ class NestingPage(QWidget):
         if self.demand is None:
             return
         picks = []
-        for j, (size, code, _name, _n) in enumerate(group.sheet_counts()[1:], start=1):
+        extra_rows, main_k = self._row_kinds(group)
+        for j, (size, code, _name, _n) in enumerate(group.sheet_counts()):
+            if j in extra_rows or j == main_k:
+                continue
             if j == k:
                 if sheet is not None:
                     picks.append(tuple(sheet))

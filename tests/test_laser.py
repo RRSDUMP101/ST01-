@@ -518,3 +518,28 @@ def test_length_typed_in_mm_or_feet():
     assert length_mm("8", "mm") == 8 and length_mm("1219", "ft") == pytest.approx(371551.2)
     assert length_mm("4'6\"") == pytest.approx(1371.6) and length_mm("ยาว") is None
     assert sheet_size_mm("4x8ฟุต") == (length_mm("4 ฟุต"), length_mm("8 ฟุต"))
+
+
+def test_sheets_added_by_hand_each_size_a_row():
+    """+ เพิ่มแผ่น: several sheets of several sizes for one material/thickness - the parts go on them first (in their
+    order), each size is a row of its own, a sheet nothing needs stays empty (not cut, not counted)."""
+    def piece(key, w, h, n):
+        return nesting.NestPart(key, key, key, "SS400", 2, w, h, n, outline=[[(0.0, 0.0), (w, 0.0), (w, h), (0.0, h)]])
+
+    parts = [piece("A", 400, 300, 6), piece("B", 1000, 800, 2)]
+    custom = [(2333, 2440, 0, ""), (2121, 2533, 0, "")]
+    [auto] = nesting.plan(parts, None, None, None, custom)
+    extra = {auto.key: [(2121, 2533, "", 2), (2333, 2440, "", 3)]}
+    [group] = nesting.plan(parts, None, None, None, custom, None, None, extra)
+    assert [(s, n) for s, _c, _name, n in group.sheet_counts()] == [("2121x2533", 2), ("2333x2440", 3)]
+    assert sum(len(s.placements) for s in group.sheets) == 8 and not group.too_big
+    rows = nesting.plan_rows([group])
+    assert [r[2] for r in rows] == ["เพิ่มเอง 2มม. 6.96x8.31ฟุต 2121x2533", "เพิ่มเอง 2มม. 7.65x8ฟุต 2333x2440"]
+    assert rows[0][5] == "1 (+1 ว่าง)" and rows[1][5] == "0 (+3 ว่าง)"
+    assert group.sheet_area == 2121 * 2533  # only the sheet that is cut
+    progs = laser.make_programs([group], laser.CutQueue(), laser.LaserParams())
+    assert [p.sheet_size for p in progs] == ["2121x2533"]  # empty sheets make no program
+    small = {auto.key: [(1000, 1000, "", 1)]}  # too few: the rest goes on the main sheet as before
+    [mixed] = nesting.plan(parts, None, None, None, custom + [(1000, 1000, 0, "")], None, None, small)
+    sizes = [s for s, _c, _name, _n in mixed.sheet_counts()]
+    assert sizes[0] == "1000x1000" and len(sizes) == 2 and sum(len(s.placements) for s in mixed.sheets) == 8

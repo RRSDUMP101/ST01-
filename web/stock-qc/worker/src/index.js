@@ -28,6 +28,7 @@ import * as ledger from './ledger.js';
 import * as files from './files.js';
 import * as backup from './backup.js';
 import * as google from './google-auth.js';
+import { privacyPage } from './privacy.js';
 import * as sales from './sales-bridge.js';
 
 const RRS = globalThis.RRS;
@@ -265,6 +266,7 @@ async function page(req, env, url) {
 export default {
   async fetch(req, env) {
     const url = new URL(req.url);
+    if (url.pathname === '/privacy') return privacyPage(req);
     if (url.pathname === '/api' || url.pathname.startsWith('/api/')) {
       try {
         return await api(req, env, url);

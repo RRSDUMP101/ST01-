@@ -111,7 +111,7 @@ npm test                                # ชุดทดสอบทั้ง�
 ตั้งด้วย `npx wrangler secret put NAME` ในบัญชี Cloudflare ของ staging:
 
 - เข้าสู่ระบบ: `ADMIN_USERNAME`, `ADMIN_PASSWORD_HASH` (`node scripts/hash-password.mjs | npx wrangler secret put ADMIN_PASSWORD_HASH`), `SESSION_SECRET`
-- Google Drive: `GOOGLE_DRIVE_CLIENT_ID`, `GOOGLE_DRIVE_CLIENT_SECRET`, `GOOGLE_DRIVE_REFRESH_TOKEN` (scope `drive.file`), `SQ_DRIVE_BACKUP_FOLDER_ID`
+- Google Drive: `GOOGLE_DRIVE_CLIENT_ID`, `GOOGLE_DRIVE_CLIENT_SECRET`, `SQ_DRIVE_BACKUP_FOLDER_ID`; เชื่อม OAuth ผ่านหน้า Nexus เพื่อเก็บ refresh token แบบเข้ารหัสใน D1 หรือใช้ `GOOGLE_DRIVE_REFRESH_TOKEN` ที่ตั้งไว้ล่วงหน้า (scope `https://www.googleapis.com/auth/drive` เพื่อเข้าถึงโฟลเดอร์เดิมและตรวจสิทธิ์ปลายทาง)
   (โฟลเดอร์ส่วนตัวของ staging ไม่แชร์ ไม่อยู่ใน shared drive)
 - Sales Office: `SQ_SALES_URL` (https origin ของ Sales Office **staging** ไม่มี path), `SQ_SALES_CONNECTOR_ID`,
   `SQ_SALES_DOMESTIC_SECRET`, `SQ_SALES_EXPORT_SECRET` (แต่ละตัว ≥ 32 ตัวอักษร และสองตัวต้องไม่ซ้ำกัน – Domestic กับ Export แยกกันเสมอ)

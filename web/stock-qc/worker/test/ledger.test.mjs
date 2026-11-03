@@ -1,7 +1,8 @@
 // Server ledger: bootstrap, request ids, races between isolates, sq_records = replay of sq_commits, commit pages.
 import test, { before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { startServer, bootstrapped, stockIn, issueOne, replay, balanceOf, rid, RRS } from './helpers.mjs';
+import { startServer, bootstrapped, stockIn, issueOne, replay, balanceOf, rid, RRS, ORIGIN } from './helpers.mjs';
+import { limitedBody } from '../src/security.js';
 
 let s;
 let owner;
@@ -223,8 +224,29 @@ test('GET /api/commits pages: ≤ 500 commits and ≈ 4 MB per page, in order, h
   const tooBig = await s.cmd(owner, 'master.import', { items: Array.from({ length: 320 }, (_, i) => ({ code: `HUGE-${i}`, name: `${longName} ${i}`, baseUnit: 'ชิ้น' })) });
   assert.equal(tooBig.status, 422);
   assert.equal(tooBig.body.errors[0].code, 'TOO_LARGE');
-  const body413 = await s.cmd(owner, 'master.import', { items: Array.from({ length: 400 }, (_, i) => ({ code: `HUGE-${i}`, name: `${longName} ${i}`, baseUnit: 'ชิ้น' })) });
+  // Invoke the real fetch handler with the same D1/session bindings for an early-rejected upload. Miniflare/Undici
+  // intermittently resets >2 MB uploads on Windows before delivering 413, even with Content-Length. Normal command
+  // requests and all pagination assertions still use HTTP; no HTTP error is swallowed or retried here.
+  const oversizedCommand = { kind: 'master.import', requestId: rid('oversize'), payload: {
+    items: Array.from({ length: 400 }, (_, i) => ({ code: `HUGE-${i}`, name: `${longName} ${i}`, baseUnit: 'ชิ้น' })),
+  } };
+  const { default: workerHandler } = await import('../src/index.js');
+  const oversizedJson = JSON.stringify(oversizedCommand);
+  const body413 = await workerHandler.fetch(new Request(ORIGIN + '/api/command', { method: 'POST', body: oversizedJson,
+    headers: { Origin: ORIGIN, Cookie: owner, 'Content-Type': 'application/json',
+      'Content-Length': String(Buffer.byteLength(oversizedJson)) } }), { ...s.env(), ...s.bindings });
   assert.equal(body413.status, 413);
+  assert.equal((await body413.json()).ok, false);
+  // Keep coverage of the streamed/no-Content-Length path without the Windows HTTP transport reset.
+  let cancelled = false;
+  const streamed = new Request('https://stock.test/api/command', { method: 'POST', duplex: 'half',
+    body: new ReadableStream({
+      pull(controller) { controller.enqueue(new Uint8Array(1024 * 1024)); },
+      cancel() { cancelled = true; },
+    }),
+  });
+  await assert.rejects(() => limitedBody(streamed, 2 * 1024 * 1024), e => e.status === 413);
+  assert.equal(cancelled, true);
   assert.equal(await commitCount(), head);
 
   const all = [];

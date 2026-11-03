@@ -6,6 +6,7 @@
 import bcrypt from 'bcryptjs';
 import { db, str, HttpError, json } from './runtime.js';
 import { digest, hmac, randomToken, secretEqual, readJson, clientIP, securityEvent, byteLength } from './security.js';
+import * as salesAuth from './sales-auth.js';
 
 export const SESSION_COOKIE = '__Host-sq_session';
 export const SESSION_SECONDS = 8 * 60 * 60;
@@ -38,6 +39,7 @@ export function validUsername(name) {
 const DUMMY_HASH = `$2b$${String(BCRYPT_COST).padStart(2, '0')}$${'x'.repeat(53)}`;
 
 export function authConfiguration(env) {
+  if (salesAuth.externalAuthSelected(env)) return salesAuth.configuration(env);
   const missing = ['ADMIN_USERNAME', 'ADMIN_PASSWORD_HASH', 'SESSION_SECRET'].filter((k) => !str(env, k));
   const invalid = [];
   if (str(env, 'ADMIN_USERNAME') && !validUsername(str(env, 'ADMIN_USERNAME'))) invalid.push('ADMIN_USERNAME');
@@ -77,6 +79,7 @@ async function authVersion(env, username, hash) {
 
 /** {id, username, owner, mustChange, expiresAt} for a valid session cookie, else null. */
 export async function getSession(env, req) {
+  if (salesAuth.externalAuthSelected(env)) return salesAuth.getSession(env, req);
   const token = cookieToken(req);
   if (!token || !authConfiguration(env).ready) return null;
   const id = await hmac(str(env, 'SESSION_SECRET'), token);
@@ -122,6 +125,11 @@ export function checkNewPassword(password, username) {
 
 // ---- POST /api/auth/login {username, password} --------------------------------------------------------------
 export async function login(env, req) {
+  if (salesAuth.externalAuthSelected(env)) {
+    salesAuth.validateLoginRequest(env, req);
+    await rateLimit(env, clientIP(req), 'login', GENERIC_ERROR);
+    return salesAuth.login(env, req);
+  }
   const ip = clientIP(req);
   await rateLimit(env, ip, 'login', GENERIC_ERROR);
   let input;
@@ -166,6 +174,7 @@ export async function login(env, req) {
 
 // ---- POST /api/auth/logout ------------------------------------------------------------------------------------
 export async function logout(env, req) {
+  if (salesAuth.externalAuthSelected(env)) return salesAuth.logout(env, req);
   const session = await getSession(env, req);
   if (session) {
     await db(env).prepare('UPDATE sq_sessions SET revoked_at=? WHERE id=? AND revoked_at IS NULL').bind(Date.now(), session.id).run();
@@ -177,6 +186,7 @@ export async function logout(env, req) {
 // ---- POST /api/auth/password {current, next} ------------------------------------------------------------------
 /** A new password ends every session of the account (this one too): log in again on every device. */
 export async function changePassword(env, req) {
+  if (salesAuth.externalAuthSelected(env)) return salesAuth.managedCredentials();
   const session = await requireSession(env, req);
   const ip = clientIP(req);
   await rateLimit(env, ip, 'password', 'ลองเปลี่ยนรหัสผ่านหลายครั้งเกินไป กรุณารอ 15 นาที');
@@ -219,6 +229,7 @@ export async function changePassword(env, req) {
  * password is set or it is turned off.
  */
 export async function setCredentials(env, req, session) {
+  if (salesAuth.externalAuthSelected(env)) return salesAuth.managedCredentials();
   const input = await readJson(req, 4096);
   const unknown = Object.keys(input).filter((k) => ['username', 'password', 'active'].indexOf(k) < 0);
   if (unknown.length) throw new HttpError(400, `ไม่รู้จักข้อมูล: ${unknown.join(', ')}`);

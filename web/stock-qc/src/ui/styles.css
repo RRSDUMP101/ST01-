@@ -56,6 +56,42 @@ body {
 body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 30; background: var(--rail); }
 a { color: var(--accent); }
 :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+/* Authentication has a dedicated layout; no stock navigation is shown before sign-in. */
+.app.auth-screen { display: block; min-height: 100vh; }
+.auth-screen #top, .auth-screen #nav, .auth-screen #banner { display: none; }
+.auth-screen #main { padding: max(24px, env(safe-area-inset-top)) 24px max(24px, env(safe-area-inset-bottom)); min-height: 100vh; display: grid; place-items: center; }
+.login-layout { width: min(1040px, 100%); display: grid; grid-template-columns: 1.06fr 1fr; border: 1px solid var(--line); border-radius: 16px; overflow: hidden; background: var(--panel); box-shadow: 0 18px 60px rgba(13, 30, 45, .1); }
+.login-intro { padding: 44px; min-height: 610px; background: #142b3c; color: #f0f5fa; display: flex; flex-direction: column; justify-content: space-between; gap: 44px; }
+.login-wordmark { font: 600 1.45rem/1.2 var(--f-display); letter-spacing: .17em; }
+.login-wordmark > span { display: block; font: 500 .63rem/1.8 var(--f-mono); color: #a7c4d6; letter-spacing: .16em; margin-top: 5px; }
+.login-kicker { color: #8fbcd6; font: 500 .72rem var(--f-mono); letter-spacing: .12em; margin-bottom: 18px; }
+.login-intro h2 { font-size: clamp(1.7rem, 3vw, 2.35rem); line-height: 1.5; letter-spacing: 0; font-weight: 500; }
+.login-description { color: #bed0dc; margin-top: 20px; max-width: 33ch; line-height: 1.85; }
+.login-workflow { list-style: none; padding: 22px 0 0; margin: 0; display: flex; gap: 18px; border-top: 1px solid #345265; }
+.login-workflow li { flex: 1; font-size: .78rem; color: #c4d4df; }
+.login-workflow span { display: block; font: .72rem var(--f-mono); color: #80afcc; margin-bottom: 8px; }
+.login-panel { display: flex; flex-direction: column; justify-content: space-between; padding: 52px 44px 24px; }
+.login-panel-content { margin-block: auto; }
+.login-panel h1 { margin-top: 6px; font-size: 1.8rem; }
+.login-subtitle { color: var(--fg-2); margin: 10px 0 28px; line-height: 1.7; }
+.login-form { display: flex; flex-direction: column; gap: 18px; }
+.login-form .fld { gap: 7px; }
+.login-form input { min-height: 46px; width: 100%; }
+.login-otp input { font-family: var(--f-mono); letter-spacing: .3em; }
+.login-submit { width: 100%; min-height: 48px; justify-content: center; margin-top: 2px; }
+.login-feedback { padding: 11px 13px; border: 1px solid var(--bad); border-radius: 6px; background: var(--bad-soft); color: var(--bad); font-size: .86rem; line-height: 1.6; }
+.login-status { min-height: 1.4em; margin: -8px 0 0; color: var(--fg-2); font-size: .8rem; text-align: center; }
+.login-help { color: var(--fg-2); font-size: .8rem; line-height: 1.8; padding-top: 14px; border-top: 1px solid var(--line); margin-top: 8px; }
+.login-footer { color: var(--fg-3); font-size: .72rem; padding-top: 32px; }
+@media (max-width: 720px) {
+  .auth-screen #main { padding: 16px; align-items: start; }
+  .login-layout { grid-template-columns: 1fr; border-radius: 12px; }
+  .login-intro { min-height: 0; padding: 24px; gap: 24px; }
+  .login-intro h2, .login-description, .login-workflow { display: none; }
+  .login-intro > div { display: none; }
+  .login-panel { padding: 30px 24px 22px; }
+  .login-panel-content { margin-block: 0; }
+}
 h1, h2, h3 { font-family: var(--f-display); text-wrap: balance; margin: 0; letter-spacing: .01em; }
 h1 { font-size: 1.55rem; font-weight: 600; line-height: 1.25; }
 h2 { font-size: 1.08rem; font-weight: 600; }

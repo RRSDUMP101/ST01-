@@ -181,8 +181,12 @@
   async function serverSession() {
     try {
       const r = await fetch(`${app.api}/auth/session`, { credentials: 'same-origin', headers: { accept: 'application/json' } });
-      if (!r.ok) return null;
       const body = await r.json();
+      if (body && body.authProvider) app.authProvider = body.authProvider;
+      if (!r.ok) {
+        if (r.status !== 401) app.loginError = 'ระบบยืนยันตัวตนยังไม่พร้อม กรุณาลองใหม่อีกครั้ง';
+        return null;
+      }
       return body && body.username ? body : null;
     } catch (e) {
       app.error = 'ติดต่อเซิร์ฟเวอร์ไม่ได้: ' + ((e && e.message) || e);
@@ -462,7 +466,7 @@
       const opts = users().filter((u) => u.active !== false).map((u) => [u.id, `${u.name} · ${u.roles.map((r) => RRS.auth.ROLES[r] || r).join(', ')}`]);
       return t`<label class="who"><span class="who-l">ทำรายการในชื่อ</span><select id="who-sel" data-who="1" aria-label="เลือกผู้ใช้ทดลอง">${opts.map(([v, l]) => t`<option value="${v}"${safe(user && user.id === v ? ' selected' : '')}>${l}</option>`)}</select></label>`;
     }
-    const acct = app.mode === 'server' && app.session ? t` ${h.btn('เปลี่ยนรหัสผ่าน', { act: '_password', tone: 'quiet', small: true })}${h.btn('ออกจากระบบ', { act: '_logout', tone: 'quiet', small: true })}` : '';
+    const acct = app.mode === 'server' && app.session ? t` ${salesAuth() ? '' : h.btn('เปลี่ยนรหัสผ่าน', { act: '_password', tone: 'quiet', small: true })}${h.btn('ออกจากระบบ', { act: '_logout', tone: 'quiet', small: true })}` : '';
     if (!user) return t`<span class="who"><span class="who-l">ผู้ใช้</span><b>${app.mode === 'server' && app.session ? app.session.username : 'ยังไม่มีสิทธิ์'}</b>${acct}</span>`;
     return t`<span class="who"><span class="who-l">ผู้ใช้</span><b>${user.name}</b> <span class="who-r">${user.roles.map((r) => RRS.auth.ROLES[r] || r).join(', ')}</span>${acct}</span>`;
   }
@@ -486,6 +490,8 @@
     banner.innerHTML = String(t`${notes}`);
   }
   function render() {
+    const shell = $('.app');
+    if (shell) shell.classList.toggle('auth-screen', app.mode === 'server' && !!app.needLogin);
     renderChrome();
     const main = $('#main');
     if (!main) return;
@@ -537,12 +543,36 @@
     if (Math.abs(root.scrollY - y) > 2) root.scrollTo(0, y);
     root.document.title = `${page.title} · RRS Stock & QC`;
   }
+  function salesAuth() {
+    return app.authProvider === 'sales-office' || (app.session && app.session.authProvider === 'sales-office');
+  }
+  function serverOnly() {
+    return !!(root.RRS_CONFIG && root.RRS_CONFIG.api && root.RRS_CONFIG.only !== false);
+  }
   function renderLogin(main) {
-    main.innerHTML = String(t`<div class="page narrow"><header class="page-h"><div><p class="eyebrow">RRS Stock &amp; QC</p><h1>เข้าสู่ระบบ</h1>
-      <p class="page-s">ใช้ชื่อผู้ใช้และรหัสผ่านที่ผู้ดูแลระบบตั้งให้</p></div></header>
-      ${app.loginError ? h.note(app.loginError, 'bad') : ''}
-      ${h.form({ name: '_login', submit: 'เข้าสู่ระบบ', body: [h.field({ name: 'username', label: 'ชื่อผู้ใช้', required: true, id: 'login-user' }),
-        h.field({ name: 'password', label: 'รหัสผ่าน', type: 'password', required: true, id: 'login-pass' })] })}</div>`);
+    const shared = salesAuth();
+    root.document.title = 'เข้าสู่ระบบ · Nexus Part Terminal';
+    main.innerHTML = String(t`<section class="login-layout" aria-labelledby="login-title">
+      <div class="login-intro"><span class="login-wordmark">NEXUS<span>PART TERMINAL</span></span>
+        <div><p class="login-kicker">RRS STOCK &amp; QC</p><h2>ทุกชิ้นส่วน<br>พร้อมสำหรับงานถัดไป</h2>
+        <p class="login-description">จัดการสต็อก จองของให้งานผลิต และติดตามคุณภาพในพื้นที่ทำงานเดียว</p></div>
+        <ol class="login-workflow"><li><span>01</span>รับและจัดเก็บ</li><li><span>02</span>จองและเบิก</li><li><span>03</span>ตรวจและส่งต่อ</li></ol>
+      </div><div class="login-panel"><div class="login-panel-content"><p class="eyebrow">ยินดีต้อนรับกลับ</p><h1 id="login-title">เข้าสู่ระบบ</h1>
+        <p class="login-subtitle">${shared ? 'ใช้ชื่อผู้ใช้และรหัสผ่านเดียวกับ RRS Sales Office' : 'ใช้บัญชีที่ผู้ดูแลระบบกำหนดให้'}</p>
+        <form data-form="_login" class="login-form">
+          <div id="login-feedback" role="alert" aria-live="polite" class="login-feedback"${safe(app.loginError ? '' : ' hidden')}>${app.loginError || ''}</div>
+          <label class="fld" for="login-user"><span>ชื่อผู้ใช้${shared ? ' Sales Office' : ''}</span>
+            <input id="login-user" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" required maxlength="100" value="${app.loginUsername || ''}"></label>
+          <label class="fld" for="login-pass"><span>รหัสผ่าน</span>
+            <input id="login-pass" name="password" type="password" autocomplete="current-password" required></label>
+          <label class="fld login-otp" for="login-otp" id="login-otp-wrap"${safe(app.loginMfa ? '' : ' hidden')}><span>รหัสยืนยันตัวตน</span>
+            <input id="login-otp" name="otp" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6"${safe(app.loginMfa ? ' required' : ' disabled')} aria-describedby="login-otp-hint">
+            <small id="login-otp-hint">กรอกรหัส 6 หลักจากแอปยืนยันตัวตนของบัญชี Sales Office</small></label>
+          <button class="btn btn-primary login-submit" type="submit">${app.loginMfa ? 'ยืนยันและเข้าสู่ระบบ' : 'เข้าสู่ระบบ'}</button>
+          <p class="login-status" id="login-status" role="status" aria-live="polite"></p>
+        </form>
+        <p class="login-help">${shared ? 'บัญชีและรหัสผ่านจัดการที่ Sales Office ส่วนสิทธิ์สต็อกและ QC กำหนดตามหน้าที่ในระบบนี้' : 'หากเข้าสู่ระบบไม่ได้ กรุณาติดต่อผู้ดูแลระบบ'}</p>
+      </div><footer class="login-footer">RRS · Nexus Part Terminal</footer></div></section>`);
     const u = main.querySelector('#login-user');
     if (u) u.focus();
   }
@@ -579,6 +609,7 @@
       await startMode('server');
     },
     async _password() {
+      if (salesAuth()) return toast('จัดการรหัสผ่านที่ RRS Sales Office', 'info');
       await dialog({ title: 'เปลี่ยนรหัสผ่าน', submit: 'เปลี่ยนรหัสผ่าน',
         body: [h.field({ name: 'current', label: 'รหัสผ่านเดิม', type: 'password', required: true, wide: true }),
           h.field({ name: 'next', label: 'รหัสผ่านใหม่ (อย่างน้อย 12 ตัว)', type: 'password', required: true, wide: true })],
@@ -598,31 +629,69 @@
       new RRS.stores.LocalStore(DEMO_KEY).clear();
       await startMode('demo');
     },
-    _toTeam: () => startMode('team'),
-    _toDemo: () => startMode('demo'),
+    _toTeam: () => serverOnly() ? null : startMode('team'),
+    _toDemo: () => serverOnly() ? null : startMode('demo'),
     _refresh: () => {
       app.dirty = false;
       render();
     },
   };
   const builtinForms = {
-    async _login(values) {
+    async _login(values, form) {
+      if (app.loginBusy) return;
+      if (!form.reportValidity()) return;
+      app.loginBusy = true;
       app.loginError = '';
-      let r;
+      app.loginUsername = String(values.username || '').trim();
+      const feedback = form.querySelector('#login-feedback');
+      const status = form.querySelector('#login-status');
+      const submit = form.querySelector('[type="submit"]');
+      const otp = form.querySelector('#login-otp');
+      feedback.hidden = true;
+      status.textContent = 'กำลังตรวจสอบบัญชี…';
+      form.setAttribute('aria-busy', 'true');
+      submit.disabled = true;
+      let success = false;
       try {
-        r = await fetch(`${app.api}/auth/login`, { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ username: values.username, password: values.password }) });
-      } catch (e) {
-        app.loginError = 'ติดต่อเซิร์ฟเวอร์ไม่ได้';
-        return render();
-      }
-      if (!r.ok) {
+        const payload = { username: app.loginUsername, password: values.password };
+        if (app.loginMfa) payload.otp = String(values.otp || '').trim();
+        const r = await fetch(`${app.api}/auth/login`, { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(payload) });
         let data = null;
-        try { data = await r.json(); } catch (e) { data = null; }
-        app.loginError = (data && data.error) || 'เข้าสู่ระบบไม่สำเร็จ';
-        return render();
+        try { data = await r.json(); } catch (e) { /* handled as an invalid response below */ }
+        if (!r.ok || !data || data.ok === false) {
+          if (r.status === 428 || (data && data.mfaRequired)) {
+            app.loginMfa = true;
+            form.querySelector('#login-otp-wrap').hidden = false;
+            otp.disabled = false;
+            otp.required = true;
+            otp.value = '';
+            otp.focus();
+            app.loginError = 'กรอกรหัสยืนยัน 6 หลักจากแอปยืนยันตัวตน';
+          } else {
+            app.loginError = (data && typeof data.error === 'string' && data.error) || 'เข้าสู่ระบบไม่สำเร็จ กรุณาลองใหม่อีกครั้ง';
+            if (app.loginMfa) { otp.value = ''; otp.focus(); }
+          }
+          return;
+        }
+        success = true;
+        form.reset();
+        app.loginMfa = false;
+        app.loginUsername = '';
+        app.loginError = '';
+        if (data.authProvider) app.authProvider = data.authProvider;
+        app.dirty = false;
+        await startMode('server');
+      } catch (e) {
+        app.loginError = 'ติดต่อเซิร์ฟเวอร์ไม่ได้ กรุณาตรวจการเชื่อมต่อแล้วลองอีกครั้ง';
+      } finally {
+        app.loginBusy = false;
+        form.setAttribute('aria-busy', 'false');
+        submit.disabled = false;
+        submit.textContent = app.loginMfa ? 'ยืนยันและเข้าสู่ระบบ' : 'เข้าสู่ระบบ';
+        status.textContent = '';
+        if (!success) { feedback.textContent = app.loginError; feedback.hidden = !app.loginError; }
       }
-      await startMode('server');
     },
     async _bootstrap(values) {
       const r = await makeCtx('home').exec('system.bootstrap', { name: values.name, company: values.company, accountId: app.account || '' }, { public: true });
@@ -639,6 +708,7 @@
   };
 
   async function switchMode() {
+    if (serverOnly()) return;
     const choices = [['demo', `${MODES.demo.label} – ${MODES.demo.sub}`]];
     if (app.caps.db) choices.push(['team', `${MODES.team.label} – ${MODES.team.sub}`]);
     if (root.RRS_CONFIG && root.RRS_CONFIG.api) choices.push(['server', `${MODES.server.label} – ${MODES.server.sub}`]);

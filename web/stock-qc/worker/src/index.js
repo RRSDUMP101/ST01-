@@ -40,11 +40,12 @@ const mustChangeError = () => new HttpError(403, 'ต้องเปลี่ย
 });
 
 async function sessionInfo(env, req) {
+  const authProvider = str(env, 'SQ_AUTH_PROVIDER') || 'local';
   const session = await auth.getSession(env, req);
-  if (!session) return json({ ok: false, error: 'กรุณาเข้าสู่ระบบ', configured: auth.authConfiguration(env).ready }, 401);
+  if (!session) return json({ ok: false, error: 'กรุณาเข้าสู่ระบบ', configured: auth.authConfiguration(env).ready, authProvider }, 401);
   const state = await ledger.catchUp(env);
   const user = ledger.engineUserFor(state, session.username);
-  return json({ ok: true, username: session.username, owner: session.owner, mustChange: session.mustChange,
+  return json({ ok: true, authProvider, username: session.username, owner: session.owner, mustChange: session.mustChange,
     expiresAt: new Date(session.expiresAt).toISOString(), user: user || null, bootstrapped: ledger.hasEngineUsers(state) });
 }
 
@@ -185,6 +186,7 @@ async function health(env) {
     time: new Date().toISOString(),
     engine: { files: ENGINE_FILES, commands: Object.keys(RRS.commands.defs).length },
     features: {
+      authProvider: str(env, 'SQ_AUTH_PROVIDER') || 'local',
       login: auth.authConfiguration(env).ready,
       database,
       files: !!env.BUCKET,

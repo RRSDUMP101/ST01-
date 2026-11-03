@@ -7,6 +7,7 @@ import threading
 
 from PySide6.QtCore import QObject, QThread, Signal, Slot
 
+from ..core import tunnel as tunnels
 from ..core.mobile import MobileService
 from ..core.mobile_server import Busy, MobileServer
 from .state import AppState
@@ -51,6 +52,9 @@ class MainThreadExecutor(QObject):
 class MobileHub(QObject):
     changed = Signal()  # devices, inbox or the server changed: the page shows it again
     event = Signal(str, object)  # something a phone did: kind ('problem', 'count', 'pick', 'device', 'record' …), payload
+    online_changed = Signal()  # the link from outside the factory (its state comes from the tunnel's thread)
+    download_progress = Signal(int, int)  # cloudflared being downloaded: bytes, total
+    _downloaded = Signal()  # from the download thread: open the tunnel on the main thread
 
     def __init__(self, state: AppState):
         super().__init__()
@@ -60,6 +64,11 @@ class MobileHub(QObject):
         self.executor = MainThreadExecutor()
         self.server: MobileServer | None = None
         self.error = ""
+        self.tunnel: tunnels.Tunnel | None = None
+        self.online_error = ""
+        self.downloading = False
+        self.online_changed.connect(self._online_now)
+        self._downloaded.connect(self.start_online)
         for signal in (state.jobs_changed, state.stock_changed, state.ledger_changed, state.catalog_changed,
                        state.laser_changed, state.models_changed):
             signal.connect(self._pc_changed)
@@ -104,14 +113,88 @@ class MobileHub(QObject):
         return True
 
     def stop(self) -> None:
+        self.stop_online()
         if self.server is not None:
             self.server.stop()
         self.server = None
         self.changed.emit()
 
+    # ---- ใช้จากนอกโรงงาน (ออนไลน์) --------------------------------------------------------------------------
+    @property
+    def online(self) -> bool:
+        return self.tunnel is not None and self.tunnel.state == tunnels.ON and bool(self.tunnel.public_url)
+
+    @property
+    def online_state(self) -> str:
+        if self.downloading:
+            return tunnels.STARTING
+        return self.tunnel.state if self.tunnel is not None else (tunnels.ERROR if self.online_error else tunnels.OFF)
+
+    def online_url(self) -> str:
+        return self.tunnel.public_url if self.online else ""
+
+    def needs_download(self) -> bool:
+        return self.option("online_mode") != tunnels.OWN and tunnels.find_cloudflared(self.folder) is None
+
+    def start_online(self) -> bool:
+        """Open the link from outside (the server must be on). cloudflared missing: download it first (a thread)."""
+        self.online_error = ""
+        if not self.running and not self.start():
+            self.online_error = self.error
+            self.online_changed.emit()
+            return False
+        if self.tunnel is not None and self.tunnel.running:
+            return True
+        if self.needs_download():
+            if not self.downloading:
+                self.downloading = True
+                threading.Thread(target=self._download, daemon=True, name="cloudflared-download").start()
+            self.online_changed.emit()
+            return True
+        self.tunnel = tunnels.Tunnel(self.folder, self.server.port, self.option("online_mode"),
+                                     self.option("online_token"), self.option("online_url"),
+                                     on_change=self.online_changed.emit)
+        self.tunnel.start()
+        self.online_changed.emit()
+        return self.tunnel.state != tunnels.ERROR
+
+    def _download(self) -> None:
+        try:
+            tunnels.download_cloudflared(self.folder, lambda done, total: self.download_progress.emit(done, total))
+        except Exception as e:  # noqa: BLE001 - shown on the page
+            self.online_error = f"ดาวน์โหลด cloudflared ไม่ได้: {e}"
+            self.downloading = False
+            self.online_changed.emit()
+            return
+        self.downloading = False
+        self._downloaded.emit()
+
+    def stop_online(self) -> None:
+        if self.tunnel is not None:
+            self.tunnel.on_change = None
+            self.tunnel.stop()
+        self.tunnel = None
+        self.online_error = ""
+        self._online_now()
+
+    @Slot()
+    def _online_now(self) -> None:
+        """The tunnel's state on the main thread: the phones learn the link (hello / settings), the page shows it."""
+        url = self.online_url()
+        if self.tunnel is not None and self.tunnel.state == tunnels.ERROR:
+            self.online_error = self.tunnel.error
+        if self.service.online_url != url:
+            self.service.online_url = url
+            self.service.bump("online")
+        self.changed.emit()
+
     def restart(self) -> bool:
+        was_online = self.tunnel is not None and self.tunnel.running
         self.stop()
-        return self.start()
+        ok = self.start()
+        if ok and was_online:
+            self.start_online()
+        return ok
 
     def addresses(self) -> list[str]:
         return self.server.addresses if self.server is not None else []

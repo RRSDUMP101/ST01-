@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QInputDialog,
     QLabel,
+    QLineEdit,
     QMessageBox,
     QScrollArea,
     QSpinBox,
@@ -29,6 +30,7 @@ from PySide6.QtWidgets import (
 )
 
 from ...core import certs
+from ...core import tunnel as tunnels
 from ...core.mobile import KIND_NAMES, ROLES
 from ...core.production import STEPS
 from ...core.qr import location_payload
@@ -38,6 +40,8 @@ from ..mobile_hub import MobileHub
 from ..printing import open_document, qr_image, write_location_labels_pdf
 from ..state import AppState
 from ..widgets import Card, PageHeader, button, empty_hint, fill, selected_rows, table
+
+ONLINE = "<online>"  # the address list item of the link from outside the factory
 
 RACK_HEADERS = ["รหัสชั้นวาง", "ชื่อ", "ทางเดิน", "ฝั่ง", "ลำดับจากทางเข้า", "จำนวนชั้น", "ช่องต่อชั้น", "ชั้น 1 อยู่ล่าง",
                 "เลขช่อง ซ้าย→ขวา"]
@@ -185,6 +189,7 @@ class MobilePage(QWidget):
         text.setTextFormat(Qt.RichText)
         steps.body.addWidget(text)
         right.addWidget(steps)
+        right.addWidget(self._online_card())
         opts = Card("ตั้งค่า")
         form = QFormLayout()
         self.port = QSpinBox()
@@ -223,6 +228,130 @@ class MobilePage(QWidget):
         scroll.setWidget(side)
         grid.addWidget(scroll, 1)
         return w
+
+    def _online_card(self) -> Card:
+        """ใช้จากนอกโรงงาน: a public https link through a tunnel this PC opens (core/tunnel.py)."""
+        card = Card("ใช้จากนอกโรงงาน (ออนไลน์ – ทุกที่ที่มีอินเทอร์เน็ต)")
+        hint = QLabel("มือถือเปิดแอปได้จาก 4G / Wi-Fi ที่ไหนก็ได้ ผ่านอุโมงค์ที่คอมเครื่องนี้เปิดออกไปเอง "
+                      "(ไม่ต้องเปิดพอร์ตเราเตอร์ ข้อมูลยังอยู่ที่คอมนี้) · ใบรับรองของลิงก์ออนไลน์เป็นของ Cloudflare / Tailscale "
+                      "มือถือจึงไม่ต้องติดตั้งใบรับรอง · คอมต้องเปิดโปรแกรมและต่ออินเทอร์เน็ตไว้")
+        hint.setWordWrap(True)
+        hint.setObjectName("Hint")
+        card.body.addWidget(hint)
+        form = QFormLayout()
+        self.online_mode = QComboBox()
+        for key, label in tunnels.MODES.items():
+            self.online_mode.addItem(label, key)
+        self.online_mode.setCurrentIndex(max(0, self.online_mode.findData(self.hub.option("online_mode"))))
+        self.online_mode.currentIndexChanged.connect(self._online_mode_changed)
+        form.addRow("วิธี", self.online_mode)
+        self.online_token = QLineEdit(self.hub.option("online_token"))
+        self.online_token.setEchoMode(QLineEdit.Password)
+        self.online_token.setPlaceholderText("โทเคนของ tunnel (Cloudflare Zero Trust → Networks → Tunnels)")
+        self.online_token.editingFinished.connect(self._online_fields)
+        self.online_token_row = QLabel("โทเคน")
+        form.addRow(self.online_token_row, self.online_token)
+        self.online_url = QLineEdit(self.hub.option("online_url"))
+        self.online_url.setPlaceholderText("https://rrs.example.com หรือ https://pc-office.tailnet-xxxx.ts.net")
+        self.online_url.editingFinished.connect(self._online_fields)
+        self.online_url_row = QLabel("ลิงก์")
+        form.addRow(self.online_url_row, self.online_url)
+        self.remote_pair = QCheckBox("ให้จับคู่เครื่องใหม่จากนอกโรงงานได้ (ด้วยรหัสจับคู่)")
+        self.remote_pair.setToolTip("ปิด (แนะนำ) = เครื่องใหม่ต้องจับคู่ใน Wi-Fi โรงงานก่อน แล้วกด ใช้นอกโรงงาน ในแอป")
+        self.remote_pair.setChecked(bool(self.hub.option("remote_pair")))
+        self.remote_pair.toggled.connect(self._remote_pair_toggled)
+        form.addRow("", self.remote_pair)
+        self.online_auto = QCheckBox("เปิดออนไลน์ทุกครั้งที่เปิดโปรแกรม")
+        self.online_auto.setChecked(bool(self.hub.option("online_auto")))
+        self.online_auto.toggled.connect(self._online_auto_toggled)
+        form.addRow("", self.online_auto)
+        card.body.addLayout(form)
+        row = QHBoxLayout()
+        self.online_btn = button("เปิดออนไลน์", "primary", "เปิด / ปิดลิงก์ออนไลน์ของแอปมือถือ")
+        self.online_btn.clicked.connect(self.toggle_online)
+        row.addWidget(self.online_btn)
+        self.online_copy = button("คัดลอกลิงก์ออนไลน์", tooltip="ลิงก์ของแอป (ไม่มีรหัสจับคู่)")
+        self.online_copy.clicked.connect(self.copy_online)
+        row.addWidget(self.online_copy)
+        row.addStretch(1)
+        card.body.addLayout(row)
+        self.online_status = QLabel()
+        self.online_status.setWordWrap(True)
+        self.online_status.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        card.body.addWidget(self.online_status)
+        self.hub.download_progress.connect(self._download_progress)
+        self._online_mode_changed()
+        return card
+
+    def _online_mode_changed(self, *_args) -> None:
+        mode = self.online_mode.currentData()
+        for w in (self.online_token, self.online_token_row):
+            w.setVisible(mode == tunnels.TOKEN)
+        for w in (self.online_url, self.online_url_row):
+            w.setVisible(mode in (tunnels.TOKEN, tunnels.OWN))
+        if mode != self.hub.option("online_mode"):
+            self._online_option(online_mode=mode)
+
+    def _online_fields(self) -> None:
+        self._online_option(online_token=self.online_token.text().strip(),
+                            online_url=tunnels.clean_url(self.online_url.text()))
+
+    def _remote_pair_toggled(self, on: bool) -> None:
+        self._online_option(remote_pair=bool(on))
+
+    def _online_auto_toggled(self, on: bool) -> None:
+        self._online_option(online_auto=bool(on))
+
+    def _online_option(self, **values) -> None:
+        self.hub.set_options(**values)
+        if "remote_pair" in values:
+            self._show_qr()
+
+    def toggle_online(self) -> None:
+        if self.hub.online_state in (tunnels.ON, tunnels.STARTING):
+            self.hub.stop_online()
+            self.state.notify("ปิดลิงก์ออนไลน์แล้ว – มือถือใช้ได้เฉพาะใน Wi-Fi โรงงาน")
+            return
+        self._online_fields()
+        if self.hub.needs_download():
+            self.online_status.setText("กำลังดาวน์โหลด cloudflared (ครั้งเดียว ประมาณ 20–40 MB) จาก github.com/cloudflare …")
+        if not self.hub.start_online() and self.hub.online_error:
+            self.actions.error("เปิดลิงก์ออนไลน์ไม่ได้", self.hub.online_error)
+        self.refresh()
+
+    def copy_online(self) -> None:
+        if self.hub.online:
+            QGuiApplication.clipboard().setText(self.hub.online_url() + "/")
+            self.state.notify("คัดลอกลิงก์ออนไลน์แล้ว – เครื่องที่จับคู่แล้วกด ใช้นอกโรงงาน ในหน้าตั้งค่าของแอปได้เลย")
+
+    def _download_progress(self, done: int, total: int) -> None:
+        mb = done / 1e6
+        self.online_status.setText(f"กำลังดาวน์โหลด cloudflared {mb:.1f}" + (f" / {total / 1e6:.1f}" if total else "") + " MB …")
+
+    def _show_online(self) -> None:
+        state = self.hub.online_state
+        on = state in (tunnels.ON, tunnels.STARTING)
+        self.online_btn.setText("ปิดออนไลน์" if on else "เปิดออนไลน์")
+        self.online_btn.setProperty("kind", "" if on else "primary")
+        self.online_btn.style().unpolish(self.online_btn)
+        self.online_btn.style().polish(self.online_btn)
+        self.online_copy.setEnabled(self.hub.online)
+        for w in (self.online_mode, self.online_token, self.online_url):
+            w.setEnabled(not on)
+        if self.hub.online:
+            pair = ("จับคู่เครื่องใหม่จากนอกโรงงานได้ด้วยรหัสจับคู่" if self.hub.option("remote_pair") else
+                    "เครื่องใหม่ต้องจับคู่ใน Wi-Fi โรงงานก่อน แล้วกด <b>ใช้นอกโรงงาน</b> ในหน้าตั้งค่าของแอป")
+            quick = (" · ลิงก์ชั่วคราวเปลี่ยนทุกครั้งที่เปิดใหม่ – มือถือรับลิงก์ใหม่เองเมื่อเปิดแอปใน Wi-Fi โรงงาน"
+                     if self.hub.option("online_mode") == tunnels.QUICK else "")
+            text = (f"<b style='color:{theme.STATUS_COLORS['พร้อม']}'>● ออนไลน์</b> {self.hub.online_url()}<br>"
+                    f"<span style='color:#6B7A90'>{pair}{quick} · เลือก ออนไลน์ ในช่องใต้ QR เพื่อให้ QR เป็นลิงก์ออนไลน์</span>")
+        elif state == tunnels.STARTING:
+            text = "กำลังเปิด…" if not self.hub.downloading else self.online_status.text() or "กำลังดาวน์โหลด cloudflared …"
+        elif self.hub.online_error:
+            text = f"<b style='color:{theme.STATUS_COLORS['ขาด']}'>เปิดไม่ได้</b> – {self.hub.online_error}"
+        else:
+            text = "ปิดอยู่ – มือถือใช้ได้เฉพาะใน Wi-Fi โรงงาน"
+        self.online_status.setText(text)
 
     # ---- อุปกรณ์ ----------------------------------------------------------------------------------------
     def _devices_tab(self) -> QWidget:
@@ -348,12 +477,15 @@ class MobilePage(QWidget):
         self.address.clear()
         for ip in self.hub.addresses():
             self.address.addItem(f"คอมเครื่องนี้: {ip}", ip)
+        if self.hub.online:
+            self.address.addItem(f"ออนไลน์ (นอกโรงงาน): {self.hub.online_url()}", ONLINE)
         if current:
             self.address.setCurrentIndex(max(0, self.address.findData(current)))
         self.address.setVisible(self.address.count() > 1)
         self.address.blockSignals(False)
         self.new_code_btn.setEnabled(running)
         self.copy_btn.setEnabled(running)
+        self._show_online()
         self._show_qr()
         self._fill_devices()
         self._fill_inbox()
@@ -373,7 +505,18 @@ class MobilePage(QWidget):
 
     def _ip(self) -> str:
         data = self.address.currentData() if self.address.count() else None
+        if data == ONLINE and not self.hub.online:
+            data = None
         return data or (self.hub.addresses()[0] if self.hub.addresses() else "")
+
+    def _link(self) -> str:
+        """The link of the QR: the setup page on the Wi-Fi, or the app itself online (with the pairing code only when
+        pairing from outside is allowed - else the phones pair on the Wi-Fi first)."""
+        if self._ip() == ONLINE:
+            s = self.hub.service
+            code = s.pair_code if s.pairing_open and self.hub.option("remote_pair") else ""
+            return self.hub.online_url() + "/" + (f"#pair={code}" if code else "")
+        return self.hub.setup_url(self._ip())
 
     def _show_qr(self, *_args) -> None:
         if not self.hub.running:
@@ -382,7 +525,7 @@ class MobilePage(QWidget):
             self.code.setText("")
             self.code_left.setText("")
             return
-        url = self.hub.setup_url(self._ip())
+        url = self._link()
         self.qr.setPixmap(QPixmap.fromImage(qr_image(url, 300)))
         self.qr.setToolTip(url)
         code = self.hub.service.pair_code if self.hub.service.pairing_open else ""
@@ -395,11 +538,11 @@ class MobilePage(QWidget):
         s = self.hub.service
         if s.pairing_open and s.pair_expires is not None:
             left = int((s.pair_expires - datetime.now()).total_seconds())
-            self.code_left.setText(f"รหัสจับคู่ใช้ได้อีก {left // 60}:{left % 60:02d} นาที · {self.hub.setup_url(self._ip())}")
+            self.code_left.setText(f"รหัสจับคู่ใช้ได้อีก {left // 60}:{left % 60:02d} นาที · {self._link()}")
         else:
             if self.code.text():
                 self.code.setText("")
-                self.qr.setPixmap(QPixmap.fromImage(qr_image(self.hub.setup_url(self._ip()), 300)))
+                self.qr.setPixmap(QPixmap.fromImage(qr_image(self._link(), 300)))
             self.code_left.setText("รหัสหมดเวลา – กด สร้างรหัสจับคู่ใหม่ (เครื่องที่จับคู่แล้วใช้ต่อได้)")
 
     def _fill_devices(self) -> None:
@@ -501,7 +644,7 @@ class MobilePage(QWidget):
         self._show_qr()
 
     def copy_link(self) -> None:
-        QGuiApplication.clipboard().setText(self.hub.setup_url(self._ip()))
+        QGuiApplication.clipboard().setText(self._link())
         self.state.notify("คัดลอกลิงก์แล้ว – ส่งให้มือถือแล้วเปิดในเบราว์เซอร์")
 
     def apply_ports(self) -> None:

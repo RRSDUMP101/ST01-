@@ -91,6 +91,13 @@ async function boot() {
   }
 }
 
+// ใช้นอกโรงงาน: the app on the Wi-Fi opens the online link with #auth=TOKEN - this phone, already paired, goes on
+// with the same token there (the fragment never leaves the phone; it is taken out of the address at once)
+if (/^#auth=/.test(location.hash)) {
+  const token = decodeURIComponent(location.hash.slice(6));
+  if (/^[A-Za-z0-9_-]{20,}$/.test(token)) auth.token = token;
+  history.replaceState(null, '', `${location.pathname}#/home`);
+}
 // the QR of the PC opens https://…/#pair=CODE: start on the pairing screen with the code
 if (/[#?&]pair=/.test(location.href) && !location.hash.startsWith('#/pair')) {
   const code = (location.href.match(/pair=([A-Za-z0-9-]+)/) || [])[1] || '';

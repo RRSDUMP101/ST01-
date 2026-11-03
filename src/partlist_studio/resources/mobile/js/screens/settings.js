@@ -2,7 +2,7 @@
 import { api, auth } from '../api.js';
 import { Icon } from '../icons.js';
 import { Button, Card, Chip, KV, Page, Section } from '../ui.js';
-import { feedback, go, html, local, store, toast, useState, useStore } from '../lib.js';
+import { feedback, go, html, local, store, toast, useEffect, useState, useStore } from '../lib.js';
 
 export function SettingsScreen() {
   const device = useStore((s) => s.device) || {};
@@ -16,6 +16,9 @@ export function SettingsScreen() {
   const [hd, setHd] = useState(local.get('hd', false));
   const [engine, setEngine] = useState(local.get('engine', 'auto'));
   const steps = hello.steps || [];
+  useEffect(() => {  // the online link may have changed since the app opened
+    api.get('hello').then((h) => { local.set('hello', h); store.set({ hello: h }); }).catch(() => {});
+  }, []);
   const save = async () => {
     try {
       const dev = await api.post('profile', { name, station });
@@ -50,6 +53,7 @@ export function SettingsScreen() {
         ${queue ? html`<${Button} kind="secondary" icon="send" onClick=${() => api.flush()}>ส่งรายการที่ค้างตอนนี้</${Button}>` : null}
       </${Card}>
     </${Section}>
+    <${OnlineCard} hello=${hello} />
     <${Section} title="การใช้งาน">
       <${Card} className="toggles">
         <label class="toggle"><span><${Icon} name="bolt" size=${18} /> เสียงยืนยัน / เตือน</span><input type="checkbox" checked=${sound} onChange=${(e) => toggle('sound', e.target.checked, setSound)} /></label>
@@ -67,4 +71,22 @@ export function SettingsScreen() {
     <${Button} kind="danger-soft" block icon="logout" onClick=${unpair}>ยกเลิกการจับคู่เครื่องนี้</${Button}>
     <p class="muted small center">RRS Part List Studio · แอปมือถือ</p>
   </${Page}>`;
+}
+
+// ใช้นอกโรงงาน: the PC has a link from outside the factory - open it with this phone's token (no pairing again)
+function OnlineCard({ hello }) {
+  const url = hello.online_url || '';
+  let origin = '';
+  try { origin = url ? new URL(url).origin : ''; } catch (e) { origin = ''; }
+  const here = origin && origin === location.origin;
+  const open = () => { location.href = `${origin}/#auth=${encodeURIComponent(auth.token)}`; };
+  return html`<${Section} title="ใช้นอกโรงงาน (ออนไลน์)">
+    <${Card}>${here ? html`<p class="small"><b>✓ กำลังใช้แบบออนไลน์</b> – ใช้ได้ทุกที่ที่มีอินเทอร์เน็ต (4G / Wi-Fi อื่น)</p>
+        <p class="small muted">เพิ่มหน้านี้ลงหน้าจอหลักไว้ใช้นอกโรงงาน · ถ้าคอมปิดโปรแกรมหรือปิดออนไลน์ แอปจะเชื่อมต่อไม่ได้</p>`
+      : origin ? html`<p class="small">คอมเปิดลิงก์ออนไลน์อยู่: <b>${origin.replace('https://', '')}</b></p>
+        <${Button} block icon="send" onClick=${open}>เปิดแอปแบบออนไลน์ (ใช้ได้ทุกที่)</${Button}>
+        <p class="small muted">ใช้เครื่องเดิม ชื่อเดิม ไม่ต้องจับคู่ใหม่ · แล้วเพิ่มลงหน้าจอหลักอีกไอคอนสำหรับใช้นอกโรงงาน</p>`
+      : html`<p class="small muted">คอมยังไม่ได้เปิดลิงก์ออนไลน์ – เปิดได้ที่คอม หน้า มือถือ & AR → ใช้จากนอกโรงงาน</p>`}
+    </${Card}>
+  </${Section}>`;
 }

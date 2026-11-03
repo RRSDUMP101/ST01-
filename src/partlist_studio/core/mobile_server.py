@@ -182,12 +182,17 @@ class MobileServer:
     def call(self, fn, *args, **kw):
         return self.executor(fn, *args, **kw)
 
-    def allow_pair_try(self, ip: str) -> bool:
+    def allow_pair_try(self, ip: str, remote: bool = False) -> bool:
+        """12 tries per address in 10 minutes; from outside the factory also 30 tries in all (behind a tunnel the
+        address is only what the proxy says)."""
         now = time.monotonic()
-        tries = [t for t in self._pair_tries.get(ip, []) if now - t < 600]
-        tries.append(now)
-        self._pair_tries[ip] = tries
-        return len(tries) <= 12
+        ok = True
+        for key, limit in ((ip, 12), ("<remote>", 30)) if remote else ((ip, 12),):
+            tries = [t for t in self._pair_tries.get(key, []) if now - t < 600]
+            tries.append(now)
+            self._pair_tries[key] = tries
+            ok = ok and len(tries) <= limit
+        return ok
 
     def static_file(self, path: str) -> Path | None:
         rel = path.lstrip("/") or "index.html"
@@ -237,8 +242,24 @@ class _Base(BaseHTTPRequestHandler):
         return self.server.hub
 
     @property
+    def remote(self) -> bool:
+        """From outside the factory: through a tunnel / proxy on this PC (cloudflared, Tailscale Funnel), which
+        connects from this PC itself and says who the phone is. A phone on the Wi-Fi cannot pretend to be one."""
+        peer = self.client_address[0] if self.client_address else ""
+        return peer in ("127.0.0.1", "::1") and bool(self.headers.get("Cf-Connecting-Ip")
+                                                       or self.headers.get("X-Forwarded-For"))
+
+    @property
     def client_ip(self) -> str:
+        if self.remote:
+            fwd = self.headers.get("Cf-Connecting-Ip") or (self.headers.get("X-Forwarded-For") or "").split(",")[0]
+            return fwd.strip()[:45] or "proxy"
         return self.client_address[0] if self.client_address else ""
+
+    @property
+    def where(self) -> str:
+        """The address a device was last seen at, as the PC shows it."""
+        return f"{self.client_ip} (ออนไลน์)" if self.remote else self.client_ip
 
     def send_bytes(self, status: int, data: bytes, content_type: str, headers: dict | None = None,
                    zip_ok: bool = False) -> None:
@@ -369,7 +390,7 @@ class _Handler(_Base):
     def _device(self):
         auth = self.headers.get("Authorization") or ""
         token = auth[7:].strip() if auth.lower().startswith("bearer ") else ""
-        device = self.hub.call(self.hub.service.authenticate, token, self.client_ip)
+        device = self.hub.call(self.hub.service.authenticate, token, self.where)
         if device is None:
             raise MobileError("ยังไม่ได้จับคู่เครื่องนี้ หรือถูกยกเลิกสิทธิ์ – สแกน QR จับคู่ที่หน้า มือถือ & AR บนคอม", 401)
         return device
@@ -381,11 +402,14 @@ class _Handler(_Base):
             self.send_json(200, {"ok": True, "app": "RRS Part List Studio"}, {"Access-Control-Allow-Origin": "*"})
             return
         if name == "pair" and method == "POST":
-            if not self.hub.allow_pair_try(self.client_ip):
+            if self.remote and not s.data.option("remote_pair"):
+                raise MobileError("จับคู่เครื่องใหม่ได้เฉพาะใน Wi-Fi ของโรงงาน – จับคู่ในโรงงานก่อน แล้วกด "
+                                  "ใช้นอกโรงงาน ในหน้าตั้งค่าของแอป (หรือให้คอมเปิด จับคู่จากนอกโรงงาน)", 403)
+            if not self.hub.allow_pair_try(self.client_ip, self.remote):
                 raise MobileError("ลองจับคู่หลายครั้งเกินไป รอ 10 นาที", 429)
             body = self.read_json()
             device, token = call(s.pair, body.get("code", ""), body.get("name", ""), body.get("role", "station"),
-                                 body.get("station", ""), self.client_ip, self.headers.get("User-Agent", ""))
+                                 body.get("station", ""), self.where, self.headers.get("User-Agent", ""))
             self.send_json(200, {"token": token, "device": device.to_json(), "hello": call(s.hello, device)})
             return
         device = self._device()

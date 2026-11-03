@@ -1257,3 +1257,34 @@ def test_mobile_page_pairs_a_phone_and_confirms_its_work(window, app, monkeypatc
     assert out.stat().st_size > 2000
     page.toggle()
     assert not hub.running and "ปิดอยู่" in page.status.text()
+
+
+def test_mobile_page_online_link_from_outside(window, app):
+    """ใช้จากนอกโรงงาน: a link of my own (Tailscale Funnel …) - the phones learn it (hello), the QR can show it, and the
+    pairing code goes into it only when pairing from outside is allowed."""
+    from partlist_studio.core import tunnel as tunnels
+    from partlist_studio.ui.pages import mobile as page_mod
+
+    window.go("mobile")
+    page = window.pages["mobile"]
+    hub = window.mobile_hub
+    hub.set_options(port=0, http_port=0)
+    page.online_mode.setCurrentIndex(page.online_mode.findData(tunnels.OWN))
+    assert hub.option("online_mode") == tunnels.OWN and page.online_url.isVisibleTo(page)
+    assert not page.online_token.isVisibleTo(page)
+    page.online_url.setText("pc-office.tailnet-abc.ts.net/")
+    page.toggle_online()  # starts the server too
+    app.processEvents()
+    assert hub.running and hub.online and hub.online_url() == "https://pc-office.tailnet-abc.ts.net"
+    assert hub.service.online_url == hub.online_url() and "ออนไลน์" in page.online_status.text()
+    at = page.address.findData(page_mod.ONLINE)
+    assert at >= 0
+    page.address.setCurrentIndex(at)
+    assert page._link() == "https://pc-office.tailnet-abc.ts.net/"  # no pairing code: pair on the Wi-Fi first
+    page.remote_pair.setChecked(True)
+    assert page._link().endswith(f"#pair={hub.service.pair_code}") and page.qr.toolTip() == page._link()
+    page.remote_pair.setChecked(False)
+    page.toggle_online()  # off again: the phones stop seeing the link
+    app.processEvents()
+    assert not hub.online and hub.service.online_url == "" and page.address.findData(page_mod.ONLINE) < 0
+    hub.stop()

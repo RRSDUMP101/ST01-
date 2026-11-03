@@ -367,3 +367,28 @@ def test_setup_page_certificate_and_pair_limit(server):
     ctx = ssl.create_default_context()
     with pytest.raises((ssl.SSLError, urllib.error.URLError)):
         urllib.request.urlopen(f"https://127.0.0.1:{server.port}/api/ping", context=ctx, timeout=5)
+
+
+# ---- ใช้จากนอกโรงงาน (ออนไลน์) --------------------------------------------------------------------------------------
+def test_requests_through_a_tunnel_are_from_outside(server):
+    """cloudflared / Tailscale Funnel connect from this PC and say who the phone is: such a request is from outside -
+    new phones pair only on the Wi-Fi (unless the PC allows it), a paired phone goes on with its token."""
+    s = server.service
+    code = s.new_pair_code()
+    outside = {"Cf-Connecting-Ip": "203.0.113.7"}
+    body = {"code": code, "name": "เบนซ์", "role": "viewer"}
+    status, _h, raw = _call(server, "POST", "/api/pair", body, headers=outside)
+    assert status == 403 and "Wi-Fi" in json.loads(raw)["error"] and not s.data.devices
+    status, _h, raw = _call(server, "POST", "/api/pair", body)  # on the Wi-Fi (no proxy)
+    assert status == 200
+    token = json.loads(raw)["token"]
+    s.online_url = "https://abc-def.trycloudflare.com"
+    status, _h, raw = _call(server, "GET", "/api/hello", token=token, headers=outside)
+    assert status == 200 and json.loads(raw)["online_url"] == s.online_url
+    assert s.data.devices[0].last_ip == "203.0.113.7 (ออนไลน์)"
+    s.data.options["remote_pair"] = True  # allowed by the PC: with the code, from outside too
+    status, _h, _raw = _call(server, "POST", "/api/pair", {**body, "name": "แอม"},
+                             headers={"X-Forwarded-For": "198.51.100.2, 10.0.0.1"})
+    assert status == 200 and s.data.devices[-1].last_ip == "198.51.100.2 (ออนไลน์)"
+    assert all(server.allow_pair_try("192.0.2.9", True) for _ in range(10))  # many addresses from outside: 30 in all
+    assert not all(server.allow_pair_try(f"192.0.2.{n}", True) for n in range(30))

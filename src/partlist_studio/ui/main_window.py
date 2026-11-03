@@ -181,12 +181,14 @@ class MainWindow(QMainWindow):
             signal.connect(self._steps_changed)
         self.refresh_steps()
         self.pages["mobile"].refresh()  # the badge of the inbox in the sidebar
-        if self.mobile_hub.option("autostart"):
+        if self.mobile_hub.option("autostart") or self.mobile_hub.option("online_auto"):
             QTimer.singleShot(800, self._start_mobile)
 
     def _start_mobile(self) -> None:
         if not self.mobile_hub.start():
             self.state.notify(f"เปิดการเชื่อมต่อมือถืออัตโนมัติไม่ได้: {self.mobile_hub.error}")
+        elif self.mobile_hub.option("online_auto"):
+            self.mobile_hub.start_online()
 
     def set_nav_badge(self, key: str, count: int) -> None:
         """'▯   มือถือ & AR  (3)': what waits on that page."""

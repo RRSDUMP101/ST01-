@@ -66,7 +66,10 @@ SOLVED = "แก้แล้ว"
 KIND_NAMES = {"count": "นับสต็อก", "pick": "หยิบของ", "problem": "แจ้งปัญหา"}
 SCRAP_REASONS = ["พับผิด", "ตัดผิดขนาด", "เชื่อมเสีย", "รอยบุบ/ขีดข่วน", "วัสดุมีตำหนิ", "แบบผิด"]
 PROBLEM_TOPICS = ["เครื่องเสีย", "วัสดุไม่พอ", "แบบไม่ชัด/ผิด", "ขาดชิ้นส่วน", "รอคิวเครื่อง", "คุณภาพ"]
-DEFAULT_OPTIONS = {"port": 8443, "http_port": 8080, "autostart": False, "pair_minutes": 15}
+DEFAULT_OPTIONS = {"port": 8443, "http_port": 8080, "autostart": False, "pair_minutes": 15,
+                   # ใช้จากนอกโรงงาน (core/tunnel.py): the way, its token / link, open with the app, pair from outside
+                   "online_mode": "quick", "online_token": "", "online_url": "", "online_auto": False,
+                   "remote_pair": False}
 KEEP_CLOSED = 400  # closed inbox entries kept
 
 
@@ -279,6 +282,7 @@ class MobileService:
         self._requests: OrderedDict[str, dict] = OrderedDict()  # X-Request-Id -> answer (a phone sends again)
         self._cache: dict = {}
         self._seen_saved = datetime.now()
+        self.online_url = ""  # the link from outside the factory while the tunnel is on (core/tunnel.py)
 
     # ---- saving, versions --------------------------------------------------------------------------
     def save(self) -> None:
@@ -564,7 +568,8 @@ class MobileService:
         return {"app": APP_NAME, "version": __version__, "server": socket.gethostname(), "time": _now(),
                 "device": device.to_json(), "roles": ROLES, "steps": STEPS,
                 "groups": [{"key": g, "name": GROUP_NAMES[g]} for g in GROUP_ORDER],
-                "scrap_reasons": SCRAP_REASONS, "problem_topics": PROBLEM_TOPICS, "events": self.version}
+                "scrap_reasons": SCRAP_REASONS, "problem_topics": PROBLEM_TOPICS, "events": self.version,
+                "online_url": self.online_url}
 
     def dashboard(self, device: Device | None = None) -> dict:
         jobs = [j for j in self.state.jobs if j.status not in CLOSED]

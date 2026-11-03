@@ -6,7 +6,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { startServer, bootstrapped, stockIn, outboundRouter, replay, rid, RRS } from './helpers.mjs';
 import { fakeGoogle } from './fake-google.mjs';
 
-const BACKUP_CRON = '40 18 * * *';
+const BACKUP_CRON = '0 20 * * *';
 const sha = (b) => createHash('sha256').update(b).digest('hex');
 
 function googleSetup(extra = {}) {

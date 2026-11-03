@@ -24,7 +24,19 @@ Action permissions are checked by the server engine for every command, not only 
 - SQ_SALES_BRIDGE=off, SQ_DRIVE_BACKUP_ENABLED=false
 - Secret bindings: ADMIN_USERNAME, ADMIN_PASSWORD_HASH, SESSION_SECRET
 
-The stock database and bucket are independent of Sales Office. No cron triggers are configured. Login setup does not import stock, enable Sales Office synchronization or activate Drive backup.
+The stock database and bucket are independent of Sales Office. The initial login release had no cron triggers and did not enable Drive backup. Sales Office synchronization remains separate and disabled.
+
+## Google Drive and Google Sheets connection
+
+The destination is the private owner folder **rrs-nexus-terminal data**. Configure `SQ_DRIVE_BACKUP_FOLDER_ID` in the production Worker; never infer the destination from its display name. A scheduled export is a dated snapshot for reading/reporting, not a write-back integration. The existing JSONL ledger files and final manifest remain the restoration format. Original R2 attachments are excluded.
+
+Create a dedicated Google Cloud OAuth web application, enable Google Drive API and Google Sheets API, and register exactly `https://nexuspart-terminal.com/api/backup/google/callback` as an authorized redirect URI. Set `GOOGLE_DRIVE_CLIENT_ID` and `GOOGLE_DRIVE_CLIENT_SECRET` as Worker secrets and `SQ_GOOGLE_REDIRECT_URI` to that exact URL. Only the Nexus owner can initiate the Google connection from the backup page. The server requests offline Drive access for the pre-existing destination, protects authorization with session-bound single-use state and PKCE, and encrypts the refresh token in D1 using `SESSION_SECRET`; browser code and API responses must never receive the refresh token or client secret. A preconfigured `GOOGLE_DRIVE_REFRESH_TOKEN` secret remains supported.
+
+Apply `0004_google_oauth.sql` before deploying the connection feature. Preserve `SESSION_SECRET` across deployments: rotating it requires reconnecting Google. Remove OAuth query strings from Cloudflare invocation logs (`observability.redact_query_string=true`) or leave invocation logging disabled.
+
+After authorization and a successful manual export, enable `SQ_DRIVE_BACKUP_ENABLED=true` and `SQ_SHEETS_EXPORT_ENABLED=true` and register the production Cloudflare cron `0 20 * * *` (03:00 Asia/Bangkok the next day). The code's schedule string and the deployed trigger must match. Inspect the real Cloudflare schedule in addition to the page's configuration status. Verify a native Google spreadsheet and the final manifest in the destination, then inspect the recorded successful run. A configured timer alone is not evidence that Google authorization or export succeeded.
+
+For an external Google OAuth app left in Testing, Google generally expires refresh tokens after seven days for these scopes. Use the appropriate production publishing state for this owner's ongoing backup; connecting successfully once does not eliminate that expiry. Never enable billing or broader services merely to enable Drive/Sheets APIs.
 
 ## Build and release
 

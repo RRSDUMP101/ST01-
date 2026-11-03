@@ -17,11 +17,12 @@ import { db, str, flag } from './runtime.js';
 import { digest, securityEvent } from './security.js';
 import { boundedFetch, jsonObject, OutboundError, errorCode } from './outbound.js';
 import { COLUMNS, rowToCommit, commitJson } from './ledger.js';
+import { SHEETS_MIME, sheetsProjection, projectSheetsCommit, sheetsDataset, exportNativeSpreadsheet } from './sheets-export.js';
 
 const RRS = globalThis.RRS;
 const { util, core } = RRS;
 
-export const BACKUP_CRON = '40 18 * * *'; // 01:40 Asia/Bangkok, daily
+export const BACKUP_CRON = '0 20 * * *'; // 03:00 Asia/Bangkok, daily (the preceding UTC day)
 export const PART_BYTES = 4 * 1024 * 1024;
 export const FORMAT = 'rrs-stockqc-drive-backup';
 const TOKEN_URL = 'https://oauth2.googleapis.com/token';
@@ -70,6 +71,15 @@ export const MESSAGES = {
   LEASE_LOST: 'รอบสำรองนี้หมดเวลาหรือถูกแทนที่',
   LEASE_EXPIRED: 'รอบสำรองหยุดกลางทาง (หมดเวลา) – ไฟล์ในโฟลเดอร์ของรอบนี้ไม่ครบ ไม่มี manifest.json',
   INTERNAL_ERROR: 'สำรองข้อมูลไม่สำเร็จ',
+  SHEETS_DATA_TOO_LARGE: 'ข้อมูลเกินขนาดส่งออก Google Sheets ที่กำหนด รอบนี้ไม่สมบูรณ์',
+  SHEETS_CELL_TOO_LARGE: 'ข้อมูลหนึ่งช่องยาวเกินขนาด Google Sheets ที่กำหนด',
+  SHEETS_ROW_TOO_LARGE: 'ข้อมูลหนึ่งแถวใหญ่เกินขนาดส่งออก Google Sheets ที่กำหนด',
+  SHEETS_RATE_LIMITED: 'Google Sheets จำกัดจำนวนคำขอหลังลองใหม่แล้ว',
+  SHEETS_UNAVAILABLE: 'Google Sheets ไม่พร้อมใช้งานหลังลองใหม่แล้ว',
+  SHEETS_ACCESS_DENIED: 'Google Sheets ไม่อนุญาตให้เขียน – ตรวจสิทธิ์ Google และการเปิดใช้ Sheets API',
+  SHEETS_REQUEST_FAILED: 'ส่งออก Google Sheets ไม่สำเร็จ',
+  SHEETS_WRITE_NOT_CONFIRMED: 'ข้อมูลที่ Google Sheets ตอบกลับไม่ตรงกับข้อมูลที่ส่ง',
+  SHEETS_CREATE_UNCERTAIN: 'ยืนยันการสร้าง Google Sheets ไม่ได้ – รอบนี้ล้มเหลวและไม่สร้างไฟล์ซ้ำอัตโนมัติ',
 };
 const fail = (code, retryable) => new OutboundError(code, retryable);
 
@@ -266,7 +276,44 @@ function driveClient(env) {
     }
     throw lastError || fail('INTERNAL_ERROR');
   }
-  return { validateFolder, allocateId, ensureFolder, uploadFile };
+  // Native Workspace files cannot use generateIds. Create exactly once; a lost response fails this run instead of
+  // creating duplicate workbooks. INCOMPLETE in the initial name remains visible if the Worker stops mid-export.
+  async function createSpreadsheet(input) {
+    await validateDestination(input.parentId);
+    let res;
+    try {
+      res = await request(`${API}/files?fields=id`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: `INCOMPLETE - ${input.name}`, mimeType: SHEETS_MIME, parents: [input.parentId],
+          appProperties: { sqBackupRunId: input.runId, sqBackupKind: 'sheets', sqBackupStatus: 'running' } }) });
+    } catch (e) {
+      if (e instanceof OutboundError && e.retryable) throw fail('SHEETS_CREATE_UNCERTAIN');
+      throw e;
+    }
+    if (res.status >= 500) throw fail('SHEETS_CREATE_UNCERTAIN');
+    if (res.status < 200 || res.status >= 300) throw statusError(res.status);
+    const f = jsonObject(res);
+    if (!validId(f?.id)) throw fail('SHEETS_CREATE_UNCERTAIN');
+    return { id: f.id };
+  }
+  async function verifySpreadsheet(input) {
+    await validateDestination(input.parentId);
+    const f = await getFile(input.id);
+    if (!f) throw fail('FILE_NOT_FOUND');
+    requirePrivate(f);
+    if (f.mimeType !== SHEETS_MIME || !Array.isArray(f.parents) || f.parents.length !== 1 || f.parents[0] !== input.parentId
+      || f.appProperties?.sqBackupRunId !== input.runId || f.appProperties?.sqBackupKind !== 'sheets') throw fail('FILE_ID_CONFLICT');
+    return f;
+  }
+  async function markSpreadsheet(input, status) {
+    await verifySpreadsheet(input);
+    const name = status === 'complete' ? input.name : `FAILED - ${input.name}`;
+    const res = await request(`${API}/files/${encodeURIComponent(input.id)}?fields=id`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, appProperties: { sqBackupRunId: input.runId, sqBackupKind: 'sheets', sqBackupStatus: status } }) });
+    if (res.status < 200 || res.status >= 300) throw statusError(res.status);
+    const f = await verifySpreadsheet(input);
+    if (f.name !== name || f.appProperties?.sqBackupStatus !== status) throw fail('COMMIT_NOT_CONFIRMED', true);
+  }
+  return { validateFolder, allocateId, ensureFolder, uploadFile, request, createSpreadsheet, verifySpreadsheet, markSpreadsheet };
 }
 
 // ---- run bookkeeping ------------------------------------------------------------------------------------------------
@@ -331,8 +378,11 @@ export async function runBackup(env, opts) {
   }
   const rootId = str(env, 'SQ_DRIVE_BACKUP_FOLDER_ID').trim();
   const maxPart = partBytes(env);
+  const nativeSheets = flag(env, 'SQ_SHEETS_EXPORT_ENABLED');
+  const projection = nativeSheets ? sheetsProjection() : null;
+  let client, spreadsheet, spreadsheetInput;
   try {
-    const client = driveClient(env);
+    client = driveClient(env);
     await client.validateFolder(rootId);
     const top = await d.prepare('SELECT seq,hash FROM sq_commits ORDER BY seq DESC LIMIT 1').first();
     run.toSeq = top ? Number(top.seq) : 0;
@@ -375,6 +425,7 @@ export async function runBackup(env, opts) {
       for (const r of rows) {
         const c = rowToCommit(r);
         if (c.seq !== expect || c.prev !== prev || !(await commitHashOk(c))) throw fail('LEDGER_INTEGRITY');
+        if (projection) projectSheetsCommit(projection, c);
         const line = commitJson(r) + '\n';
         const n = encoder.encode(line).length;
         if (n > maxPart) throw fail('PART_TOO_LARGE');
@@ -391,6 +442,13 @@ export async function runBackup(env, opts) {
     if (lines.length) await flush();
     if (prev !== run.head) throw fail('LEDGER_INTEGRITY');
 
+    if (projection) {
+      const dataset = sheetsDataset(projection, { day, startedAt, toSeq: run.toSeq, head: run.head, runId: run.id });
+      spreadsheetInput = { name: `Nexus Part Terminal ${day} ${bangkok(started).slice(11, 16).replace(':', '')}`,
+        parentId: run.folderId, runId: run.id, heartbeat: () => saveProgress(env, run) };
+      spreadsheet = await exportNativeSpreadsheet(client, dataset, spreadsheetInput);
+    }
+
     const manifest = {
       format: FORMAT, version: 1, complete: true, runId: run.id, trigger, businessDate: day, timezone: 'Asia/Bangkok',
       startedAt, createdAt: new Date().toISOString(), service: 'rrs-stock-qc', environment: str(env, 'SQ_ENV') || 'unset',
@@ -406,6 +464,7 @@ export async function runBackup(env, opts) {
       restore: { automaticRestore: false,
         instructions: 'ตรวจขนาดและ SHA-256 ของทุกไฟล์ตาม manifest ต่อบรรทัด JSONL ตามลำดับ part แล้วตรวจด้วย RRS.reports.verifyBackup (หน้า "สำรองและกู้คืน") – ลองกู้ในระบบทดสอบที่แยกต่างหากก่อนเสมอ ห้ามเขียนทับระบบจริง' },
     };
+    if (spreadsheet) manifest.spreadsheet = spreadsheet;
     const mBytes = encoder.encode(JSON.stringify(manifest, null, 2));
     const mSha = await digest(mBytes);
     const mId = await client.allocateId();
@@ -416,8 +475,9 @@ export async function runBackup(env, opts) {
     const done = await d.prepare("UPDATE sq_backup_runs SET status='ok', error='', lease='', lease_until=0, finished_at=? WHERE id=? AND lease=? AND status='running'")
       .bind(new Date().toISOString(), run.id, run.lease).run();
     if (done.meta.changes !== 1) throw fail('LEASE_LOST');
-    return { ok: true, run: publicRun(await runRow(env, run.id)) };
+    return { ok: true, run: Object.assign(publicRun(await runRow(env, run.id)), spreadsheet ? { spreadsheet } : {}) };
   } catch (e) {
+    if (spreadsheet) await client.markSpreadsheet(Object.assign({}, spreadsheetInput, { id: spreadsheet.id }), 'failed').catch(() => {});
     const code = errorCode(e);
     await d.prepare("UPDATE sq_backup_runs SET status='failed', error=?, lease='', lease_until=0, finished_at=? WHERE id=? AND lease=? AND status='running'")
       .bind(code, new Date().toISOString(), run.id, run.lease).run();
@@ -457,7 +517,8 @@ export async function backupStatus(env) {
   const lastOk = await db(env).prepare(`SELECT ${RUN_COLUMNS} FROM sq_backup_runs WHERE status='ok' ORDER BY started_at DESC LIMIT 1`).first();
   return {
     ok: true, enabled: cfg.enabled, configured: cfg.configured, missing: cfg.missing, invalid: cfg.invalid,
-    schedule: { cron: BACKUP_CRON, time: '01:40', timezone: 'Asia/Bangkok', active: cfg.enabled && cfg.configured },
+    schedule: { cron: BACKUP_CRON, time: '03:00', timezone: 'Asia/Bangkok', active: cfg.enabled && cfg.configured },
+    nativeSheets: { enabled: flag(env, 'SQ_SHEETS_EXPORT_ENABLED'), format: 'google-sheets', snapshotOnly: true },
     partBytes: PART_BYTES,
     running: rows.some((r) => r.status === 'running' && Number(r.lease_until) > now),
     lastOk: lastOk ? publicRun(lastOk) : null,

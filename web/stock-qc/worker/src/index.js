@@ -27,6 +27,7 @@ import * as auth from './auth.js';
 import * as ledger from './ledger.js';
 import * as files from './files.js';
 import * as backup from './backup.js';
+import * as google from './google-auth.js';
 import * as sales from './sales-bridge.js';
 
 const RRS = globalThis.RRS;
@@ -140,13 +141,26 @@ async function backupRun(env, req) {
   if (session.mustChange) throw mustChangeError();
   requirePerm(await ledger.catchUp(env), session, 'backup.export', 'เฉพาะเจ้าของระบบหรือผู้มีสิทธิ์สำรองข้อมูล (backup.export) สั่งสำรองได้');
   await apiRateLimit(env, req, 'backup', session.username, 6, 60 * 60 * 1000);
-  const r = await backup.runBackup(env, { trigger: 'manual', requestedBy: session.username });
+  const r = await backup.runBackup(await google.resolvedGoogleEnv(env), { trigger: 'manual', requestedBy: session.username });
   return json(r, r.ok ? 200 : BACKUP_HTTP[r.code] || 502);
 }
 async function backupStatus(env, req) {
   const session = await auth.requireSession(env, req);
   requirePerm(await ledger.catchUp(env), session, 'backup.export', 'เฉพาะเจ้าของระบบหรือผู้มีสิทธิ์สำรองข้อมูล (backup.export) ดูสถานะได้');
-  return json(await backup.backupStatus(env));
+  const connection = await google.googleConnectionStatus(env);
+  const resolved = connection.connected ? await google.resolvedGoogleEnv(env) : { ...env, GOOGLE_DRIVE_REFRESH_TOKEN: '' };
+  return json({ ...await backup.backupStatus(resolved), google: connection });
+}
+async function googleConnect(env, req) {
+  const session = await auth.requireSession(env, req);
+  if (session.mustChange) throw mustChangeError();
+  if (!session.owner) throw new HttpError(403, 'เฉพาะเจ้าของระบบเชื่อมบัญชี Google ได้', { code: 'NO_PERMISSION' });
+  await apiRateLimit(env, req, 'google-connect', session.username, 12, 60 * 60 * 1000);
+  return google.connectGoogle(env, req, session);
+}
+async function googleCallback(env, req) {
+  const session = await auth.requireSession(env, req);
+  return google.googleCallback(env, req, session);
 }
 async function salesSync(env, req) {
   const session = await auth.requireSession(env, req);
@@ -176,7 +190,8 @@ async function health(env) {
       database = 'not_migrated';
     }
   }
-  const drive = ['GOOGLE_DRIVE_CLIENT_ID', 'GOOGLE_DRIVE_CLIENT_SECRET', 'GOOGLE_DRIVE_REFRESH_TOKEN', 'SQ_DRIVE_BACKUP_FOLDER_ID'];
+  const drive = ['GOOGLE_DRIVE_CLIENT_ID', 'GOOGLE_DRIVE_CLIENT_SECRET', 'SQ_DRIVE_BACKUP_FOLDER_ID'];
+  const googleConnection = await google.googleConnectionStatus(env);
   const salesNames = ['SQ_SALES_URL', 'SQ_SALES_CONNECTOR_ID', 'SQ_SALES_DOMESTIC_SECRET', 'SQ_SALES_EXPORT_SECRET'];
   return json({
     ok: true,
@@ -191,7 +206,7 @@ async function health(env) {
       files: !!env.BUCKET,
       page: !!env.ASSETS,
       snapshotsEvery: ledger.snapshotEvery(env),
-      driveBackup: { enabled: flag(env, 'SQ_DRIVE_BACKUP_ENABLED'), configured: drive.every((k) => !!str(env, k)), built: true },
+      driveBackup: { enabled: flag(env, 'SQ_DRIVE_BACKUP_ENABLED'), configured: googleConnection.connected && drive.every((k) => !!str(env, k)), built: true },
       salesBridge: { mode: bridgeMode(env), configured: salesNames.every((k) => !!str(env, k)), built: true },
     },
   });
@@ -215,6 +230,8 @@ async function api(req, env, url) {
     case '/api/files': return only('POST', () => uploadFile(env, req));
     case '/api/backup/run': return only('POST', () => backupRun(env, req));
     case '/api/backup/status': return only('GET', () => backupStatus(env, req));
+    case '/api/backup/google/connect': return only('POST', () => googleConnect(env, req));
+    case '/api/backup/google/callback': return only('GET', () => googleCallback(env, req));
     case '/api/sales/sync': return only('POST', () => salesSync(env, req));
     case '/api/sales/status': return only('GET', () => salesStatus(env, req));
     default: {
@@ -265,7 +282,7 @@ export default {
   async scheduled(controller, env) {
     const cron = controller && controller.cron;
     try {
-      if (cron === backup.BACKUP_CRON) await backup.scheduledBackup(env);
+      if (cron === backup.BACKUP_CRON) await backup.scheduledBackup(await google.resolvedGoogleEnv(env));
       else if (cron === sales.SYNC_CRON) await sales.syncAll(env, {});
     } catch (e) {
       console.error('stock-qc: scheduled job failed', String(cron || ''), errorCode(e));

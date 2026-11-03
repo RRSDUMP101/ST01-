@@ -12,13 +12,21 @@ ADMIN_PASSWORD_HASH=
 SESSION_SECRET=
 
 # Google Drive backup of the commits (src/backup.js): off unless SQ_DRIVE_BACKUP_ENABLED=true – manual runs too.
-# OAuth client of a Google account that owns a PRIVATE folder (not shared, not in a shared drive); the refresh token
-# needs the drive.file scope. SQ_DRIVE_BACKUP_FOLDER_ID: id of that folder. Use a staging folder for a copied deployment.
+# Use a dedicated Google web OAuth client. The owner connects from the Backup page; the server encrypts its refresh
+# token in D1 using SESSION_SECRET. Keep SESSION_SECRET stable or reconnect Google after rotating it.
+# Request full https://www.googleapis.com/auth/drive for the pre-existing private folder and inherited-sharing checks;
+# this scope also authorizes native Google Sheets operations. Enable both Drive API and Sheets API in that project.
+# SQ_GOOGLE_REDIRECT_URI: exact HTTPS origin + /api/backup/google/callback, also registered on the Google OAuth client.
+# SQ_DRIVE_BACKUP_FOLDER_ID: a PRIVATE folder owned by the connected account (not shared, not in a shared drive).
 GOOGLE_DRIVE_CLIENT_ID=
 GOOGLE_DRIVE_CLIENT_SECRET=
+# Optional legacy server secret only. A saved encrypted D1 connection takes precedence; never expose either to UI.
 GOOGLE_DRIVE_REFRESH_TOKEN=
+SQ_GOOGLE_REDIRECT_URI=
 SQ_DRIVE_BACKUP_FOLDER_ID=
 SQ_DRIVE_BACKUP_ENABLED=
+# Add a native Google Sheets snapshot alongside JSONL and manifest.json. Both switches must be true.
+SQ_SHEETS_EXPORT_ENABLED=
 # Optional, tests only: smaller JSONL parts (bytes, 1024 … 4194304; default 4 MB).
 SQ_BACKUP_PART_BYTES=
 

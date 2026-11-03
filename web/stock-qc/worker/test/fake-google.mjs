@@ -6,6 +6,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 
 const FOLDER = 'application/vnd.google-apps.folder';
+const SHEETS = 'application/vnd.google-apps.spreadsheet';
 const sha = (b) => createHash('sha256').update(b).digest('hex');
 const json = (data, status = 200, headers = {}) => new Response(JSON.stringify(data), { status, headers: Object.assign({ 'content-type': 'application/json' }, headers) });
 
@@ -39,7 +40,10 @@ export function fakeGoogle({ clientId, clientSecret, refreshToken, rootId }) {
   };
   /** Checks a create request: a generated, unused id, an existing parent folder. → error Response or null. */
   const checkCreate = (m) => {
-    if (!m || typeof m.id !== 'string' || !g.generated.has(m.id)) return json({ error: { code: 400, message: 'id was not generated' } }, 400);
+    if (m?.mimeType === SHEETS) {
+      if (m.id) return json({ error: { code: 400, message: 'native files do not support generated IDs' } }, 400);
+      m.id = 'spreadsheet' + randomBytes(12).toString('hex');
+    } else if (!m || typeof m.id !== 'string' || !g.generated.has(m.id)) return json({ error: { code: 400, message: 'id was not generated' } }, 400);
     if (g.files.has(m.id)) return json({ error: { code: 409, message: 'A file already exists with the provided ID.' } }, 409);
     const parent = g.files.get((m.parents || [])[0]);
     if (!Array.isArray(m.parents) || m.parents.length !== 1 || !parent || parent.mimeType !== FOLDER) return json({ error: { code: 404, message: 'parent not found' } }, 404);
@@ -67,8 +71,10 @@ export function fakeGoogle({ clientId, clientSecret, refreshToken, rootId }) {
 
   g.handle = async (req) => {
     const url = new URL(req.url);
-    const op = url.host === 'oauth2.googleapis.com' ? 'token' : url.pathname.startsWith('/upload/') ? 'upload'
-      : url.pathname.endsWith('/generateIds') ? 'generateIds' : req.method === 'POST' ? 'createFolder' : url.searchParams.get('alt') === 'media' ? 'media' : 'get';
+    const op = url.host === 'oauth2.googleapis.com' ? 'token' : url.host === 'sheets.googleapis.com'
+      ? url.pathname.endsWith('/values:batchUpdate') ? 'sheetValues' : url.pathname.endsWith(':batchUpdate') ? 'sheetStructure' : 'sheetGet'
+      : url.pathname.startsWith('/upload/') ? 'upload' : url.pathname.endsWith('/generateIds') ? 'generateIds'
+        : req.method === 'PATCH' ? 'patch' : req.method === 'POST' ? 'createFolder' : url.searchParams.get('alt') === 'media' ? 'media' : 'get';
     g.log.push({ op, method: req.method, path: url.pathname });
     if (g.delayMs) await new Promise((r) => setTimeout(r, g.delayMs));
     if (op === 'token') {
@@ -84,10 +90,62 @@ export function fakeGoogle({ clientId, clientSecret, refreshToken, rootId }) {
       g.tokens.add(token);
       return json({ access_token: token, expires_in: 3599, token_type: 'Bearer', scope: 'https://www.googleapis.com/auth/drive.file' });
     }
-    if (url.host !== 'www.googleapis.com') return json({ error: 'unknown host' }, 404);
+    if (!['www.googleapis.com', 'sheets.googleapis.com'].includes(url.host)) return json({ error: 'unknown host' }, 404);
     const auth = req.headers.get('authorization') || '';
     if (!auth.startsWith('Bearer ') || !g.tokens.has(auth.slice(7))) return json({ error: { code: 401, message: 'Invalid Credentials' } }, 401);
     const fault = take(op);
+    if (op.startsWith('sheet')) {
+      const id = url.pathname.split('/')[3].split(':')[0];
+      const f = g.files.get(id);
+      if (!f || f.mimeType !== SHEETS) return json({ error: 'spreadsheet not found' }, 404);
+      if (fault && !fault.commit) return json({ error: { code: fault.status } }, fault.status);
+      if (op === 'sheetGet') return json({ spreadsheetId: id, sheets: f.sheets.map((s) => ({ properties: s.properties })) });
+      const body = await req.json();
+      g.log[g.log.length - 1].body = body;
+      if (op === 'sheetStructure') {
+        for (const r of body.requests) {
+          if (r.addSheet) {
+            if (f.sheets.some((s) => s.properties.sheetId === r.addSheet.properties.sheetId || s.properties.title === r.addSheet.properties.title)) return json({ error: 'duplicate sheet' }, 400);
+            f.sheets.push({ properties: r.addSheet.properties, values: [] });
+          } else if (r.deleteSheet) f.sheets = f.sheets.filter((s) => s.properties.sheetId !== r.deleteSheet.sheetId);
+          else if (r.updateSheetProperties) Object.assign(f.sheets.find((s) => s.properties.sheetId === r.updateSheetProperties.properties.sheetId).properties, r.updateSheetProperties.properties);
+        }
+        return fault ? json({ error: { code: fault.status } }, fault.status) : json({ spreadsheetId: id });
+      }
+      if (body.valueInputOption !== 'RAW' || body.includeValuesInResponse !== true) return json({ error: 'RAW with echo required' }, 400);
+      const responses = [];
+      for (const data of body.data) {
+        const match = /^'((?:[^']|'')+)'!A(\d+)$/.exec(data.range);
+        if (!match) return json({ error: 'range' }, 400);
+        const sheet = f.sheets.find((s) => s.properties.title === match[1].replaceAll("''", "'"));
+        if (!sheet) return json({ error: 'sheet not found' }, 400);
+        const start = Number(match[2]) - 1;
+        for (let i = 0; i < data.values.length; i++) {
+          if (!data.values[i].every((v) => typeof v === 'string')) return json({ error: 'all cells must be strings' }, 400);
+          sheet.values[start + i] = data.values[i];
+        }
+        responses.push({ updatedData: { values: data.values } });
+      }
+      if (g.afterSheetWrite) g.afterSheetWrite(f);
+      // Google omits trailing empty rows/columns in returned ValueRange data.
+      for (const response of responses) {
+        const values = response.updatedData.values.map((row) => {
+          const trimmed = row.slice();
+          while (trimmed.at(-1) === '') trimmed.pop();
+          return trimmed;
+        });
+        while (values.length && values.at(-1).length === 0) values.pop();
+        response.updatedData.values = values;
+      }
+      return fault ? json({ error: { code: fault.status } }, fault.status) : json({ spreadsheetId: id, responses });
+    }
+    if (op === 'patch') {
+      if (fault && !fault.commit) return json({ error: { code: fault.status } }, fault.status);
+      const f = g.files.get(url.pathname.split('/').pop());
+      if (!f) return json({ error: 'missing file' }, 404);
+      Object.assign(f, await req.json());
+      return fault ? json({ error: { code: fault.status } }, fault.status) : json({ id: f.id });
+    }
     if (op === 'generateIds') {
       if (fault) return json({ error: { code: fault.status } }, fault.status);
       const n = Math.min(1000, Number(url.searchParams.get('count')) || 10);
@@ -113,6 +171,7 @@ export function fakeGoogle({ clientId, clientSecret, refreshToken, rootId }) {
       if (bad) return bad;
       if (fault && !fault.commit) return json({ error: { code: fault.status } }, fault.status);
       const f = newFile(m, null);
+      if (m.mimeType === SHEETS) f.sheets = [{ properties: { sheetId: 0, title: 'Sheet1' }, values: [] }];
       g.files.set(f.id, f);
       if (fault) return json({ error: { code: fault.status } }, fault.status);
       return json({ id: f.id });

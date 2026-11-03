@@ -74,6 +74,39 @@
   }
 
   // ---- Google Drive (server) ------------------------------------------------------------------------------------------------
+  const owner = (ctx) => !!(ctx.server && RRS.app && RRS.app.session && RRS.app.session.owner);
+  function googleLink(value, kind) {
+    if (typeof value !== 'string') return '';
+    try {
+      const url = new URL(value);
+      if (url.protocol !== 'https:' || url.username || url.password || url.port) return '';
+      if (kind === 'folder' && url.hostname === 'drive.google.com' && /^\/drive\/folders\/[A-Za-z0-9_-]+\/?$/.test(url.pathname)) return url.href;
+      if (kind === 'sheet' && url.hostname === 'docs.google.com' && /^\/spreadsheets\/d\/[A-Za-z0-9_-]+(?:\/.*)?$/.test(url.pathname)) return url.href;
+      if (kind === 'authorize' && url.hostname === 'accounts.google.com' && /^\/o\/oauth2\/(?:v2\/)?auth$/.test(url.pathname)) return url.href;
+    } catch (e) { /* Do not render or navigate an unrecognized provider URL. */ }
+    return '';
+  }
+  function googleReturn(ctx) {
+    if (!ctx.server || !root.location || !root.history) return false;
+    const url = new URL(root.location.href);
+    const outcome = url.searchParams.get('google');
+    const messages = {
+      connected: 'กลับจาก Google แล้ว · ตรวจสถานะการเชื่อมต่อด้านล่างก่อนสำรองข้อมูล',
+      denied: 'ยังไม่ได้เชื่อมบัญชี Google เนื่องจากไม่ได้อนุญาตสิทธิ์ ลองเชื่อมใหม่ได้เมื่อพร้อม',
+      failed: 'เชื่อมบัญชี Google ไม่สำเร็จ กรุณาลองอีกครั้ง',
+    };
+    if (!Object.prototype.hasOwnProperty.call(messages, outcome)) return false;
+    url.searchParams.delete('google');
+    root.history.replaceState(root.history.state, '', url.pathname + url.search + url.hash);
+    ctx.set({ driveConnectNotice: messages[outcome], driveConnectError: outcome !== 'connected', drive: null });
+    return true;
+  }
+  function workbookLinks(run) {
+    if (!run) return '';
+    const sheet = run.spreadsheet || run.manifest && run.manifest.spreadsheet;
+    const url = googleLink(sheet && sheet.url, 'sheet');
+    return url ? t`<a class="lnk" href="${url}" target="_blank" rel="noopener noreferrer">${sheet.name || 'เปิด Google Sheets'}</a>` : '';
+  }
   let driveLoading = false;
   async function loadDrive(ctx) {
     if (driveLoading) return;
@@ -110,30 +143,50 @@
     const runs = r.runs || [];
     const last = r.lastOk;
     const ready = r.enabled && r.configured;
+    const google = r.google || {};
+    const connected = typeof google.connected === 'boolean' ? google.connected : r.configured;
+    const connectBtn = owner(ctx) ? h.btn(v.driveConnectBusy ? 'กำลังเปิด Google…' : connected ? 'เชื่อมบัญชี Google ใหม่' : 'เชื่อมบัญชี Google',
+      { act: 'driveConnect', tone: connected ? 'ghost' : 'primary', id: 'bk-google-connect', disabled: v.driveConnectBusy || google.configured === false,
+        title: google.configured === false ? 'ให้ผู้ดูแลการติดตั้งตั้งค่าการเชื่อมต่อ Google ก่อน' : 'เลือกบัญชี Google สำหรับเก็บไฟล์สำรอง' }) : '';
+    const connection = connected
+      ? h.note('เชื่อมบัญชี Google แล้ว · ระบบจะสร้างโฟลเดอร์และไฟล์สำรองในบัญชีที่เชื่อมไว้', 'ok')
+      : h.note(google.configured === false ? 'การเชื่อม Google ยังไม่พร้อม ให้ผู้ดูแลการติดตั้งตั้งค่าก่อน' : owner(ctx)
+        ? 'ยังไม่ได้เชื่อมบัญชี Google · กด เชื่อมบัญชี Google แล้วเลือกบัญชีที่ต้องการเก็บข้อมูล'
+        : 'ยังไม่ได้เชื่อมบัญชี Google · ให้เจ้าของระบบเชื่อมบัญชีก่อน', 'warn');
     const stateNote = !r.enabled
-      ? h.note(t`<b>ยังไม่ได้ตั้งค่า</b> – ปิดการสำรองไป Google Drive อยู่ ผู้ดูแลระบบต้องเปิดใช้ (SQ_DRIVE_BACKUP_ENABLED) หลังใส่ข้อมูลบัญชี Google ครบ`, 'warn')
+      ? h.note(t`<b>ยังไม่ได้เปิดสำรองอัตโนมัติ</b> – ให้ผู้ดูแลระบบเปิดใช้หลังเชื่อมบัญชี Google แล้ว`, 'warn')
       : !r.configured
-        ? h.note(t`<b>ยังไม่ได้ตั้งค่า</b> – ข้อมูลเชื่อม Google Drive ยังไม่ครบ${(r.missing || []).length ? `: ขาด ${r.missing.join(', ')}` : ''}${(r.invalid || []).length ? ` · ไม่ถูกต้อง ${r.invalid.join(', ')}` : ''}`, 'warn')
+        ? h.note(t`<b>ยังไม่พร้อมสำรองข้อมูล</b> – ${connected ? 'การตั้งค่าปลายทางยังไม่ครบ ให้ผู้ดูแลระบบตรวจสอบ' : 'เชื่อมบัญชี Google เพื่อให้ระบบเตรียมโฟลเดอร์ปลายทาง'}`, 'warn')
         : r.running ? h.note('กำลังสำรองข้อมูลอยู่ – รอสักครู่แล้วกด ตรวจสถานะอีกครั้ง', 'info')
-          : h.note(t`เปิดใช้แล้ว – สำรองอัตโนมัติทุกวัน ${(r.schedule || {}).time || '01:40'} น. (เวลาไทย)`, 'ok');
-    const folder = last && typeof last.folderUrl === 'string' && /^https:\/\/drive\.google\.com\//.test(last.folderUrl)
-      ? t`<a class="lnk" href="${last.folderUrl}" target="_blank" rel="noopener noreferrer">เปิดโฟลเดอร์ใน Google Drive</a>` : '';
+          : h.note(t`เปิดใช้แล้ว – สำรองอัตโนมัติทุกวัน ${(r.schedule || {}).time || '03:00'} น. (เวลาไทย)`, 'ok');
+    const folderUrl = googleLink(last && last.folderUrl, 'folder');
+    const folder = folderUrl ? t`<a class="lnk" href="${folderUrl}" target="_blank" rel="noopener noreferrer">เปิดโฟลเดอร์ใน Google Drive</a>` : '';
+    const sheets = r.nativeSheets || {};
+    const sheetStatus = t`<div><label class="chk"><input type="checkbox" disabled${h.safe(sheets.enabled ? ' checked' : '')} aria-describedby="bk-sheets-help"> สร้างไฟล์ Google Sheets ในแต่ละรอบสำรอง</label>
+      <p class="hint" id="bk-sheets-help">${sheets.enabled ? 'เปิดใช้แล้ว' : 'ยังไม่ได้เปิดใช้'} · ค่านี้กำหนดโดยผู้ดูแลระบบ</p></div>
+      <p>Google Sheets เป็นสำเนาข้อมูล ณ เวลาที่สำรอง ใช้เปิดอ่านและตรวจสอบ การแก้ไขในชีตไม่ส่งกลับมาเปลี่ยนข้อมูล Nexus</p>
+      <p class="hint">ระบบยังเก็บไฟล์ประวัติ JSONL และ manifest สำหรับตรวจสอบและกู้คืนข้อมูล การกู้คืนใช้ไฟล์สำรองเหล่านี้</p>`;
+    const workbook = workbookLinks(v.driveRunResult) || workbookLinks(last);
     const facts = h.dl([
       ['สำรองสำเร็จล่าสุด', last ? `${h.fmt.dt(last.finishedAt || last.startedAt)} · ${h.fmt.num(last.commits)} รายการ` : 'ยังไม่เคยสำเร็จ'],
       ['ลายนิ้วมือของรอบล่าสุด', last && last.head ? h.code(short(last.head)) : '–'],
       ['ระบบตอนนี้', `${h.fmt.num(ctx.state.seq)} รายการ`],
+      ['เวลาสำรองประจำวัน', `${(r.schedule || {}).time || '03:00'} น. · เวลาไทย (Asia/Bangkok)`],
       last && last.toSeq != null && last.toSeq < ctx.state.seq ? ['ยังไม่ได้สำรอง', `${h.fmt.num(ctx.state.seq - last.toSeq)} รายการใหม่`] : null,
       folder ? ['ที่เก็บ', folder] : null,
+      workbook ? ['Google Sheets รอบล่าสุดที่มีลิงก์', workbook] : null,
     ]);
     const tbl = h.table({ dense: true, scroll: true, rows: runs, empty: 'ยังไม่มีรอบสำรอง', emptyText: ready ? 'กด สำรองตอนนี้ หรือรอรอบอัตโนมัติ' : 'ตั้งค่าให้ครบก่อน',
       rowCls: (x) => (x.status === 'ok' || x.status === 'running' ? '' : 'row-bad'),
       cols: [{ label: 'เริ่ม', get: (x) => h.fmt.dt(x.startedAt) }, { label: 'แบบ', get: (x) => TRIGGER[x.trigger] || x.trigger || '' },
         { label: 'ผล', render: (x) => h.badge((RUN_STATUS[x.status] || [x.status])[0], (RUN_STATUS[x.status] || [])[1] || 'muted') },
         { label: 'รายการ', num: true, key: 'commits' }, { label: 'ไฟล์ย่อย', num: true, key: 'parts' }, { label: 'ขนาด', num: true, get: (x) => (x.bytes ? bytes(x.bytes) : '') },
-        { label: 'สั่งโดย', get: (x) => x.requestedBy || '' }, { label: 'ข้อความ', get: (x) => x.message || '' }] });
+        { label: 'สั่งโดย', get: (x) => x.requestedBy || '' }, { label: 'Google Sheets', render: (x) => workbookLinks(x) || dash },
+        { label: 'ข้อความ', get: (x) => x.message || '' }] });
     const runBtn = canRun ? h.btn(r.running ? 'กำลังสำรอง…' : 'สำรองตอนนี้', { act: 'driveRun', tone: 'primary', id: 'bk-drive-run', disabled: !ready || r.running || v.driveBusy,
       title: ready ? 'สำรองข้อมูลทั้งหมดไป Google Drive ทันที' : 'ยังไม่ได้ตั้งค่า Google Drive' }) : '';
-    return h.section('สำรองอัตโนมัติไป Google Drive', t`${stateNote}${facts}${tbl}`, { id: 'bk-drive', sub: `ตรวจเมื่อ ${h.fmt.dt(d.at)}`, actions: t`${refresh}${runBtn}` });
+    return h.section('สำรองอัตโนมัติไป Google Drive', t`${v.driveConnectNotice ? h.note(v.driveConnectNotice, v.driveConnectError ? 'warn' : 'info') : ''}
+      ${connection}${stateNote}${sheetStatus}${facts}${tbl}`, { id: 'bk-drive', sub: `ตรวจเมื่อ ${h.fmt.dt(d.at)}`, actions: t`${connectBtn}${refresh}${runBtn}` });
   }
 
   const ROLLBACK = [
@@ -183,6 +236,7 @@
       return t`${k}${dl}${verify}${log}${driveView(ctx)}${plan}`;
     },
     after(ctx) {
+      if (googleReturn(ctx)) return;
       if (ctx.server && !ctx.view.drive) loadDrive(ctx);
     },
     actions: {
@@ -221,8 +275,26 @@
       driveRefresh(ctx) {
         ctx.set({ drive: null });
       },
+      async driveConnect(ctx) {
+        if (!owner(ctx) || ctx.view.driveConnectBusy) return;
+        ctx.set({ driveConnectBusy: true, driveConnectNotice: '', driveConnectError: false });
+        try {
+          const r = await ctx.api('/backup/google/connect', {});
+          const url = r.ok && googleLink(r.authorizationUrl, 'authorize');
+          if (!url) {
+            const message = r.message || ((r.errors || [])[0] || {}).message || 'เปิดการเชื่อมต่อ Google ไม่สำเร็จ กรุณาลองใหม่';
+            ctx.set({ driveConnectNotice: message, driveConnectError: true });
+            return;
+          }
+          root.location.assign(url);
+        } catch (e) {
+          ctx.set({ driveConnectNotice: 'ติดต่อระบบไม่ได้ กรุณาตรวจการเชื่อมต่อแล้วลองอีกครั้ง', driveConnectError: true });
+        } finally {
+          ctx.set({ driveConnectBusy: false });
+        }
+      },
       async driveRun(ctx) {
-        if (!ctx.server || ctx.view.driveBusy) return;
+        if (!ctx.server || !ctx.can('backup.export') || ctx.view.driveBusy) return;
         const go = await ctx.confirm({ title: 'สำรองไป Google Drive ตอนนี้', message: `ส่งข้อมูลทั้งหมด ${h.fmt.num(ctx.state.seq)} รายการไปโฟลเดอร์สำรองของบริษัท (ใช้เวลาสักครู่)`, ok: 'สำรองตอนนี้' });
         if (!go) return;
         ctx.set({ driveBusy: true });
@@ -235,7 +307,7 @@
         if (r.ok) ctx.toast(`สำรองไป Google Drive แล้ว${r.run ? ` · ${h.fmt.num(r.run.commits)} รายการ` : ''}`, 'ok');
         else if (((r.errors || [])[0] || {}).code === 'HTTP_404') ctx.toast('ยังไม่ได้ตั้งค่า – เซิร์ฟเวอร์ยังไม่มีส่วนสำรองข้อมูลไป Google Drive', 'warn');
         else ctx.toast(`สำรองไม่สำเร็จ: ${r.message || ((r.errors || [])[0] || {}).message || 'ไม่ทราบสาเหตุ'}`, 'bad');
-        ctx.set({ driveBusy: false, drive: null });
+        ctx.set({ driveBusy: false, drive: null, driveRunResult: r.ok && r.run || ctx.view.driveRunResult || null });
       },
     },
     forms: {

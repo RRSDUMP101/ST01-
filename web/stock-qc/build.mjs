@@ -26,7 +26,7 @@ const scripts = files.map((f) => {
 }).join('\n');
 
 const template = read(src('index.html'));
-const css = read(src('ui', 'styles.css'));
+const css = ['styles.css', 'redesign.css', 'product-photos.css'].filter(f => fs.existsSync(src('ui', f))).map(f => read(src('ui', f))).join('\n');
 const fragment = (config) => template.replace('/*STYLE*/', css).replace('<!--CONFIG-->', config || '').replace('<!--SCRIPTS-->', scripts);
 
 fs.mkdirSync(outDir, { recursive: true });

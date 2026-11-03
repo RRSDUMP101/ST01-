@@ -224,7 +224,7 @@
   }
 
   RRS.ui.page({
-    id: 'home', title: 'ภาพรวม', phase: 'home', order: 0,
+    id: 'home', title: 'วันนี้ต้องทำอะไร', phase: 'home', order: 0,
     render(ctx) {
       const s = ctx.state;
       const u = ctx.user;
@@ -248,11 +248,13 @@
 
       const steps = startSteps(ctx);
       const setupLeft = steps.filter((x) => !x.done).length;
-      const start = setupLeft ? h.section('เริ่มต้นใช้งาน (Phase 0)', t`<div class="steps">${steps.map((st, i) => t`<div class="step"><span class="step-n">ขั้นที่ ${i + 1}</span>
+      const start = setupLeft ? h.section('เตรียมระบบก่อนเริ่มงาน', t`<div class="steps">${steps.map((st, i) => t`<div class="step"><span class="step-n">ขั้นที่ ${i + 1}</span>
         <span>${h.link(st.label, st.page, st.view)}</span><span>${st.done ? h.badge('เสร็จแล้ว', 'ok') : h.badge('ยังไม่ทำ', 'muted')}</span></div>`)}</div>`,
       { sub: 'ทำตามลำดับนี้ก่อนบันทึกรับ–จ่ายจริง – ระบบจะซ่อนกล่องนี้เมื่อครบทุกขั้น' }) : '';
 
-      const work = myWork(ctx);
+      const allWork = myWork(ctx);
+      const projectWork = allWork.filter(w => ['setup', 'uat', 'rollout'].includes(w.page));
+      const work = allWork.filter(w => !projectWork.includes(w));
       const workTbl = work.length ? h.table({ rows: work, dense: true, cols: [
         { label: 'งาน', render: (w) => go(w.label, w.page, w.view) },
         { label: 'จำนวน', render: (w) => h.badge(h.fmt.num(w.n), w.tone) , cls: 'n' },
@@ -272,10 +274,23 @@
 
       const who = u ? t`<p class="hint">ทำรายการในชื่อ <b>${u.name}</b> · ${u.roles.map((r) => RRS.auth.ROLES[r] || r).join(', ')}${u.warehouses && u.warehouses.length ? ` · คลัง ${u.warehouses.join(', ')}` : ''}</p>`
         : h.note('ยังไม่ได้เลือกผู้ใช้ – ทุกปุ่มบันทึกจะใช้ไม่ได้จนกว่าจะเลือกหรือได้รับสิทธิ์', 'warn');
-      return t`${who}${start}${h.kpis(tiles)}
-        ${h.section('งานที่รอคุณ', workTbl, { sub: 'สร้างจากสิทธิ์ตามบทบาทของคุณ – กดชื่องานเพื่อไปทำต่อ' })}
-        ${h.section('ความคืบหน้า Phase 0–6', strip, { sub: 'นับเกณฑ์ UAT ที่ผ่านเมื่อมีตาราง UAT ไม่เช่นนั้นแสดงสิ่งที่ตั้งไว้แล้ว' })}
-        ${h.section('รายการล่าสุด', recentTbl, { actions: h.link('ดูบันทึกทั้งหมด', 'audit') })}`;
+      const quick = [
+        ['download', 'รับสินค้า', 'รับซื้อตามใบสั่งซื้อ PO', 'purchasing', { tab: 'recv' }],
+        ['upload', 'เบิกของ', 'จ่ายอะไหล่ให้งานผลิต', 'docs', { createType: 'PD' }],
+        ['arrows', 'โอนย้าย', 'ย้ายคลังและช่องเก็บ', 'docs', { createType: 'TR' }],
+        ['search', 'เช็กสต็อก', 'ค้นหาของและตำแหน่งเก็บ', 'stock', {}],
+      ];
+      const quickHtml = t`<div class="quick-actions">${quick.filter(x => RRS.ui.pages[x[3]]).map(([icon, label, sub, page, view]) => t`<a class="quick-action" href="#${page}" data-go="${page}" data-view="${JSON.stringify(view)}"><span class="quick-icon">${h.icon(icon)}</span><span><strong>${label}</strong><small>${sub}</small></span>${h.icon('chevron-right')}</a>`)}</div>`;
+      const follow = t`<div class="follow-list">${[
+        ['shield', 'ของรอตรวจ', k.holdItems, 'inspections'],
+        ['package', 'ของกักกัน', k.quarItems, 'lots'],
+        ['cart', 'บรรทัด PO เลยกำหนด', k.latePo, 'purchasing'],
+      ].map(([icon, label, n, page]) => t`<div>${go(t`${h.icon(icon)} ${label}`, page)}${h.badge(h.fmt.num(n), n ? 'warn' : 'ok')}</div>`)}</div>`;
+      return t`${who}${quickHtml}${setupLeft ? t`<details class="setup-disclosure"><summary>${h.icon('settings')} เตรียมระบบให้พร้อม · เหลือ ${setupLeft} ขั้นตอน</summary>${start}</details>` : ''}
+        <div class="home-work-grid">${h.section('งานที่รอคุณ', workTbl, { sub: 'เลือกงานเพื่อทำต่อ · แสดงตามสิทธิ์ของคุณ' })}${h.section('ต้องติดตาม', follow)}</div>
+        ${h.kpis([tiles[0], h.kpi('งานผลิตเปิดอยู่', h.fmt.num(k.jobs), h.link('ดูใบงาน', 'jobs')), h.kpi('รอตรวจ QC', h.fmt.num(k.inspections), h.link('ดูคิวตรวจ', 'inspections')), h.kpi('ร่างเอกสาร', h.fmt.num(k.drafts), h.link('ทำต่อจากร่าง', 'docs', { tab: 'draft' }))])}
+        ${h.section('รายการล่าสุด', recentTbl, { actions: h.link('ดูบันทึกทั้งหมด', 'audit') })}
+        <details class="setup-disclosure"><summary>${h.icon('file')} ความพร้อมของโครงการและเกณฑ์รับงาน${projectWork.length ? ` · ${projectWork.length} งาน` : ''}</summary><div>${projectWork.map(w => t`<p>${go(w.label, w.page, w.view)} ${h.badge(w.n, w.tone)}</p>`)}</div>${strip}</details>`;
     },
   });
 })(typeof globalThis !== 'undefined' ? globalThis : this);

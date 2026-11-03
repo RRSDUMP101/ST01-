@@ -13,6 +13,8 @@
   const { t } = h;
   const inv = RRS.inventory;
   const { util, TRANSIT, STATUS_LABEL } = RRS;
+  const photos = () => RRS.ui.productPhotos;
+  const thumbnail = (ctx, code, name) => photos() ? photos().thumbnail(ctx, code, name) : '';
 
   const HOLD = ['QC_HOLD', 'QUARANTINE', 'REWORK'];
   const STEP = 300;
@@ -59,6 +61,12 @@
     const all = inv.summary(ctx.state);
     const scoped = v.wh ? inv.summary(ctx.state, v.wh) : all;
     const inc = v.wh ? incoming(ctx.state, v.wh) : null;
+    const planned = RRS.planning && typeof RRS.planning.six === 'function' ? Object.fromEntries(RRS.planning.six(ctx.state, { wh: v.wh, today: ctx.today }).map((r) => [r.code, r])) : null;
+    const positions = {};
+    const locations = inv.locations(ctx.state, v.wh ? { wh: v.wh } : null).sort((a, b) => (a.status === 'AVAILABLE' ? 0 : 1) - (b.status === 'AVAILABLE' ? 0 : 1));
+    for (const b of locations) if (b.wh !== TRANSIT && b.qty > 0) {
+      (positions[b.code] || (positions[b.code] = new Set())).add(locText(b));
+    }
     const items = ctx.state.tables.items || {};
     const codes = new Set(Object.keys(items).concat(Object.keys(scoped), inc ? Object.keys(inc) : []));
     const q = low(v.q).trim();
@@ -69,6 +77,10 @@
       const a = all[code] || ZERO;
       const r = { code, it, AVAILABLE: s.AVAILABLE, QC_HOLD: s.QC_HOLD, QUARANTINE: s.QUARANTINE, REWORK: s.REWORK,
         transit: inc ? inc[code] || 0 : s.transit, total: s.total };
+      r.free = planned ? (planned[code] || {}).free || 0 : null;
+      r.reserved = planned ? (planned[code] || {}).reserved || 0 : null;
+      r.overReserved = planned ? (planned[code] || {}).overReserved || 0 : 0;
+      r.locations = Array.from(positions[code] || []);
       r.usable = util.round(a.AVAILABLE + a.transit);
       r.min = it ? Number(it.minQty) || 0 : 0;
       r.max = it ? Number(it.maxQty) || 0 : 0;
@@ -131,17 +143,18 @@
       id: 'stk-list', rows: rows.slice(0, limit), rowAct: 'pick', rowArg: (r) => r.code, rowCls: (r) => (r.code === v.sel ? 'sel' : ''),
       empty: 'ไม่พบสินค้าตามตัวกรอง', emptyText: 'ลองล้างตัวกรอง หรือติ๊ก แสดงสินค้าที่ไม่มียอด',
       cols: [
-        { label: 'รหัส', render: (r) => h.code(r.code) },
-        { label: 'ชื่อสินค้า', render: (r) => (r.it ? t`${r.it.name}${r.it.group ? t`<br><small class="muted">${r.it.group}</small>` : ''}` : t`<span class="muted">ไม่พบในทะเบียนสินค้า</span>`) },
-        { label: 'ใช้ได้', num: true, render: (r) => (r.AVAILABLE ? t`<b>${h.fmt.num(r.AVAILABLE)}</b>` : dash) },
-        { label: 'รอตรวจ', num: true, render: (r) => n0(r.QC_HOLD) },
-        { label: 'กักกัน', num: true, render: (r) => n0(r.QUARANTINE) },
-        { label: 'รอแก้ไข', num: true, render: (r) => n0(r.REWORK) },
+        { label: 'สินค้า', render: (r) => t`<div class="product-table-item">${thumbnail(ctx, r.code, r.it && r.it.name || r.code)}<div><b>${r.it ? r.it.name : 'ไม่พบในทะเบียนสินค้า'}</b><br>${h.code(r.code)}
+          ${r.it && r.it.group ? t`<small>${r.it.group}</small>` : ''}${r.below ? h.badge('ต่ำกว่าขั้นต่ำ', 'bad') : r.over ? h.badge('เกินขั้นสูง', 'info') : ''}</div></div>` },
+        { label: 'ที่เก็บ', render: (r) => t`${r.locations.slice(0, 2).map((x) => t`<span class="stock-location">${h.code(x)}</span>`)}${r.locations.length > 2 ? t`<small>อีก ${r.locations.length - 2} ตำแหน่ง</small>` : !r.locations.length ? dash : ''}` },
+        { label: RRS.planning ? 'พร้อมเบิก' : 'ผ่าน QC', num: true, render: (r) => t`<span class="stock-available">${h.fmt.num(r.free == null ? r.AVAILABLE : r.free)}</span><small>${r.it && r.it.baseUnit || ''}</small>
+          ${r.reserved ? t`<small>จองแล้ว ${h.fmt.num(r.reserved)}</small>` : ''}${r.overReserved ? t`<small class="stock-held-label">จองเกินของ ${h.fmt.num(r.overReserved)}</small>` : ''}` },
+        { label: 'ยังใช้ไม่ได้', num: true, render: (r) => {
+          const held = HOLD.filter((s) => r[s]);
+          return held.length ? t`<b>${h.fmt.num(util.round(r.QC_HOLD + r.QUARANTINE + r.REWORK))}</b><small class="stock-held-label">${held.map((s) => `${STATUS_LABEL[s]} ${h.fmt.num(r[s])}`).join(' · ')}</small>` : dash;
+        } },
         { label: v.wh ? 'กำลังโอนเข้า' : 'ระหว่างโอน', num: true, render: (r) => n0(r.transit) },
         { label: 'รวม', num: true, render: (r) => n0(r.total) },
-        { label: 'หน่วย', get: (r) => (r.it ? r.it.baseUnit : '') },
-        { label: 'Min / Max', num: true, render: (r) => (r.min || r.max ? `${r.min ? h.fmt.num(r.min) : '–'} / ${r.max ? h.fmt.num(r.max) : '–'}` : dash) },
-        { label: 'สถานะ', render: (r) => (r.below ? h.badge('ต่ำกว่า Min', 'bad') : r.over ? h.badge('เกิน Max', 'info') : '') },
+        { label: '', render: (r) => h.btn('ดูสินค้า', { act: 'pick', arg: r.code, tone: 'quiet', small: true, title: `ตำแหน่งและรูปของ ${r.it && r.it.name || r.code}` }) },
       ],
     });
   }
@@ -159,8 +172,7 @@
           const dest = transitDest(ctx.state, b);
           return t`${docLink(b.bin)}${dest ? t` <span class="muted">→ ${dest}</span>` : ''}`;
         } },
-        { label: 'รหัส', render: (b) => h.code(b.code) },
-        { label: 'ชื่อสินค้า', get: (b) => (items[b.code] || {}).name || '' },
+        { label: 'สินค้า', render: (b) => t`<div class="product-table-item">${thumbnail(ctx, b.code, (items[b.code] || {}).name || b.code)}<div><b>${(items[b.code] || {}).name || b.code}</b><br>${h.code(b.code)}</div></div>` },
         { label: 'สถานะ', render: (b) => h.statusBadge(b.status) },
         { label: 'ล็อต', render: (b) => b.lot || dash },
         { label: 'จำนวน', num: true, render: (b) => h.qty(b.qty, (items[b.code] || {}).baseUnit) },
@@ -177,8 +189,11 @@
     const moves = inv.history(ctx.state, { code });
     const canDraft = ctx.can('doc.draft');
     const held = HOLD.filter((k) => s[k]);
+    const planned = RRS.planning && typeof RRS.planning.six === 'function' ? RRS.planning.six(ctx.state, { code, today: ctx.today })[0] : null;
     const facts = h.dl([
-      ['ใช้ได้ (ทุกคลัง)', h.qty(s.AVAILABLE, unit)],
+      planned ? ['พร้อมเบิก (หักยอดจอง รายคลัง)', h.qty(planned.free, unit)] : null,
+      planned ? ['จองให้งานแล้ว', h.qty(planned.reserved, unit)] : null,
+      ['ผ่าน QC ทั้งหมด (รวมที่จอง)', h.qty(s.AVAILABLE, unit)],
       ['รอตรวจ / กักกัน / รอแก้ไข', t`${h.fmt.num(s.QC_HOLD)} / ${h.fmt.num(s.QUARANTINE)} / ${h.fmt.num(s.REWORK)} <span class="unit">${unit}</span>`],
       ['ระหว่างโอน', h.qty(s.transit, unit)],
       ['Min / Max', it && (Number(it.minQty) || Number(it.maxQty)) ? `${Number(it.minQty) ? h.fmt.num(it.minQty) : '–'} / ${Number(it.maxQty) ? h.fmt.num(it.maxQty) : '–'} ${unit}` : 'ไม่ได้ตั้ง'],
@@ -217,7 +232,7 @@
       ] });
     const heldNote = held.length ? h.note(t`มีของสถานะ ${held.map((k) => STATUS_LABEL[k]).join(' / ')} – เบิกหรือโอนไม่ได้จนกว่า QC จะตรวจปล่อยเป็น "ใช้ได้" (ปุ่มของแถวนั้นจึงกดไม่ได้)`, 'warn') : '';
     const head = t`${h.code(code)} ${it ? it.name : 'ไม่พบในทะเบียนสินค้า'}`;
-    return h.section(head, t`${facts}${heldNote}
+    return h.section(head, t`<div class="stock-product-overview">${photos() && it ? photos().gallery(ctx, code) : ''}<div>${facts}${heldNote}<div class="form-actions">${h.link('ข้อมูลสินค้า', 'items', { sel: code })}${h.link('ประวัติรับ–จ่าย', 'history', histView(code))}</div></div></div>
       <h3>ยอดตามตำแหน่ง</h3>${locTbl}
       ${canDraft && locs.some((b) => b.wh !== TRANSIT) ? t`<p class="hint">เบิก / โอนย้าย สร้างร่างเอกสาร 1 บรรทัดจากตำแหน่งนั้น ยังไม่ตัดยอด – ${postWho(ctx)}</p>` : ''}
       <h3>เคลื่อนไหวล่าสุด</h3>${moveTbl}
@@ -269,7 +284,7 @@
 
   RRS.ui.page({
     id: 'stock', title: 'ยอดคงเหลือ', phase: 1, order: 20,
-    sub: 'ยอดตามสินค้าและตามตำแหน่ง (คลัง / ช่องเก็บ / สถานะ / ล็อต) · คลิกแถวเพื่อดูตำแหน่งและเคลื่อนไหวล่าสุดของสินค้านั้น',
+    sub: 'ค้นหาสินค้า ดูรูปจริงและตำแหน่งจัดเก็บ แล้วเลือกเบิกหรือโอนจากของที่ใช้ได้',
     render(ctx) {
       const v = ctx.view;
       const tab = v.tab === 'loc' ? 'loc' : 'item';
@@ -288,7 +303,7 @@
       const filtered = v.q || v.wh || v.status || v.group || v.low || v.zero;
       const statusOpts = Object.keys(STATUS_LABEL).map((k) => [k, STATUS_LABEL[k]]).concat([['TRANSIT', 'ระหว่างโอน']]);
       const left = [
-        h.field({ name: 'q', label: 'ค้นหา', value: v.q, placeholder: tab === 'item' ? 'รหัส ชื่อ รหัส Express กลุ่ม…' : 'รหัส ชื่อ ช่องเก็บ ล็อต…', id: 'stk-q' }),
+        h.field({ name: 'q', label: 'ค้นหาสินค้า', value: v.q, placeholder: tab === 'item' ? 'พิมพ์รหัส หรือชื่อสินค้า…' : 'พิมพ์รหัส ชื่อ ช่องเก็บ หรือล็อต…', id: 'stk-q' }),
         h.field({ name: 'wh', label: 'คลัง', type: 'select', value: v.wh, options: h.whOptions(ctx.state), blank: 'ทุกคลัง', id: 'stk-wh' }),
         h.field({ name: 'status', label: 'สถานะ', type: 'select', value: v.status, options: statusOpts, blank: 'ทุกสถานะ', id: 'stk-status' }),
         grp.length ? h.field({ name: 'group', label: 'กลุ่ม', type: 'select', value: v.group, options: grp, blank: 'ทุกกลุ่ม', id: 'stk-group' }) : '',
@@ -309,15 +324,15 @@
           : 'รวม = ใช้ได้ + รอตรวจ + กักกัน + รอแก้ไข + ระหว่างโอน · Min/Max เทียบกับ ใช้ได้ + ระหว่างโอน รวมทุกคลัง (ของรอตรวจ/กักกัน/รอแก้ไข ไม่นับ)')
         : 'หนึ่งแถว = สินค้า + คลัง + ช่องเก็บ + สถานะ + ล็อต · จำนวนเป็นหน่วยหลัก';
       const sel = v.sel && (RRS.q.get(ctx.state, 'items', v.sel) || (inv.summary(ctx.state)[v.sel] ? v.sel : null)) ? v.sel : null;
-      // the list is wide (11 columns): it keeps the full width; the chosen item opens above it
-      return t`${kpis(ctx)}
-        ${h.note('เบิกและโอนได้เฉพาะของสถานะ "ใช้ได้" · ของ รอตรวจ / กักกัน / รอแก้ไข ยังอยู่ในคลังและนับในยอดรวม แต่เบิกหรือโอนไม่ได้ จนกว่า QC จะตรวจปล่อย', 'info')}
+      return t`<div class="stock-workspace">${kpis(ctx)}
+        <p class="stock-status-help">${h.badge(RRS.planning ? 'พร้อมเบิก' : 'ผ่าน QC', 'ok')} ${RRS.planning ? 'หักยอดจองรายคลังแล้ว · ' : ''}เลือกสินค้าเพื่อดูตำแหน่งและเบิกของ · ของรอตรวจ กักกัน และรอแก้ไขยังเบิกไม่ได้</p>
         ${h.tabs([{ id: 'item', label: 'ตามสินค้า' }, { id: 'loc', label: 'ตามตำแหน่ง' }], tab)}
-        ${h.toolbar(left, right)}
+        <div class="stock-filters">${h.toolbar(left, right)}</div>
         ${sel ? detail(ctx, sel) : ''}
-        <div>${list}${more}<p class="hint">${legend}${rows.length && !sel ? ' · คลิกแถวเพื่อดูยอดแยกตามตำแหน่ง เคลื่อนไหวล่าสุด และสร้างร่างใบเบิก/ใบโอน' : ''}</p></div>`;
+        <div>${list}${more}<p class="hint">${legend}${rows.length && !sel ? ' · เลือก ดูสินค้า เพื่อดูรูป ตำแหน่ง และสร้างใบเบิก/ใบโอน' : ''}</p></div></div>`;
     },
     after(ctx, root0) {
+      if (photos()) photos().after(ctx, root0);
       const v = ctx.view;
       const q = root0.querySelector('#stk-q');
       if (q) {

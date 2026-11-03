@@ -8,17 +8,17 @@
   const { h } = RRS.ui;
   const { t, safe } = h;
 
-  const PHASES = [
-    { n: 'home', label: 'ภาพรวม' },
-    { n: 0, label: 'Phase 0 · ขอบเขตและข้อมูลหลัก' },
-    { n: 1, label: 'Phase 1 · รับ–เบิก–โอน' },
-    { n: 2, label: 'Phase 2 · จองและเบิกให้งานผลิต' },
-    { n: 3, label: 'Phase 3 · Express และตรวจนับ' },
-    { n: 4, label: 'Phase 4 · เติมสต็อกและจัดซื้อ' },
-    { n: 5, label: 'Phase 5 · ล็อต คุณภาพ กักกัน' },
-    { n: 6, label: 'Phase 6 · รายงานและขยายผล' },
-    { n: 'sys', label: 'ระบบ' },
+  const NAV_GROUPS = [
+    { label: 'หน้าแรก', icon: 'home', ids: ['home', 'reports', 'audit'] },
+    { label: 'สต็อก', icon: 'boxes', ids: ['stock', 'items', 'warehouses', 'history', 'counts', 'offcuts'] },
+    { label: 'รับ–เบิก–โอน', icon: 'arrows', ids: ['docs', 'express'] },
+    { label: 'งานผลิต', icon: 'factory', ids: ['jobs', 'picking', 'readiness', 'boms'] },
+    { label: 'จัดซื้อ', icon: 'cart', ids: ['purchasing', 'replenish', 'suppliers'] },
+    { label: 'คุณภาพ', icon: 'shield', ids: ['inspections', 'ncrs', 'qc-plans', 'lots'] },
+    { label: 'ตั้งค่า', icon: 'settings', ids: ['users', 'backup', 'setup', 'opening', 'dictionary', 'uat', 'rollout', 'guide'] },
   ];
+  const PHASES = NAV_GROUPS;
+  const pageGroup = (id) => NAV_GROUPS.find(g => g.ids.includes(id)) || NAV_GROUPS[6];
   const MODES = {
     demo: { label: 'ข้อมูลตัวอย่าง', sub: 'เก็บในเบราว์เซอร์นี้เท่านั้น สลับผู้ใช้ทดลองได้', tone: 'warn' },
     team: { label: 'ข้อมูลทีม', sub: 'ใช้ร่วมกันทุกคนที่เปิดหน้านี้', tone: 'ok' },
@@ -453,13 +453,17 @@
   // ---- rendering ------------------------------------------------------------------------------------------------
   function navHtml(user) {
     const pages = Object.values(RRS.ui.pages);
-    const groups = PHASES.map((p) => {
-      const list = pages.filter((pg) => (pg.phase === p.n) && (!pg.perm || RRS.auth.can(user, pg.perm) || pg.showAll))
-        .sort((a, b) => a.order - b.order);
+    const groups = NAV_GROUPS.map((g) => {
+      const list = g.ids.map(id => pages.find(pg => pg.id === id)).filter(pg => pg && (!pg.perm || RRS.auth.can(user, pg.perm) || pg.showAll));
       if (!list.length) return '';
-      return t`<div class="nav-g"><p class="nav-gl">${p.label}</p>${list.map((pg) => t`<a href="#${pg.id}" data-go="${pg.id}" class="nav-a${pg.id === app.page ? ' on' : ''}"${safe(pg.id === app.page ? ' aria-current="page"' : '')}>${pg.title}${pg.badge ? safe(` <span class="nav-n">${h.esc(pg.badge(makeCtx(pg.id)) || '')}</span>`) : ''}</a>`)}</div>`;
+      const active = g.ids.includes(app.page);
+      return t`<details class="nav-group"${safe(active ? ' open' : '')}><summary class="nav-group-title${active ? ' active' : ''}">${h.icon(g.icon)}<span>${g.label}</span>${h.icon('chevron-right')}</summary><div class="nav-children">${list.map(pg => t`<a href="#${pg.id}" data-go="${pg.id}" class="nav-a${pg.id === app.page ? ' on' : ''}"${safe(pg.id === app.page ? ' aria-current="page"' : '')}>${pg.id === 'home' ? 'งานวันนี้' : pg.title}${pg.badge ? t`<span class="nav-n">${pg.badge(makeCtx(pg.id)) || ''}</span>` : ''}</a>`)}</div></details>`;
     });
-    return t`${groups}`;
+    return t`${groups}<a class="nav-help" href="#guide" data-go="guide">${h.icon('help')} คู่มือการใช้งาน</a>`;
+  }
+  function themeControls() {
+    const selected = root.document.documentElement.dataset.theme || (root.matchMedia && root.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+    return t`<div class="theme-switch" role="group" aria-label="สีหน้าจอ">${['light', 'dark'].map(theme => t`<button type="button" class="btn btn-quiet" data-act="_theme" data-arg="${theme}" aria-pressed="${selected === theme ? 'true' : 'false'}">${h.icon(theme === 'dark' ? 'moon' : 'sun')}${theme === 'dark' ? 'Dark' : 'Light'}</button>`)}</div>`;
   }
   function userChip(user) {
     if (app.mode === 'demo') {
@@ -475,10 +479,10 @@
     if (!top) return;
     const user = currentUser();
     const m = MODES[app.mode] || MODES.demo;
-    top.innerHTML = String(t`<button class="btn btn-quiet nav-toggle" data-nav-toggle="1" aria-label="เมนู" aria-expanded="${app.navOpen ? 'true' : 'false'}">☰</button>
-      <a class="brand" href="#home" data-go="home"><span class="brand-mark" aria-hidden="true">RRS</span><span class="brand-t">Stock &amp; QC</span></a>
+    top.innerHTML = String(t`<button class="btn btn-quiet nav-toggle" data-nav-toggle="1" aria-label="เมนู" aria-expanded="${app.navOpen ? 'true' : 'false'}">${h.icon('menu')}</button>
+      <a class="brand" href="#home" data-go="home"><span class="brand-mark" aria-hidden="true">N</span><span class="brand-t">NEXUS<small>PART TERMINAL</small></span></a>
       <button class="mode b-${m.tone}" data-mode-switch="1" title="${m.sub}">${m.label} ▾</button>
-      <div class="top-r">${userChip(user)}</div>`);
+      <button type="button" class="btn shell-search" data-act="_search">${h.icon('search')}<span>ค้นหาเมนูหรือสินค้า</span></button><div class="top-r">${themeControls()}${userChip(user)}</div>`);
     const nav = $('#nav');
     nav.innerHTML = String(navHtml(user));
     nav.classList.toggle('open', app.navOpen);
@@ -523,7 +527,7 @@
     const focus = root.document.activeElement;
     const keep = focus && focus.id && main.contains(focus) && /INPUT|TEXTAREA|SELECT/.test(focus.tagName)
       ? { id: focus.id, start: focus.selectionStart, end: focus.selectionEnd } : null;
-    main.innerHTML = String(t`<div class="page" data-page="${page.id}"><header class="page-h"><div><p class="eyebrow">${(PHASES.find((p) => p.n === page.phase) || {}).label || ''}</p><h1>${page.title}</h1>${page.sub ? t`<p class="page-s">${page.sub}</p>` : ''}</div></header>${html}</div>${h.lists.items(ctx.state)}${h.lists.warehouses(ctx.state)}${h.lists.bins(ctx.state)}`);
+    main.innerHTML = String(t`<div class="page" data-page="${page.id}"><header class="page-h"><div><p class="eyebrow">${pageGroup(page.id).label}</p><h1>${page.title}</h1>${page.sub ? t`<p class="page-s">${page.sub}</p>` : ''}</div></header>${html}</div>${h.lists.items(ctx.state)}${h.lists.warehouses(ctx.state)}${h.lists.bins(ctx.state)}`);
     const before = root.document.activeElement;
     if (page.after) {
       try {
@@ -604,6 +608,22 @@
 
   // ---- built-in actions (prefixed _) --------------------------------------------------------------------------------
   const builtin = {
+    _theme(button) {
+      const value = button.dataset.arg;
+      if (!['light', 'dark'].includes(value)) return;
+      root.document.documentElement.dataset.theme = value;
+      pref.set('theme', value);
+      renderChrome();
+    },
+    async _search() {
+      const values = await dialog({ title: 'ค้นหาเมนูหรือสินค้า', submit: 'ค้นหา', body: h.field({ name: 'q', label: 'ชื่อเมนู รหัส หรือชื่อสินค้า', required: true, wide: true }) });
+      if (!values) return;
+      const q = String(values.q || '').trim().toLowerCase();
+      if (!q) return;
+      const user = currentUser();
+      const pages = Object.values(RRS.ui.pages).filter(pg => (!pg.perm || RRS.auth.can(user, pg.perm) || pg.showAll) && pg.title.toLowerCase().includes(q));
+      await dialog({ title: 'ผลการค้นหา', body: t`<div class="search-results">${h.link(t`${h.icon('search')} ค้นหาสินค้า: ${values.q}`, 'stock', { q: values.q })}${pages.map(pg => h.link(t`${h.icon(pageGroup(pg.id).icon)} ${pg.title}`, pg.id))}</div>`, cancel: 'ปิด' });
+    },
     _togglePassword(button) {
       const field = root.document.getElementById(button.getAttribute('aria-controls'));
       if (!field || !['password', 'text'].includes(field.type)) return;
@@ -762,6 +782,7 @@
       }
       if (el.hasAttribute('data-go')) {
         ev.preventDefault();
+        if (el.closest('#dlg')) closeDialog(null);
         const view = el.getAttribute('data-view');
         if (view) {
           try {
@@ -862,6 +883,8 @@
   }
 
   async function boot() {
+    const theme = pref.get('theme', '');
+    if (['light', 'dark'].includes(theme)) root.document.documentElement.dataset.theme = theme;
     bind();
     app.page = pageFromHash();
     render();

@@ -33,6 +33,7 @@ import * as sales from './sales-bridge.js';
 
 const RRS = globalThis.RRS;
 const FILE_PATH_RE = /^\/api\/files\/([^/]+)$/;
+const ITEM_PHOTO_PATH_RE = /^\/api\/items\/photos\/([^/]+)$/;
 
 function methodNotAllowed(allow) {
   return json({ ok: false, error: 'ไม่รองรับวิธีเรียกนี้' }, 405, { Allow: allow });
@@ -100,6 +101,43 @@ async function downloadFile(env, req, id) {
   const session = await auth.requireSession(env, req);
   ledger.requireReader(await ledger.catchUp(env), session);
   return files.download(env, id);
+}
+
+async function itemPhotoAccess(env, req, url, bulk = false) {
+  const session = await auth.requireSession(env, req);
+  const state = await ledger.catchUp(env);
+  const user = ledger.requireReader(state, session);
+  const canEdit = !session.mustChange && (session.owner || RRS.auth.can(user, 'master.edit'));
+  if (req.method === 'POST') {
+    if (session.mustChange) throw mustChangeError();
+    if (!canEdit) throw new HttpError(403, 'บัญชีนี้ไม่มีสิทธิ์แก้ไขรูปสินค้า', { code: 'NO_PERMISSION' });
+    await apiRateLimit(env, req, 'item-photos', session.username, 120, 15 * 60 * 1000);
+  }
+  const codes = url.searchParams.getAll('code');
+  if (!codes.length || codes.length > (bulk ? 100 : 1) || codes.some((code) => !code || code.length > 512)) throw new HttpError(400, bulk ? 'ระบุรหัสสินค้า 1–100 รายการ' : 'ระบุรหัสสินค้าหนึ่งรายการ');
+  const itemIds = [];
+  for (const code of codes) {
+    const item = RRS.q.item(state, code);
+    if (!item) throw new HttpError(404, 'ไม่พบสินค้า');
+    if (!itemIds.includes(item.id)) itemIds.push(item.id);
+  }
+  return { session, itemIds, canEdit };
+}
+async function itemPhotos(env, req, url) {
+  const a = await itemPhotoAccess(env, req, url);
+  return req.method === 'POST' ? files.uploadItemPhoto(env, req, a.session, a.itemIds[0]) : files.listItemPhotos(env, a.itemIds[0], a.canEdit);
+}
+async function primaryItemPhoto(env, req, url) {
+  const a = await itemPhotoAccess(env, req, url);
+  return files.setPrimaryItemPhoto(env, req, a.itemIds[0]);
+}
+async function itemPhotoThumbnails(env, req, url) {
+  const a = await itemPhotoAccess(env, req, url, true);
+  return files.itemPhotoThumbnails(env, a.itemIds);
+}
+async function readItemPhoto(env, req, url, id) {
+  const a = await itemPhotoAccess(env, req, url);
+  return files.downloadItemPhoto(env, a.itemIds[0], id);
 }
 
 /** The owner, or an active engine user holding `perm`. */
@@ -229,6 +267,9 @@ async function api(req, env, url) {
     case '/api/command': return only('POST', () => command(env, req));
     case '/api/commits': return only('GET', () => commits(env, req, url));
     case '/api/files': return only('POST', () => uploadFile(env, req));
+    case '/api/items/photos': return ['GET', 'POST'].includes(method) ? itemPhotos(env, req, url) : methodNotAllowed('GET, POST');
+    case '/api/items/photos/primary': return only('POST', () => primaryItemPhoto(env, req, url));
+    case '/api/items/photos/thumbnails': return only('GET', () => itemPhotoThumbnails(env, req, url));
     case '/api/backup/run': return only('POST', () => backupRun(env, req));
     case '/api/backup/status': return only('GET', () => backupStatus(env, req));
     case '/api/backup/google/connect': return only('POST', () => googleConnect(env, req));
@@ -236,6 +277,8 @@ async function api(req, env, url) {
     case '/api/sales/sync': return only('POST', () => salesSync(env, req));
     case '/api/sales/status': return only('GET', () => salesStatus(env, req));
     default: {
+      const photo = ITEM_PHOTO_PATH_RE.exec(path);
+      if (photo) return only('GET', () => readItemPhoto(env, req, url, photo[1]));
       const m = FILE_PATH_RE.exec(path);
       if (m) return only('GET', () => downloadFile(env, req, m[1]));
       return json({ ok: false, error: 'ไม่พบ API นี้' }, 404);

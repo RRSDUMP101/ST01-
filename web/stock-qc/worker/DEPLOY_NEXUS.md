@@ -40,6 +40,14 @@ For an external Google OAuth app left in Testing, Google generally expires refre
 
 ## Build and release
 
+### Task workspace and product galleries (2026-11-03)
+
+The approved workspace uses seven task groups, shared outline icons, the original steel/navy and drawing-blue palette, and a local per-browser Light/Dark preference. Home prioritizes real work queues and receiving/issuing/transferring/search shortcuts. Project readiness remains available in collapsed sections. Document creation uses unsaved local selection, item cards, a read-only review and explicit confirmation; existing engine validations and approval separation remain authoritative.
+
+Apply `0005_item_photos.sql` before deploying the gallery UI. Product photos use the existing private R2 bucket and `sq_files`, with item associations in `sq_item_photos`. The server validates JPEG/PNG/WebP signatures, limits each file to 5 MiB and each item to 8 images, and atomically maintains one primary photo. Reads require an enrolled user or owner; uploads and primary changes require `master.edit` or owner authority. File contents and metadata are not written to the stock ledger. Existing Google Sheets/JSONL backup still excludes R2 photo contents and gallery metadata; keep the R2 bucket and D1 database for photo recovery. This release does not add a delete-photo control.
+
+Do not add preview/sample stock or product images to production. Gallery upload and selection are verified with synthetic data in an isolated local Worker, with no outbound provider calls. Live UI checks use the existing production records. Preserve the Google OAuth bindings, encrypted connection, backup flags and `0 20 * * *` cron when uploading the new bundle.
+
 Install the pinned worker dependencies, then run node scripts/build-mcp.mjs. This builds .deploy/worker.js with server-mode HTML, using the existing page security handler and an internal ASSETS adapter. Only / and /index.html serve application HTML; /privacy is a separate static public disclosure with no account or storage access. Browser-only artifacts are excluded. Generated output is not committed.
 
 Upload the module through authenticated Cloudflare MCP PUT /accounts/{account_id}/workers/scripts/nexuspart-terminal with multipart metadata: main_module=worker.js, compatibility date 2025-09-01, nodejs_compat, D1/R2 bindings and the variables above. Preserve existing secret bindings using keep_bindings: ["secret_text"], or pass newly provisioned secrets directly in the authenticated call without writing them to disk. Actual resource IDs stay in deployment configuration.

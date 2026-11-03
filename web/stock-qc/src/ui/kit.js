@@ -40,6 +40,9 @@
   const attr = (name, v) => (v == null || v === false ? '' : v === true ? ` ${name}` : ` ${name}="${esc(v)}"`);
   const join = (arr, sep) => new Safe(arr.filter((x) => x != null && x !== false && x !== '').map(show).join(sep || ''));
 
+  const ICONS = {"home": "M3 10 12 3l9 7M5 9v12h5v-7h4v7h5V9", "package": "m3 7 9-5 9 5v10l-9 5-9-5V7Zm0 0 9 5 9-5M12 12v10", "boxes": "M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h7v7h-7z", "arrows": "M3 7h18m-5-5 5 5-5 5M21 17H3m5-5-5 5 5 5", "factory": "M3 21V9l6 3V6l6 6V3h6v18H3ZM7 17h1m4 0h1m4 0h1", "cart": "M2 3h3l3 12h11l3-9H6M9 20h.01M18 20h.01", "shield": "m12 2 9 4v6c0 5-9 10-9 10S3 17 3 12V6l9-4Zm-5 10 3 3 7-7", "settings": "M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8ZM9 2h6l1 4 4 1 2 5-3 3 0 4-5 3-3-3-4 0-3-5 3-3 0-4 2-5Z", "search": "M21 21l-6-6M10 3a7 7 0 1 0 0 14 7 7 0 0 0 0-14", "sun": "M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8M12 1v3m0 16v3M1 12h3m16 0h3M4 4l2 2m12 12 2 2M4 20l2-2M18 6l2-2", "moon": "M20 15A9 9 0 0 1 9 3a9 9 0 1 0 11 12Z", "help": "M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20M9 9a3 3 0 1 1 5 2l-2 2v1m0 3h.01", "download": "M12 3v12m-5-5 5 5 5-5M3 16v5h18v-5", "upload": "M12 16V3m-5 5 5-5 5 5M3 16v5h18v-5", "arrow-right": "M3 12h18m-7-7 7 7-7 7", "chevron-left": "m15 5-7 7 7 7", "chevron-right": "m9 5 7 7-7 7", "image": "M3 3h18v18H3zM3 17l6-6 4 4 3-3 5 5M15 7h.01", "trash": "M3 6h18M9 6V3h6v3M6 6l1 15h10l1-15M10 10v7m4-7v7", "star": "m12 2 3 7 7 1-5 5 1 7-6-3-6 3 1-7-5-5 7-1Z", "filter": "M3 4h18l-7 8v7l-4 2v-9Z", "file": "M5 2h9l5 5v15H5V2Zm9 0v6h5M9 12h6m-6 4h6", "menu": "M3 5h18M3 12h18M3 19h18"};
+  const icon = (name) => t`<svg class="ui-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="${ICONS[name] || ICONS.package}"></path></svg>`;
+
   // ---- formatting ----------------------------------------------------------------------------------------
   const nf = (d) => new Intl.NumberFormat('th-TH', { maximumFractionDigits: d == null ? 3 : d });
   const fmt = {
@@ -318,7 +321,7 @@
       this.pages[def.id] = Object.assign({ actions: {}, forms: {}, order: 100, phase: '' }, def);
       return this.pages[def.id];
     },
-    h: { t, safe, esc, show, attr, join, fmt, badge, statusBadge, docStatus, code, qty, btn, link, table, empty, field, form,
+    h: { icon, t, safe, esc, show, attr, join, fmt, badge, statusBadge, docStatus, code, qty, btn, link, table, empty, field, form,
       tabs, kpi, kpis, section, toolbar, note, dl, lists, whOptions, binOptions, userOptions, lineEditor, parseForm, badNumbers,
       cleanLines, errors, Safe, parseCsv, readTable, mapHeader, csv, meter },
   };

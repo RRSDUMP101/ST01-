@@ -15,3 +15,77 @@ body{font-size:15px;line-height:1.65}button,input,select,textarea{font:inherit}.
 @media(max-width:1200px){.mode{display:none}.shell-search{max-width:240px}.quick-actions{grid-template-columns:repeat(2,minmax(0,1fr))}.docs-type-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.home-work-grid{grid-template-columns:1fr}.top-r .who{font-size:12px}.brand{min-width:180px}}
 @media(max-width:850px){#top{gap:8px}.brand{min-width:auto}.brand-t{font-size:17px}.shell-search{flex:0}.shell-search span{display:none}.top-r{margin-left:auto}.top-r .who>b{display:none}#main{padding:20px 16px}#nav{top:72px}.theme-switch .btn{font-size:12px}.theme-switch .ui-icon{display:none}}
 @media(max-width:600px){#top .brand-t small{font-size:9px}.brand-mark{font-size:21px;padding:8px}.top-r{gap:6px}.top-r .who .btn{font-size:11px;padding:5px}.page-h h1{font-size:24px}.quick-action{padding:14px 10px;gap:8px}.quick-action strong{font-size:16px}.quick-action small{font-size:11px}.quick-icon{width:36px;height:36px}.quick-action>.ui-icon{display:none}.docs-type-grid{grid-template-columns:1fr}.docs-steps{gap:5px}.docs-steps>span,.docs-steps>div{padding:8px;font-size:12px}.docs-footer .btn{flex:1}.home-work-grid{gap:14px}}
+
+/* Color identifies tasks; text labels and neutral utility icons remain unchanged.
+   Icon strokes contrast against their opaque badges by at least 5:1 in either theme. */
+:root {
+  --icon-receive-fg:#167447; --icon-receive-bg:#e3f3e9;
+  --icon-issue-fg:#aa4b10; --icon-issue-bg:#fff0df;
+  --icon-transfer-fg:#7346ad; --icon-transfer-bg:#f1e9fb;
+  --icon-stock-fg:#1d5d86; --icon-stock-bg:#e0edf8;
+  --icon-danger-fg:#ab3434; --icon-danger-bg:#fde9e7;
+}
+@media(prefers-color-scheme:dark) {
+  :root:not([data-theme="light"]) {
+    --icon-receive-fg:#84d7a3; --icon-receive-bg:#173e2b;
+    --icon-issue-fg:#ffc07a; --icon-issue-bg:#4d311b;
+    --icon-transfer-fg:#cdb0fa; --icon-transfer-bg:#34264d;
+    --icon-stock-fg:#8bc8f0; --icon-stock-bg:#183b52;
+    --icon-danger-fg:#ffaaa4; --icon-danger-bg:#4c2829;
+  }
+}
+:root[data-theme="dark"] {
+  --icon-receive-fg:#84d7a3; --icon-receive-bg:#173e2b;
+  --icon-issue-fg:#ffc07a; --icon-issue-bg:#4d311b;
+  --icon-transfer-fg:#cdb0fa; --icon-transfer-bg:#34264d;
+  --icon-stock-fg:#8bc8f0; --icon-stock-bg:#183b52;
+  --icon-danger-fg:#ffaaa4; --icon-danger-bg:#4c2829;
+}
+.quick-action[data-go="purchasing"],
+.docs-type-card:is([data-arg="RR"],[data-arg="FR"],[data-arg="RT"]) {
+  --task-icon-fg:var(--icon-receive-fg); --task-icon-bg:var(--icon-receive-bg);
+}
+.quick-action[data-go="docs"][data-view*='"PD"'],
+.docs-type-card:is([data-arg="PD"],[data-arg="OU"],[data-arg="RV"],[data-arg="DL"]) {
+  --task-icon-fg:var(--icon-issue-fg); --task-icon-bg:var(--icon-issue-bg);
+}
+.quick-action[data-go="docs"][data-view*='"TR"'], .docs-type-card[data-arg="TR"] {
+  --task-icon-fg:var(--icon-transfer-fg); --task-icon-bg:var(--icon-transfer-bg);
+}
+.quick-action[data-go="stock"], .docs-type-card[data-arg="AJ"] {
+  --task-icon-fg:var(--icon-stock-fg); --task-icon-bg:var(--icon-stock-bg);
+}
+.docs-type-card[data-arg="SC"] { --task-icon-fg:var(--icon-danger-fg); --task-icon-bg:var(--icon-danger-bg); }
+.quick-icon, .docs-type-icon {
+  color:var(--task-icon-fg,var(--icon-stock-fg));
+  background:var(--task-icon-bg,var(--icon-stock-bg));
+  box-shadow:inset 0 0 0 1px rgb(0 0 0 / 5%);
+}
+.docs-type-icon { display:grid; place-items:center; flex-shrink:0; }
+.quick-icon .ui-icon, .docs-type-icon .ui-icon { stroke-width:2.1; }
+.quick-action > .ui-icon { color:var(--fg-3); }
+
+/* The navigation rail stays navy in Light and Dark, so these badge colors are fixed. */
+.nav-group { --nav-icon-fg:#d1dbe8; --nav-icon-bg:#344354; }
+.nav-group:has(.nav-children > [data-go="home"]) { --nav-icon-fg:#b6c8ff; --nav-icon-bg:#263653; }
+.nav-group:has(.nav-children > [data-go="stock"]) { --nav-icon-fg:#8bc8f0; --nav-icon-bg:#183b52; }
+.nav-group:has(.nav-children > [data-go="docs"]) { --nav-icon-fg:#cdb0fa; --nav-icon-bg:#34264d; }
+.nav-group:has(.nav-children > [data-go="jobs"]) { --nav-icon-fg:#ffc07a; --nav-icon-bg:#4d311b; }
+.nav-group:has(.nav-children > [data-go="purchasing"]) { --nav-icon-fg:#7ddcd4; --nav-icon-bg:#183e42; }
+.nav-group:has(.nav-children > [data-go="inspections"]) { --nav-icon-fg:#84d7a3; --nav-icon-bg:#173e2b; }
+.nav-group-title { gap:10px; padding:10px; }
+.nav-group-title > .ui-icon:first-child {
+  width:36px; height:36px; flex-basis:36px; padding:7px; border-radius:10px;
+  color:var(--nav-icon-fg); background:var(--nav-icon-bg); stroke-width:2.1;
+  box-shadow:inset 0 0 0 1px rgb(255 255 255 / 8%);
+}
+.nav-group-title > .ui-icon:last-child { color:var(--rail-fg); background:transparent; padding:0; }
+
+/* Follow-up icons echo the preview's amber / red / blue status cues. */
+.follow-list a[data-go="inspections"] { --task-icon-fg:var(--icon-issue-fg); --task-icon-bg:var(--icon-issue-bg); }
+.follow-list a[data-go="lots"] { --task-icon-fg:var(--icon-danger-fg); --task-icon-bg:var(--icon-danger-bg); }
+.follow-list a[data-go="purchasing"] { --task-icon-fg:var(--icon-stock-fg); --task-icon-bg:var(--icon-stock-bg); }
+.follow-list a > .ui-icon {
+  width:36px; height:36px; flex-basis:36px; padding:7px; border-radius:9px;
+  color:var(--task-icon-fg,var(--icon-stock-fg)); background:var(--task-icon-bg,var(--icon-stock-bg)); stroke-width:2.1;
+}

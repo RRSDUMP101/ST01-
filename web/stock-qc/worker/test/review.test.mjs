@@ -173,12 +173,12 @@ test('a commit that would write a row key like __proto__ / constructor is refuse
 });
 
 test('engine exceptions are answered with a Thai message, never JavaScript internals', async () => {
-  const cases = [['settings.update', { patch: 5 }], ['user.upsert', { id: 'X1', name: 'x', roles: 'admin' }], ['master.import', { items: 'x' }]];
-  for (const [kind, payload] of cases) {
+  const cases = [['settings.update', { patch: 5 }, 'INTERNAL'], ['user.upsert', { id: 'X1', name: 'x', roles: 'admin' }, 'BAD_VALUE'], ['master.import', { items: 'x' }, 'INTERNAL']];
+  for (const [kind, payload, code] of cases) {
     const r = await s.cmd(owner, kind, payload);
     assert.equal(r.status, 422, kind);
     const e = r.body.errors[0];
-    assert.equal(e.code, 'INTERNAL');
+    assert.equal(e.code, code);
     assert.doesNotMatch(e.message, /operator|is not a function|Cannot|reading|undefined|\(p\.|TypeError/, `${kind}: ${e.message}`);
     assert.match(e.message, /[฀-๿]/, 'Thai message');
   }

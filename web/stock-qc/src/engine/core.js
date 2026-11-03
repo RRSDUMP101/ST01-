@@ -211,6 +211,8 @@
       'purchasing_lead', 'accounting', 'qc', 'qc_lead'],
     'backup.export': ['manager', 'accounting'],
     'backup.restore': [],
+    'files.upload': ['manager', 'store', 'store_lead', 'planner', 'production', 'engineering', 'purchasing',
+      'purchasing_lead', 'accounting', 'qc', 'qc_lead'],
   };
   const PERM_LABELS = {
     'settings.edit': 'แก้ค่าตั้งระบบ', 'users.manage': 'จัดการผู้ใช้', 'master.edit': 'แก้ข้อมูลหลัก', 'bom.approve': 'อนุมัติ BOM',
@@ -224,23 +226,34 @@
     'po.close': 'ปิด PO', 'qc.plan': 'ทำแผนตรวจ', 'qc.planApprove': 'อนุมัติแผนตรวจ', 'qc.inspect': 'บันทึกผลตรวจ QC',
     'qc.release': 'ปล่อยผ่าน QC', 'qc.quarantine': 'กักกันล็อต', 'ncr.disposition': 'ตัดสิน NCR', 'ncr.useAsIs': 'อนุมัติใช้ตามสภาพ',
     'lot.manage': 'จัดการล็อต/ใบรับรอง', 'offcut.manage': 'จัดการเศษเหล็ก', 'uat.record': 'บันทึกผลทดสอบรับงาน',
-    'backup.export': 'สำรองข้อมูล', 'backup.restore': 'กู้คืนข้อมูล',
+    'backup.export': 'สำรองข้อมูล', 'backup.restore': 'กู้คืนข้อมูล', 'files.upload': 'อัปโหลดไฟล์แนบ',
   };
   const auth = { ROLES, PERMS, PERM_LABELS };
   auth.definePerm = function definePerm(perm, roles, label) {
     PERMS[perm] = roles.slice();
     if (label) PERM_LABELS[perm] = label;
   };
+  /** Missing/null permissions keeps historical role defaults. An explicit map is a complete grant list. */
+  auth.hasExplicitPermissions = (user) => !!user && user.permissions != null;
   /** Can this user row do `perm` (optionally in warehouse `wh`)? */
   auth.can = function can(user, perm, wh) {
     if (!user || user.active === false) return false;
+    if (!Object.prototype.hasOwnProperty.call(PERMS, perm)) return false;
     const roles = user.roles || [];
-    let ok = roles.indexOf('admin') >= 0 || (PERMS[perm] || []).some((r) => roles.indexOf(r) >= 0);
+    const explicit = auth.hasExplicitPermissions(user);
+    const grants = user.permissions;
+    // Bad imported/legacy maps fail closed; inherited properties and truthy strings are never grants.
+    const granted = explicit && grants && typeof grants === 'object' && !Array.isArray(grants)
+      && [Object.prototype, null].includes(Object.getPrototypeOf(grants))
+      && Object.prototype.hasOwnProperty.call(grants, perm) && grants[perm] === true;
+    let ok = roles.indexOf('admin') >= 0 || (explicit ? !!granted : (PERMS[perm] || []).some((r) => roles.indexOf(r) >= 0));
     if (ok && wh && user.warehouses && user.warehouses.length && roles.indexOf('admin') < 0) {
       ok = user.warehouses.indexOf(wh) >= 0 || wh === TRANSIT;
     }
     return ok;
   };
+  /** Effective action grants, independent of warehouse selection, for the permission editor. */
+  auth.permissionsFor = (user) => Object.fromEntries(Object.keys(PERMS).map((perm) => [perm, auth.can(user, perm)]));
   auth.rolesFor = (perm) => ['admin'].concat(PERMS[perm] || []);
   RRS.auth = auth;
 

@@ -157,14 +157,19 @@ export async function catchUp(env) {
   }
 }
 
-/** The engine `users` row bound to this login account (accountId === username), or null. */
+/** Login names are case-insensitive; ambiguous legacy bindings fail closed. */
 export function engineUserFor(state, username) {
   const users = (state && state.tables.users) || {};
+  const key = String(username || '').toLowerCase();
+  let match = null;
   for (const id in users) {
     const u = users[id];
-    if (u && u.accountId && u.accountId === username) return u;
+    if (u && u.accountId && String(u.accountId).toLowerCase() === key) {
+      if (match) throw new HttpError(403, 'บัญชีนี้ผูกกับผู้ใช้ซ้ำ กรุณาให้ผู้ดูแลแก้ไข', { code: 'AMBIGUOUS_ACCOUNT' });
+      match = u;
+    }
   }
-  return null;
+  return match;
 }
 export function hasEngineUsers(state) {
   return Object.keys((state && state.tables.users) || {}).length > 0;

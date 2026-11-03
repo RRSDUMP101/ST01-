@@ -78,19 +78,18 @@ async function credentials(env, req) {
   if (session.mustChange) throw mustChangeError();
   if (!session.owner) {
     const user = ledger.engineUserFor(await ledger.catchUp(env), session.username);
-    if (!user || user.active === false || !RRS.auth.can(user, 'users.manage')) {
-      throw new HttpError(403, 'เฉพาะเจ้าของระบบหรือผู้ดูแลระบบ (สิทธิ์ users.manage) จัดการบัญชีเข้าระบบได้');
+    if (!user || user.active === false || !(user.roles || []).includes('admin')) {
+      throw new HttpError(403, 'เฉพาะเจ้าของระบบหรือผู้ดูแลระบบจัดการบัญชีและรหัสผ่านได้');
     }
   }
-  return auth.setCredentials(env, req, session);
+  return req.method === 'GET' ? auth.listCredentials(env) : auth.setCredentials(env, req, session);
 }
 
 async function uploadFile(env, req) {
   const session = await auth.requireSession(env, req);
   if (session.mustChange) throw mustChangeError();
   const user = ledger.requireReader(await ledger.catchUp(env), session);
-  // Read-only accounts look but do not add files (Sales Office writeAccess).
-  if (!session.owner && !(user.roles || []).some((r) => r !== 'viewer')) throw new HttpError(403, 'สิทธิ์นี้ดูข้อมูลได้อย่างเดียว อัปโหลดไฟล์ไม่ได้');
+  if (!session.owner && !RRS.auth.can(user, 'files.upload')) throw new HttpError(403, 'บัญชีนี้ไม่มีสิทธิ์อัปโหลดไฟล์');
   await apiRateLimit(env, req, 'files', session.username, 120, 15 * 60 * 1000);
   return files.upload(env, req, session);
 }
@@ -209,7 +208,7 @@ async function api(req, env, url) {
     case '/api/auth/logout': return only('POST', () => auth.logout(env, req));
     case '/api/auth/session': return only('GET', () => sessionInfo(env, req));
     case '/api/auth/password': return only('POST', () => auth.changePassword(env, req));
-    case '/api/admin/credentials': return only('POST', () => credentials(env, req));
+    case '/api/admin/credentials': return ['GET', 'POST'].includes(method) ? credentials(env, req) : methodNotAllowed('GET, POST');
     case '/api/admin/records': return only('POST', () => records(env, req));
     case '/api/command': return only('POST', () => command(env, req));
     case '/api/commits': return only('GET', () => commits(env, req, url));

@@ -136,10 +136,10 @@ test('the owner password is set only in the Worker secret, not through the API',
   assert.equal((await s.callJson('/api/auth/session', { cookie: owner })).status, 200);
 });
 
-test('credentials: owner or users.manage only; turning an account off ends its sessions; input is checked', async () => {
+test('credentials: owner or engine admin only; turning an account off ends its sessions; input is checked', async () => {
   const owner = await s.ownerLogin({ ip: '192.0.2.70' });
   const clerk = await s.account(owner, 'clerk.two');
-  // no engine user with users.manage → refused
+  // no engine administrator → refused
   const refused = await s.callJson('/api/admin/credentials', { cookie: clerk.cookie, body: { username: 'someone.else', password: tempPassword() } });
   assert.equal(refused.status, 403);
   // turn off → session ends, login refused; on again → login works, password unchanged
@@ -167,7 +167,7 @@ test('credentials: owner or users.manage only; turning an account off ends its s
     const r = await s.callJson('/api/admin/credentials', { cookie: owner, body });
     assert.equal(r.status, 400, JSON.stringify(body));
   }
-  // an engine admin (users.manage) who is not the owner may manage accounts too
+  // an engine admin who is not the owner may manage accounts too
   await s.ok(owner, 'system.bootstrap', { name: 'เจ้าของ', userId: 'ADMIN' });
   const second = await s.account(owner, 'second.admin');
   await s.ok(owner, 'user.upsert', { id: 'ADMIN2', name: 'ผู้ดูแลคนที่สอง', roles: ['admin'], accountId: 'second.admin' });

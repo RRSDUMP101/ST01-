@@ -19,7 +19,8 @@
     label: 'ผู้ใช้และบทบาท', phase: 0, key: 'id',
     fields: [['id', 'text', 'รหัสผู้ใช้'], ['name', 'text', 'ชื่อ'], ['roles', 'list', 'บทบาท'],
       ['warehouses', 'list', 'คลังที่ทำรายการได้ (ว่าง = ทุกคลัง)'], ['active', 'bool', 'ใช้งาน'],
-      ['accountId', 'text', 'บัญชีเข้าระบบที่ผูกไว้']],
+      ['accountId', 'text', 'บัญชีเข้าระบบที่ผูกไว้'], ['position', 'text', 'ตำแหน่ง'],
+      ['permissions', 'json', 'สิทธิ์รายข้อ (ว่าง = ตามบทบาท)']],
   });
   schema.define('warehouses', {
     label: 'คลัง', phase: 0, key: 'code',
@@ -118,8 +119,10 @@
       const id = util.normCode(p.userId || 'ADMIN');
       const name = util.trim(p.name);
       if (!name) return tx.error('REQUIRED', 'กรอกชื่อผู้ดูแลระบบ', { field: 'name' });
+      const accountId = util.trim(p.accountId);
+      if (accountId && (util.badKey(accountId) || reservedAccountNames.has(accountId.toLowerCase()))) return tx.error('BAD_KEY', 'ชื่อบัญชีนี้ใช้ไม่ได้', { field: 'accountId' });
       tx.put('settings', 'main', Object.assign(RRS.defaultSettings(), { id: 'main', company: util.trim(p.company) }));
-      tx.put('users', id, { id, name, roles: ['admin'], warehouses: [], active: true, accountId: p.accountId || '' });
+      tx.put('users', id, { id, name, roles: ['admin'], warehouses: [], active: true, accountId });
       for (const k of KPI_DEFAULTS) tx.put('kpis', k.id, Object.assign({ baseline: null, target: null, measuredOn: '', note: '' }, k));
       for (const qn of QUESTIONS) tx.put('decisions', qn.id, { id: qn.id, answer: '', decidedBy: '', decidedOn: '', status: 'open', recordedBy: '' });
       tx.summary = `เริ่มระบบ ผู้ดูแล ${name}`;
@@ -162,6 +165,9 @@
     if (p.create === true && tx.get(table, key)) return tx.error('DUPLICATE', `${label} ${key} มีอยู่แล้ว – เปิดรายการเดิมเพื่อแก้ไขแทน`, where);
     return true;
   }
+
+  const reservedAccountNames = new Set(Object.getOwnPropertyNames(Object.prototype).concat(['prototype']).map((v) => v.toLowerCase()));
+  const sameAccount = (a, b) => String(a || '').toLowerCase() === String(b || '').toLowerCase();
   RRS.master_codeOk = codeOk;
 
   define('user.upsert', {
@@ -173,23 +179,60 @@
       if (!createOnly(tx, p, 'users', id, 'ผู้ใช้', { field: 'id' })) return;
       const name = util.trim(p.name);
       if (!name) return tx.error('REQUIRED', 'กรอกชื่อ', { field: 'name' });
-      const roles = (p.roles || []).filter((r) => auth.ROLES[r]);
+      if (p.roles != null && !Array.isArray(p.roles)) return tx.error('BAD_VALUE', 'บทบาทต้องเป็นรายการ', { field: 'roles' });
+      const roles = (p.roles || []).filter((r) => Object.prototype.hasOwnProperty.call(auth.ROLES, r));
       if (!roles.length) return tx.error('REQUIRED', 'เลือกอย่างน้อย 1 บทบาท', { field: 'roles' });
+      if (p.warehouses != null && !Array.isArray(p.warehouses)) return tx.error('BAD_VALUE', 'คลังต้องเป็นรายการ', { field: 'warehouses' });
       const whs = (p.warehouses || []).map(util.normCode).filter(Boolean);
       for (const w of whs) if (!tx.get('warehouses', w)) return tx.error('NOT_FOUND', `ไม่พบคลัง ${w}`, { field: 'warehouses' });
       const active = bool(p.active, true);
       const prev = tx.get('users', id);
+      let permissions = prev && prev.permissions != null ? util.clone(prev.permissions) : null;
+      if (p.permissions !== undefined) {
+        if (p.permissions === null) permissions = null;
+        else {
+          if (typeof p.permissions !== 'object' || Array.isArray(p.permissions)
+            || ![Object.prototype, null].includes(Object.getPrototypeOf(p.permissions))) {
+            return tx.error('BAD_VALUE', 'สิทธิ์ต้องเป็นรายการสิทธิ์ที่อนุญาต หรือเลือกตามบทบาท', { field: 'permissions' });
+          }
+          permissions = {};
+          for (const [perm, allowed] of Object.entries(p.permissions)) {
+            if (!Object.prototype.hasOwnProperty.call(auth.PERMS, perm) || typeof allowed !== 'boolean') {
+              return tx.error('BAD_VALUE', `สิทธิ์ไม่ถูกต้อง: ${perm}`, { field: 'permissions' });
+            }
+            permissions[perm] = allowed;
+          }
+        }
+      }
+      if (p.position !== undefined && typeof p.position !== 'string') return tx.error('BAD_VALUE', 'ตำแหน่งต้องเป็นข้อความ', { field: 'position' });
+      const position = p.position === undefined ? (prev && prev.position || '') : util.trim(p.position);
+      if (position.length > 120) return tx.error('BAD_VALUE', 'ตำแหน่งยาวได้ไม่เกิน 120 ตัวอักษร', { field: 'position' });
       if (prev && prev.roles.indexOf('admin') >= 0 && (roles.indexOf('admin') < 0 || !active)) {
         const admins = tx.all('users', (u) => u.active !== false && u.roles.indexOf('admin') >= 0 && u.id !== id);
         if (!admins.length) return tx.error('LAST_ADMIN', 'ต้องมีผู้ดูแลระบบที่ใช้งานอย่างน้อย 1 คน');
       }
       const accountId = util.trim(p.accountId);
-      if (accountId && util.badKey(accountId)) return tx.error('BAD_KEY', `ชื่อบัญชี "${accountId}" ใช้ไม่ได้`, { field: 'accountId' });
+      if (accountId && (util.badKey(accountId) || reservedAccountNames.has(accountId.toLowerCase()))) return tx.error('BAD_KEY', `ชื่อบัญชี "${accountId}" ใช้ไม่ได้`, { field: 'accountId' });
       if (accountId) {
-        const other = tx.all('users', (u) => u.accountId === accountId && u.id !== id)[0];
+        const other = tx.all('users', (u) => u.accountId && sameAccount(u.accountId, accountId) && u.id !== id)[0];
         if (other) return tx.error('DUPLICATE', `บัญชีนี้ผูกกับผู้ใช้ ${other.name} แล้ว`, { field: 'accountId' });
       }
-      tx.put('users', id, { id, name, roles, warehouses: whs, active, accountId });
+      const next = { id, name, roles, warehouses: whs, active, accountId, position, permissions };
+      // A delegated account manager cannot manufacture stronger access by editing roles or their own grants.
+      if ((tx.user.roles || []).indexOf('admin') < 0) {
+        if (roles.indexOf('admin') >= 0 || prev && (prev.roles || []).indexOf('admin') >= 0) {
+          return tx.error('NO_PERMISSION', 'เฉพาะผู้ดูแลระบบแก้หรือกำหนดบทบาทผู้ดูแลระบบได้');
+        }
+        const stronger = [next, prev].filter(Boolean).some((target) => Object.keys(auth.PERMS)
+          .some((perm) => auth.can(Object.assign({}, target, { active: true }), perm) && !auth.can(tx.user, perm)));
+        if (stronger) return tx.error('NO_PERMISSION', 'จัดการได้เฉพาะผู้ใช้ที่มีสิทธิ์ไม่เกินสิทธิ์ของคุณ');
+        const ownWhs = tx.user.warehouses || [];
+        if (ownWhs.length && (!whs.length || whs.some((w) => ownWhs.indexOf(w) < 0)
+          || prev && (!(prev.warehouses || []).length || prev.warehouses.some((w) => ownWhs.indexOf(w) < 0)))) {
+          return tx.error('NO_PERMISSION', 'กำหนดคลังได้เฉพาะภายในขอบเขตคลังของคุณ');
+        }
+      }
+      tx.put('users', id, next);
       if (accountId && tx.get('access_requests', accountId)) {
         tx.put('access_requests', accountId, Object.assign({}, tx.get('access_requests', accountId), { status: 'DONE', userId: id }));
       }
@@ -208,7 +251,8 @@
     prepare(tx, p) {
       const accountId = util.trim(tx.ctx.via);
       if (!accountId) return tx.error('NO_ACCOUNT', 'ต้องเข้าสู่ระบบก่อนขอใช้งาน');
-      if (tx.all('users', (u) => u.accountId === accountId).length) return tx.error('ALREADY_USER', 'บัญชีนี้มีสิทธิ์ใช้งานแล้ว');
+      if (util.badKey(accountId) || reservedAccountNames.has(accountId.toLowerCase())) return tx.error('BAD_KEY', 'ชื่อบัญชีนี้ใช้ไม่ได้');
+      if (tx.all('users', (u) => u.accountId && sameAccount(u.accountId, accountId)).length) return tx.error('ALREADY_USER', 'บัญชีนี้มีสิทธิ์ใช้งานแล้ว');
       const name = util.trim(p.name);
       if (!name) return tx.error('REQUIRED', 'กรอกชื่อ', { field: 'name' });
       tx.put('access_requests', accountId, { accountId, name: name.slice(0, 60), note: util.trim(p.note).slice(0, 120), at: tx.now, status: 'OPEN' });

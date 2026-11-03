@@ -5,7 +5,7 @@ import vm from 'node:vm';
 import { readFileSync } from 'node:fs';
 
 const source = readFileSync(new URL('../src/ui/app.js', import.meta.url), 'utf8')
-  .replace('RRS.boot = boot;', 'RRS.testLogin = { builtinForms, serverSession, userChip, renderLogin, switchMode }; RRS.boot = boot;');
+  .replace('RRS.boot = boot;', 'RRS.testLogin = { builtin, builtinForms, serverSession, userChip, renderLogin, switchMode }; RRS.boot = boot;');
 
 function setup(fetcher) {
   const h = { t: (parts, ...values) => parts.map((p, i) => p + (values[i] ?? '')).join(''), safe: (x) => x,
@@ -91,4 +91,40 @@ test('login form includes accessible credential autocomplete and Sales Office id
   assert.match(main.innerHTML, /aria-live="polite"/);
   assert.match(main.innerHTML, /RRS Sales Office/);
   assert.doesNotMatch(main.innerHTML, /_toDemo|data-mode-switch/);
+});
+
+test('independent Nexus login explains case-insensitive usernames and keeps staff password management', () => {
+  const f = setup(async () => null);
+  f.app.authProvider = 'local';
+  f.app.session = { username: 'staff', owner: false };
+  const main = { innerHTML: '', querySelector: () => null };
+  f.api.renderLogin(main);
+  assert.match(main.innerHTML, /ใช้บัญชี Nexus Part Terminal/);
+  assert.match(main.innerHTML, /ไม่แยกตัวพิมพ์ใหญ่–เล็ก/);
+  assert.doesNotMatch(main.innerHTML, /Sales Office/);
+  assert.match(main.innerHTML, /aria-controls="login-pass" aria-pressed="false"/);
+  assert.match(String(f.api.userChip(null)), /เปลี่ยนรหัสผ่าน/);
+  f.app.session.owner = true;
+  assert.doesNotMatch(String(f.api.userChip(null)), /เปลี่ยนรหัสผ่าน/);
+});
+
+test('show/hide password preserves value and caret without storing either in application state', () => {
+  const f = setup(async () => null);
+  const input = { type: 'password', value: 'temporary-only-value', selectionStart: 3, selectionEnd: 9, selectionDirection: 'backward',
+    focus() { this.focused = true; }, setSelectionRange(start, end, direction) { Object.assign(this, { selectionStart: start, selectionEnd: end, selectionDirection: direction }); } };
+  const attrs = { 'aria-controls': 'login-pass' };
+  const button = { getAttribute: (name) => attrs[name], setAttribute: (name, value) => { attrs[name] = value; }, textContent: 'แสดง' };
+  f.root.document.getElementById = (id) => id === 'login-pass' ? input : null;
+  f.api.builtin._togglePassword(button);
+  assert.equal(input.type, 'text');
+  assert.equal(attrs['aria-pressed'], 'true');
+  assert.equal(attrs['aria-label'], 'ซ่อนรหัสผ่าน');
+  assert.equal(input.selectionStart, 3);
+  assert.equal(input.selectionEnd, 9);
+  assert.equal(input.selectionDirection, 'backward');
+  f.api.builtin._togglePassword(button);
+  assert.equal(input.type, 'password');
+  assert.equal(input.value, 'temporary-only-value');
+  assert.equal(attrs['aria-pressed'], 'false');
+  assert.equal(JSON.stringify(f.app).includes(input.value), false);
 });

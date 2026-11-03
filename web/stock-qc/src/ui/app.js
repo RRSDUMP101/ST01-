@@ -22,7 +22,7 @@
   const MODES = {
     demo: { label: 'ข้อมูลตัวอย่าง', sub: 'เก็บในเบราว์เซอร์นี้เท่านั้น สลับผู้ใช้ทดลองได้', tone: 'warn' },
     team: { label: 'ข้อมูลทีม', sub: 'ใช้ร่วมกันทุกคนที่เปิดหน้านี้', tone: 'ok' },
-    server: { label: 'เซิร์ฟเวอร์', sub: 'Cloudflare D1/R2 แบบเดียวกับ Sales Office', tone: 'ok' },
+    server: { label: 'Nexus Part Terminal', sub: 'บัญชีและข้อมูล Nexus Part Terminal', tone: 'ok' },
   };
   const DEMO_KEY = 'rrs-stockqc-demo-v1';
 
@@ -177,7 +177,7 @@
     return !!(el && el.closest && el.closest('#main, #dlg') && /INPUT|TEXTAREA|SELECT/.test(el.tagName) && el.type !== 'button' && el.type !== 'submit');
   }
 
-  // ---- server mode: session login like RRS Sale Office (cookie set by the Worker) ---------------------------------
+  // ---- server mode: cookie-backed Nexus accounts ----------------------------------------------------------------
   async function serverSession() {
     try {
       const r = await fetch(`${app.api}/auth/session`, { credentials: 'same-origin', headers: { accept: 'application/json' } });
@@ -466,7 +466,7 @@
       const opts = users().filter((u) => u.active !== false).map((u) => [u.id, `${u.name} · ${u.roles.map((r) => RRS.auth.ROLES[r] || r).join(', ')}`]);
       return t`<label class="who"><span class="who-l">ทำรายการในชื่อ</span><select id="who-sel" data-who="1" aria-label="เลือกผู้ใช้ทดลอง">${opts.map(([v, l]) => t`<option value="${v}"${safe(user && user.id === v ? ' selected' : '')}>${l}</option>`)}</select></label>`;
     }
-    const acct = app.mode === 'server' && app.session ? t` ${salesAuth() ? '' : h.btn('เปลี่ยนรหัสผ่าน', { act: '_password', tone: 'quiet', small: true })}${h.btn('ออกจากระบบ', { act: '_logout', tone: 'quiet', small: true })}` : '';
+    const acct = app.mode === 'server' && app.session ? t` ${salesAuth() || app.session.owner ? '' : h.btn('เปลี่ยนรหัสผ่าน', { act: '_password', tone: 'quiet', small: true })}${h.btn('ออกจากระบบ', { act: '_logout', tone: 'quiet', small: true })}` : '';
     if (!user) return t`<span class="who"><span class="who-l">ผู้ใช้</span><b>${app.mode === 'server' && app.session ? app.session.username : 'ยังไม่มีสิทธิ์'}</b>${acct}</span>`;
     return t`<span class="who"><span class="who-l">ผู้ใช้</span><b>${user.name}</b> <span class="who-r">${user.roles.map((r) => RRS.auth.ROLES[r] || r).join(', ')}</span>${acct}</span>`;
   }
@@ -558,16 +558,18 @@
         <p class="login-description">จัดการสต็อก จองของให้งานผลิต และติดตามคุณภาพในพื้นที่ทำงานเดียว</p></div>
         <ol class="login-workflow"><li><span>01</span>รับและจัดเก็บ</li><li><span>02</span>จองและเบิก</li><li><span>03</span>ตรวจและส่งต่อ</li></ol>
       </div><div class="login-panel"><div class="login-panel-content"><p class="eyebrow">ยินดีต้อนรับกลับ</p><h1 id="login-title">เข้าสู่ระบบ</h1>
-        <p class="login-subtitle">${shared ? 'ใช้ชื่อผู้ใช้และรหัสผ่านเดียวกับ RRS Sales Office' : 'ใช้บัญชีที่ผู้ดูแลระบบกำหนดให้'}</p>
+        <p class="login-subtitle">${shared ? 'ใช้ชื่อผู้ใช้และรหัสผ่านเดียวกับ RRS Sales Office' : 'ใช้บัญชี Nexus Part Terminal ที่ผู้ดูแลระบบกำหนดให้'}</p>
         <form data-form="_login" class="login-form">
           <div id="login-feedback" role="alert" aria-live="polite" class="login-feedback"${safe(app.loginError ? '' : ' hidden')}>${app.loginError || ''}</div>
           <label class="fld" for="login-user"><span>ชื่อผู้ใช้${shared ? ' Sales Office' : ''}</span>
-            <input id="login-user" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" required maxlength="100" value="${app.loginUsername || ''}"></label>
-          <label class="fld" for="login-pass"><span>รหัสผ่าน</span>
-            <input id="login-pass" name="password" type="password" autocomplete="current-password" required></label>
+            <input id="login-user" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" required maxlength="100" aria-describedby="login-user-hint" value="${app.loginUsername || ''}">
+            <small id="login-user-hint">${shared ? 'ชื่อผู้ใช้ของบัญชี Sales Office' : 'ชื่อผู้ใช้ไม่แยกตัวพิมพ์ใหญ่–เล็ก'}</small></label>
+          <div class="fld"><label for="login-pass">รหัสผ่าน</label><div class="password-field">
+            <input id="login-pass" name="password" type="password" autocomplete="current-password" required>
+            <button class="btn btn-quiet password-toggle" type="button" data-act="_togglePassword" aria-controls="login-pass" aria-pressed="false" aria-label="แสดงรหัสผ่าน">แสดง</button></div></div>
           <label class="fld login-otp" for="login-otp" id="login-otp-wrap"${safe(app.loginMfa ? '' : ' hidden')}><span>รหัสยืนยันตัวตน</span>
             <input id="login-otp" name="otp" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6"${safe(app.loginMfa ? ' required' : ' disabled')} aria-describedby="login-otp-hint">
-            <small id="login-otp-hint">กรอกรหัส 6 หลักจากแอปยืนยันตัวตนของบัญชี Sales Office</small></label>
+            <small id="login-otp-hint">กรอกรหัส 6 หลักจากแอปยืนยันตัวตน</small></label>
           <button class="btn btn-primary login-submit" type="submit">${app.loginMfa ? 'ยืนยันและเข้าสู่ระบบ' : 'เข้าสู่ระบบ'}</button>
           <p class="login-status" id="login-status" role="status" aria-live="polite"></p>
         </form>
@@ -579,7 +581,7 @@
   function renderBootstrap(main) {
     main.innerHTML = String(t`<div class="page narrow"><header class="page-h"><div><p class="eyebrow">เริ่มใช้ข้อมูลทีม</p><h1>ตั้งผู้ดูแลระบบคนแรก</h1>
       <p class="page-s">ฐานข้อมูลทีมยังว่าง บัญชีที่เปิดหน้านี้อยู่จะเป็นผู้ดูแลระบบ แล้วเพิ่มผู้ใช้คนอื่นในหน้า ผู้ใช้และสิทธิ์</p></div></header>
-      ${app.mode === 'server' ? h.note('บนเซิร์ฟเวอร์ เฉพาะบัญชีเจ้าของระบบ (ADMIN_USERNAME) เริ่มระบบได้', 'info') : ''}
+      ${app.mode === 'server' ? h.note('เฉพาะบัญชีเจ้าของระบบเริ่มใช้งานได้', 'info') : ''}
       ${h.form({ name: '_bootstrap', submit: 'เริ่มระบบ', body: [h.field({ name: 'name', label: 'ชื่อผู้ดูแลระบบ', required: true }), h.field({ name: 'company', label: 'ชื่อบริษัท/หน่วยงาน' })] })}</div>`);
   }
   function renderAccess(main) {
@@ -602,6 +604,18 @@
 
   // ---- built-in actions (prefixed _) --------------------------------------------------------------------------------
   const builtin = {
+    _togglePassword(button) {
+      const field = root.document.getElementById(button.getAttribute('aria-controls'));
+      if (!field || !['password', 'text'].includes(field.type)) return;
+      const start = field.selectionStart, end = field.selectionEnd, direction = field.selectionDirection;
+      const visible = field.type === 'password';
+      field.type = visible ? 'text' : 'password';
+      button.setAttribute('aria-pressed', String(visible));
+      button.setAttribute('aria-label', visible ? 'ซ่อนรหัสผ่าน' : 'แสดงรหัสผ่าน');
+      button.textContent = visible ? 'ซ่อน' : 'แสดง';
+      field.focus({ preventScroll: true });
+      if (start != null) field.setSelectionRange(start, end, direction);
+    },
     async _logout() {
       await fetch(`${app.api}/auth/logout`, { method: 'POST', credentials: 'same-origin' }).catch(() => null);
       app.session = null;
@@ -610,6 +624,7 @@
     },
     async _password() {
       if (salesAuth()) return toast('จัดการรหัสผ่านที่ RRS Sales Office', 'info');
+      if (app.session && app.session.owner) return toast('ติดต่อผู้ดูแลการติดตั้งระบบเพื่อเปลี่ยนรหัสผ่านเจ้าของระบบ', 'info');
       await dialog({ title: 'เปลี่ยนรหัสผ่าน', submit: 'เปลี่ยนรหัสผ่าน',
         body: [h.field({ name: 'current', label: 'รหัสผ่านเดิม', type: 'password', required: true, wide: true }),
           h.field({ name: 'next', label: 'รหัสผ่านใหม่ (อย่างน้อย 12 ตัว)', type: 'password', required: true, wide: true })],
@@ -757,7 +772,7 @@
       }
       const act = el.dataset.act;
       if (el.tagName === 'SELECT' || el.tagName === 'INPUT') return; // handled on change
-      if (builtin[act]) return builtin[act]();
+      if (builtin[act]) return builtin[act](el, ev);
       const page = RRS.ui.pages[app.page];
       const fn = page && page.actions[act];
       if (!fn) return;

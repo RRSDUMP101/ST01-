@@ -17,13 +17,14 @@ const GENERIC_ERROR = 'เข้าสู่ระบบไม่สำเร็
 const WINDOW_MS = 15 * 60 * 1000;
 const PER_IP = 10;
 const OVERALL = 100;
+const RESERVED_NAMES = new Set([...Object.getOwnPropertyNames(Object.prototype), 'prototype'].map((name) => name.toLowerCase()));
 
 /**
  * Names of Object.prototype (__proto__, constructor, toString, …) are never account names: an account name becomes an
  * engine row key (access_requests is keyed by it), and '__proto__' as a key would swap a state table's prototype.
  */
 export function reservedName(name) {
-  return Object.prototype.hasOwnProperty.call(Object.prototype, String(name));
+  return RESERVED_NAMES.has(String(name).toLowerCase());
 }
 /** A name that may be an account (owner included): A-Z a-z 0-9 . _ @ -, 3–100 characters, not an Object.prototype name. */
 export function validUsername(name) {
@@ -63,12 +64,12 @@ function clearedCookie() {
 
 /** The account that may log in with this username (owner or an active sq_app_users row), or null. */
 async function account(env, username) {
+  if (!validUsername(username)) return null;
   const owner = str(env, 'ADMIN_USERNAME');
-  if (owner && (await secretEqual(username, owner))) {
+  if (owner && (await secretEqual(username.toLowerCase(), owner.toLowerCase()))) {
     return { username: owner, passwordHash: str(env, 'ADMIN_PASSWORD_HASH'), owner: true, mustChange: false };
   }
-  if (!validUsername(username)) return null;
-  const u = await db(env).prepare('SELECT username,password_hash,active,must_change FROM sq_app_users WHERE username=?').bind(username).first();
+  const u = await db(env).prepare('SELECT username,password_hash,active,must_change FROM sq_app_users WHERE username=? COLLATE NOCASE').bind(username).first();
   return u && Number(u.active) === 1
     ? { username: u.username, passwordHash: u.password_hash, owner: false, mustChange: Number(u.must_change) === 1 }
     : null;
@@ -223,9 +224,23 @@ export async function changePassword(env, req) {
 }
 
 // ---- POST /api/admin/credentials {username, password?, active?} -----------------------------------------------
+/** Safe credential metadata only. The route requires the owner or an active engine administrator. */
+export async function listCredentials(env) {
+  if (salesAuth.externalAuthSelected(env)) return salesAuth.managedCredentials();
+  const owner = str(env, 'ADMIN_USERNAME');
+  const rows = await db(env).prepare('SELECT username,active,must_change,created_at,updated_at,created_by,updated_by FROM sq_app_users ORDER BY username COLLATE NOCASE').all();
+  const users = rows.results.filter((row) => row.username.toLowerCase() !== owner.toLowerCase()).map((row) => ({
+    username: row.username, active: Number(row.active) === 1, mustChange: Number(row.must_change) === 1, owner: false,
+    createdAt: row.created_at, updatedAt: row.updated_at, createdBy: row.created_by, updatedBy: row.updated_by,
+  }));
+  if (owner) users.unshift({ username: owner, active: true, mustChange: false, owner: true,
+    createdAt: null, updatedAt: null, createdBy: null, updatedBy: null });
+  return json({ ok: true, users });
+}
+
 /**
  * Create an account, set a temporary password (must_change) or turn an account on/off. The caller has already checked
- * that `session` may manage users (owner, or an engine user with users.manage). Sessions of the account end when its
+ * that `session` may manage credentials (owner, or an active engine administrator). Sessions of the account end when its
  * password is set or it is turned off.
  */
 export async function setCredentials(env, req, session) {
@@ -233,11 +248,11 @@ export async function setCredentials(env, req, session) {
   const input = await readJson(req, 4096);
   const unknown = Object.keys(input).filter((k) => ['username', 'password', 'active'].indexOf(k) < 0);
   if (unknown.length) throw new HttpError(400, `ไม่รู้จักข้อมูล: ${unknown.join(', ')}`);
-  const username = typeof input.username === 'string' ? input.username.trim() : '';
+  let username = typeof input.username === 'string' ? input.username.trim() : '';
   if (!USERNAME_RE.test(username)) throw new HttpError(400, 'ชื่อผู้ใช้ใช้ได้ A-Z a-z 0-9 . _ @ - ยาว 3–100 ตัว');
   if (reservedName(username)) throw new HttpError(400, `ใช้ชื่อ ${username} เป็นชื่อผู้ใช้ไม่ได้ (ชื่อสงวนของระบบ)`);
   const owner = str(env, 'ADMIN_USERNAME');
-  if (owner && (await secretEqual(username, owner))) {
+  if (owner && (await secretEqual(username.toLowerCase(), owner.toLowerCase()))) {
     throw new HttpError(400, 'บัญชีเจ้าของระบบสงวนไว้ ตั้งได้ที่ค่า ADMIN_USERNAME / ADMIN_PASSWORD_HASH ของเซิร์ฟเวอร์เท่านั้น');
   }
   if (input.password !== undefined && typeof input.password !== 'string') throw new HttpError(400, 'รหัสผ่านต้องเป็นข้อความ');
@@ -245,7 +260,9 @@ export async function setCredentials(env, req, session) {
   const password = input.password || '';
   if (password) checkNewPassword(password, username);
   const d = db(env);
-  const old = await d.prepare('SELECT username,active,must_change,updated_at FROM sq_app_users WHERE username=?').bind(username).first();
+  const old = await d.prepare('SELECT username,active,must_change,updated_at FROM sq_app_users WHERE username=? COLLATE NOCASE').bind(username).first();
+  // Keep the existing spelling: engine accountId, audit identity and sessions all use the persisted username.
+  if (old) username = old.username;
   if (!old && !password) throw new HttpError(400, 'ระบุรหัสผ่านสำหรับบัญชีใหม่');
   if (old && !password && input.active === undefined) throw new HttpError(400, 'ไม่มีข้อมูลที่จะเปลี่ยน');
   const active = input.active === undefined ? (old ? Number(old.active) : 1) : input.active ? 1 : 0;
@@ -257,7 +274,7 @@ export async function setCredentials(env, req, session) {
     statements.push(old
       ? d.prepare('UPDATE sq_app_users SET password_hash=?,active=?,must_change=1,updated_at=?,updated_by=? WHERE username=? AND updated_at=?')
         .bind(hash, active, iso, session.username, username, old.updated_at)
-      : d.prepare('INSERT INTO sq_app_users (username,password_hash,active,must_change,created_at,updated_at,created_by,updated_by) VALUES (?,?,?,1,?,?,?,?) ON CONFLICT(username) DO NOTHING')
+      : d.prepare('INSERT INTO sq_app_users (username,password_hash,active,must_change,created_at,updated_at,created_by,updated_by) VALUES (?,?,?,1,?,?,?,?) ON CONFLICT DO NOTHING')
         .bind(username, hash, active, iso, iso, session.username, session.username));
   } else {
     statements.push(d.prepare('UPDATE sq_app_users SET active=?,updated_at=?,updated_by=? WHERE username=? AND updated_at=?')

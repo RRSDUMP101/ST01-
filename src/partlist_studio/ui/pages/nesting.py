@@ -1521,7 +1521,8 @@ class NestingPage(QWidget):
             group.parts = parts
             for i, layout in zip(indexes, layouts):
                 group.sheets[i].placements = layout.placements
-            group.sheets = [s for s in group.sheets if s.placements]  # a sheet emptied by hand is not cut
+            # a sheet emptied by hand is not cut - the sheets added with + เพิ่มแผ่น stay (empty ones are not cut either)
+            group.sheets = [s for s in group.sheets if s.placements or group.is_extra(s)]
             for k, part in enumerate(group.parts):  # pieces added by hand: as many as are placed
                 if part.key.startswith(laser.EXTRA_KEY):
                     part.qty = sum(1 for s in group.sheets for pl in s.placements if pl.part == k)

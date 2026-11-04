@@ -1334,6 +1334,15 @@ def test_laser_add_sheets_each_size_a_new_row(window, app, monkeypatch):
     box = page.table.cellWidget(first + 1, col)
     assert box.currentText() == "เพิ่มเอง 3มม. 7.65x8ฟุต 2333x2440 · เพิ่มเอง 3 แผ่น"
     assert page.table.item(first + 1, 2).text() == "เพิ่มเอง 3มม. 7.65x8ฟุต 2333x2440"
+    # บันทึกการจัดวาง on one size: the other sheets added with it (empty ones too) stay in the plan
+    monkeypatch.setattr(page_mod.SheetEditor, "exec", lambda self: 1)
+    page.table.selectRow(first)
+    page.fill_plan()
+    group = next(g for g in page.groups if g.thickness == 3)
+    counts = {s: n for s, _c, _name, n in group.sheet_counts()}
+    assert counts["2121x2533"] == 2 and counts["2333x2440"] == 3
+    first = page._row_group.index(group)
+    assert page.table.cellWidget(first + 1, col).currentText().endswith("เพิ่มเอง 3 แผ่น")
     monkeypatch.setattr(page_mod.QInputDialog, "getInt", lambda *a, **k: (1, True))
     page._extra_picked(group, 1, "count")  # 3 -> 1 sheet
     group = next(g for g in page.groups if g.thickness == 3)

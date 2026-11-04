@@ -112,6 +112,10 @@ class NestGroup:
     def key(self) -> tuple[str, float]:
         return self.family, self.thickness
 
+    def is_extra(self, sheet: SheetLayout) -> bool:
+        """A sheet added by hand (+ เพิ่มแผ่น): it stays in the plan while empty."""
+        return any((e[2] or "") == (sheet.code or "") and same_size(e, (sheet.width, sheet.height)) for e in self.extra)
+
     @property
     def parts_area(self) -> float:
         return sum(self.parts[pl.part].area for s in self.sheets for pl in s.placements)

@@ -132,6 +132,13 @@ jobs:
           if ($p.HasExited) { throw "portable exe exited early with code $($p.ExitCode)" }
           Stop-Process -Id $p.Id
           Copy-Item "dist/portable/RRS Part List Studio Portable.exe" "RRS-PartListStudio-Portable-0.1.0.exe"
+      - name: Portable in a zip with a password (Windows) - browsers that block an unsigned .exe cannot look inside
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          # ZipCrypto: Windows Explorer opens it with the password (AES zips need 7-Zip); password: rrs
+          & "$env:ProgramFiles\7-Zip\7z.exe" a -tzip -prrs -mem=ZipCrypto "RRS-PartListStudio-Portable-password-rrs.zip" "RRS-PartListStudio-Portable-0.1.0.exe"
+          if ($LASTEXITCODE -ne 0) { throw "7z failed" }
       - name: Package (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
@@ -165,6 +172,11 @@ jobs:
         with:
           name: RRS-PartListStudio-Windows-Portable
           path: RRS-PartListStudio-Portable-0.1.0.exe
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'Windows'
+        with:
+          name: RRS-PartListStudio-Windows-Portable-password-rrs
+          path: RRS-PartListStudio-Portable-password-rrs.zip
       - uses: actions/upload-artifact@v4
         if: runner.os == 'macOS'
         with:

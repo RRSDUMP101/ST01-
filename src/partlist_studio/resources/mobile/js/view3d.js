@@ -150,11 +150,12 @@ export function loadOutline(code) {
   return cache.get(code);
 }
 
-export function Part3D({ code, height = 220, auto = true, compact = false }) {
+export function Part3D({ code, height = 220, auto = true, compact = false, flat = false }) {
   const canvas = useRef(null);
   const [data, setData] = useState(null);
   const [error, setError] = useState('');
-  const view = useRef({ yaw: -0.35, pitch: 0.85, zoom: 1, spin: auto });
+  // flat: the drawing seen from above (แบบ 2D) - drag still turns it
+  const view = useRef(flat ? { yaw: 0, pitch: 0, zoom: 1, spin: false } : { yaw: -0.35, pitch: 0.85, zoom: 1, spin: auto });
   useEffect(() => {
     let live = true;
     setData(null);
@@ -240,14 +241,15 @@ export function Part3D({ code, height = 220, auto = true, compact = false }) {
   </div>`;
 }
 
-export function PartImage({ code, height = 200 }) {
+export function PartImage({ code, height = 200, version = '' }) {
   const [url, setUrl] = useState('');
   useEffect(() => {
     let live = true;
     setUrl('');
-    api.blobUrl(`image?code=${encodeURIComponent(code)}`).then((u) => live && setUrl(u)).catch(() => {});
+    const v = version ? `&v=${encodeURIComponent(version)}` : '';  // a new photo: not the picture kept before
+    api.blobUrl(`image?code=${encodeURIComponent(code)}${v}`).then((u) => live && setUrl(u)).catch(() => {});
     return () => { live = false; };
-  }, [code]);
+  }, [code, version]);
   return url ? html`<div class="part-img" style=${`height:${height}px`}><img src=${url} alt="รูปชิ้นงาน" /></div>`
     : html`<div class="part-img loading" style=${`height:${height}px`}><span class="spinner"></span></div>`;
 }

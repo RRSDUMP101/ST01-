@@ -392,3 +392,68 @@ def test_requests_through_a_tunnel_are_from_outside(server):
     assert status == 200 and s.data.devices[-1].last_ip == "198.51.100.2 (ออนไลน์)"
     assert all(server.allow_pair_try("192.0.2.9", True) for _ in range(10))  # many addresses from outside: 30 in all
     assert not all(server.allow_pair_try(f"192.0.2.{n}", True) for n in range(30))
+
+
+# ---- รูปประกอบจริง ---------------------------------------------------------------------------------------------------
+def test_real_photo_from_the_standard_part_list_only_when_it_is_this_part(demo, tmp_path):
+    """The picture of the standard Part List shows on รูปประกอบจริง only for the part it is of: same code, same side,
+    a name like it, one part per picture; else nothing (and why). A photo taken by a phone comes first."""
+    import base64
+
+    from partlist_studio.core.company_files import ModelBOM, ModelRow
+
+    state, s = demo
+    pics = {}
+    for name in ("post_l", "shared", "wrong"):
+        pics[name] = tmp_path / f"{name}.png"
+        pics[name].write_bytes(b"\x89PNG\r\n\x1a\n" + b"x" * 50)
+    state.models = [ModelBOM("RRS-T-SET", rows=[
+        ModelRow(item_no="1", codes=["RRS-T-022-L-84"], name="เสาหลัง(ซ้าย) 84", image=str(pics["post_l"])),
+        ModelRow(item_no="2", codes=["RRS-T-022-R-84"], name="เสาหลัง(ซ้าย) 84", image=str(pics["wrong"])),  # other side
+        ModelRow(item_no="3", codes=["RRS-T-019"], name="ฝาข้าง", image=str(pics["shared"])),
+        ModelRow(item_no="4", codes=["RRS-T-020"], name="พื้นกระบะ", image=str(pics["shared"])),  # one picture, 2 parts
+    ])]
+    left = s.item_json("RRS-T-022-L-84")["photo"]
+    assert left["has"] and left["kind"] == "standard" and "ลำดับ 1" in left["source"]
+    assert s.image_path("RRS-T-022-L-84") == str(pics["post_l"])
+    right = s.item_json("RRS-T-022-R-84")["photo"]
+    assert not right["has"] and "ข้างซ้าย" in right["note"] and s.image_path("RRS-T-022-R-84") == ""
+    assert "รูปรวม" in s.photo("RRS-T-019", "ฝาข้าง")["note"]
+    assert "ชื่อไม่ตรง" in s.photo("RRS-T-022-L-84", "กันชนหลัง")["note"]
+
+    store, _t = _pair(s, "แอน 2", "store")
+    viewer, _t = _pair(s, "ผู้จัดการ", "viewer")
+    jpeg = b"\xff\xd8\xff\xe0" + b"j" * 200
+    data = "data:image/jpeg;base64," + base64.b64encode(jpeg).decode()
+    with pytest.raises(MobileError):
+        s.save_photo(viewer, "RRS-T-022-R-84", data)  # ดูอย่างเดียว
+    with pytest.raises(MobileError):
+        s.save_photo(store, "RRS-T-022-R-84", base64.b64encode(b"<html>").decode())  # not a picture
+    ans = s.save_photo(store, "RRS-T-022-R-84", data)
+    assert ans["photo"]["has"] and ans["photo"]["kind"] == "taken" and "แอน 2" in ans["photo"]["source"]
+    first = Path(s.image_path("RRS-T-022-R-84"))
+    assert first.read_bytes() == jpeg
+    s.save_photo(store, "RRS-T-022-R-84", data)  # a new photo: the one before is removed
+    assert not first.exists() and Path(s.image_path("RRS-T-022-R-84")).is_file()
+    s.save_photo(store, "RRS-T-022-L-84", data)  # taken photos come before the Part List picture
+    assert s.item_json("RRS-T-022-L-84")["photo"]["kind"] == "taken"
+    again = MobileService(state, s.data_dir)  # kept in mobile.json
+    assert again.photo("RRS-T-022-R-84")["kind"] == "taken"
+
+
+def test_photo_upload_through_the_server(server):
+    import base64
+
+    s = server.service
+    code = s.new_pair_code()
+    status, _h, raw = _call(server, "POST", "/api/pair", {"code": code, "name": "แอน 2", "role": "store"})
+    token = json.loads(raw)["token"]
+    jpeg = b"\xff\xd8\xff\xe0" + b"p" * 5000
+    status, _h, raw = _call(server, "POST", "/api/photo", {"code": "RRS-T-022-R-84",
+                                                            "data": base64.b64encode(jpeg).decode()}, token)
+    assert status == 200 and json.loads(raw)["photo"]["kind"] == "taken"
+    status, headers, raw = _call(server, "GET", "/api/image?code=RRS-T-022-R-84&v=1", token=token)
+    assert status == 200 and raw == jpeg and headers["Content-Type"] == "image/jpeg"
+    status, _h, raw = _call(server, "GET", "/api/item?code=RRS-T-022-R-84", token=token)
+    item = json.loads(raw)
+    assert item["has_image"] and item["photo"]["version"]

@@ -19,10 +19,13 @@ thread.
 
 from __future__ import annotations
 
+import base64
+import difflib
 import hashlib
 import json
 import math
 import os
+import re
 import secrets
 import socket
 import threading
@@ -180,13 +183,14 @@ class MobileData:
     inbox: list[Submission] = field(default_factory=list)
     store_map: StoreMap = field(default_factory=StoreMap)
     options: dict = field(default_factory=lambda: dict(DEFAULT_OPTIONS))
+    photos: dict = field(default_factory=dict)  # key of a code -> {file, code, by, when}: รูปประกอบจริง taken by a phone
 
     def option(self, key: str):
         return self.options.get(key, DEFAULT_OPTIONS.get(key))
 
     def to_dict(self) -> dict:
         return {"devices": [asdict(d) for d in self.devices], "inbox": [asdict(s) for s in self.inbox],
-                "store_map": self.store_map.to_dict(), "options": self.options}
+                "store_map": self.store_map.to_dict(), "options": self.options, "photos": self.photos}
 
     @classmethod
     def from_dict(cls, data: dict | None) -> MobileData:
@@ -196,7 +200,8 @@ class MobileData:
         return cls([Device(**{k: v for k, v in d.items() if k in Device.__dataclass_fields__})
                     for d in data.get("devices", []) if d.get("id")],
                    [Submission.from_dict(s) for s in data.get("inbox", []) if s.get("id")],
-                   StoreMap.from_dict(data.get("store_map")), options)
+                   StoreMap.from_dict(data.get("store_map")), options,
+                   {k: v for k, v in (data.get("photos") or {}).items() if isinstance(v, dict) and v.get("file")})
 
     @classmethod
     def load(cls, path: Path) -> MobileData:
@@ -457,17 +462,102 @@ class MobileService:
                             return flat
         return flat
 
+    # ---- รูปประกอบจริง: a photo taken by a phone, else the picture of the standard Part List when it is this part ---
     def image_path(self, code: str) -> str:
+        return self.photo(code)["path"]
+
+    def photo(self, code: str, name: str = "") -> dict:
+        """{path, kind ('taken' / 'standard' / ''), source, note}: the photo a phone took of this code, else a
+        picture of the standard Part List (แบบกระบะ) checked to be of this part - same code, the same side, a name
+        like it, and a picture of one part only. A picture that fails the check is not shown (note says why)."""
         key = _key(code)
-        for job in self.state.jobs:
-            for p in job.parts:
-                if p.image and key in (_key(p.code), _key(p.drawing_code)) and Path(p.image).is_file():
-                    return p.image
+        taken = self.data.photos.get(key)
+        if taken and (self.data_dir / "photos" / taken["file"]).is_file():
+            return {"path": str(self.data_dir / "photos" / taken["file"]), "kind": "taken",
+                    "source": f"ถ่ายโดย {taken.get('by', '')} · {_short_when(taken.get('when', ''))}", "note": ""}
+        name = name or self._name_of(code)
+        found = self.standard_picture(code, name)
+        if found["path"]:
+            return {**found, "kind": "standard"}
+        return {"path": "", "kind": "", "source": "", "note": found["note"]}
+
+    def _name_of(self, code: str) -> str:
+        item = self._find()(code)
+        if item is not None and item.name:
+            return item.name
+        row = self._parts().get(_key(code))
+        return row.name if row else ""
+
+    def standard_picture(self, code: str, name: str = "") -> dict:
+        """The picture of the code in the standard Part List models (and the Part Lists of the jobs made from them),
+        when the analysis says it is this part."""
+        key = _key(code)
+        rows = []  # (image, codes, name, where, the part it is: its first code / the code it was drawn as)
         for model in getattr(self.state, "models", []):
             for row in model.rows:
-                if row.image and key in {_key(c) for c in row.codes} and Path(row.image).is_file():
-                    return row.image
-        return ""
+                if row.image and row.codes:
+                    rows.append((row.image, row.codes, row.name, f"Part List มาตรฐาน {model.name} ลำดับ {row.item_no}",
+                                 row.codes[0]))
+        for job in self.state.jobs:
+            for p in job.parts:
+                if p.image:
+                    rows.append((p.image, [p.code, p.drawing_code], p.name, f"Part List ของงาน {job.job_no}",
+                                 p.drawing_code or p.code))
+        users: dict[str, set[str]] = {}  # a picture -> the parts it is used for (one part per picture is expected)
+        for image, _codes, _name, _where, part in rows:
+            users.setdefault(image, set()).add(_part_key(part))
+        note = ""
+        for image, codes, row_name, where, _part in rows:
+            if key not in {_key(c) for c in codes if c}:
+                continue
+            why = _not_this_part(code, name, codes, row_name, users.get(image, set()))
+            if why:
+                note = note or f"รูปใน{where} ไม่ใช่ชิ้นนี้ ({why}) – ไม่แสดง"
+                continue
+            if not Path(image).is_file():
+                continue
+            return {"path": image, "source": where, "note": ""}
+        return {"path": "", "source": "", "note": note}
+
+    def save_photo(self, device: Device, code: str, data: str) -> dict:
+        """ถ่ายรูปประกอบจริง: a JPEG / PNG from the phone (base64) becomes the photo of the code (the one before it is
+        removed)."""
+        if not device.can_change:
+            raise MobileError("บทบาท ดูอย่างเดียว – เพิ่มรูปไม่ได้", 403)
+        code = (code or "").strip()
+        if not code:
+            raise MobileError("ไม่มีรหัสชิ้นส่วน")
+        try:
+            raw = base64.b64decode((data or "").split(",", 1)[-1], validate=True)
+        except (ValueError, TypeError):
+            raise MobileError("รูปไม่ถูกต้อง") from None
+        if raw[:3] == b"\xff\xd8\xff":
+            ext = ".jpg"
+        elif raw[:8] == b"\x89PNG\r\n\x1a\n":
+            ext = ".png"
+        else:
+            raise MobileError("รับเฉพาะรูป JPEG / PNG")
+        if len(raw) > 1_500_000:
+            raise MobileError("รูปใหญ่เกินไป (เกิน 1.5 MB)")
+        folder = self.data_dir / "photos"
+        folder.mkdir(parents=True, exist_ok=True)
+        key = _key(code)
+        safe = re.sub(r"[^A-Za-z0-9_-]+", "-", key).strip("-")[:60] or "part"
+        name = f"{safe}-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{secrets.token_hex(2)}{ext}"
+        (folder / name).write_bytes(raw)
+        old = self.data.photos.get(key)
+        self.data.photos[key] = {"file": name, "code": code, "by": device.name, "when": _now()}
+        self.save()
+        if old and old.get("file") != name:
+            (folder / old["file"]).unlink(missing_ok=True)
+        self._event("photo", {"code": code, "by": device.name})
+        return {"ok": True, "photo": self.photo_json(code)}
+
+    def photo_json(self, code: str, name: str = "") -> dict:
+        info = self.photo(code, name)
+        taken = self.data.photos.get(_key(code)) or {}
+        return {"has": bool(info["path"]), "kind": info["kind"], "source": info["source"], "note": info["note"],
+                "version": taken.get("when", "") if info["kind"] == "taken" else ""}
 
     def _location(self, code: str, item=None) -> str:
         return self.state.catalog.location_of(code, item)
@@ -497,8 +587,10 @@ class MobileService:
             "min": _n(item.min_qty if item else 0), "max": _n(item.max_qty if item else 0),
             "material": (flat.material if flat else "") or (item.material if item else ""),
             "thickness": _n(flat.thickness if flat else 0), "spec": item.spec if item else "",
-            "size": "", "has_outline": bool(flat and flat.outline), "has_image": bool(self.image_path(real)),
+            "size": "", "has_outline": bool(flat and flat.outline),
         }
+        out["photo"] = self.photo_json(real, name)
+        out["has_image"] = out["photo"]["has"]
         out["group_name"] = group_name(out["group"]) if out["group"] else ""
         if flat is not None and flat.outline:
             w, h = flat.size
@@ -1057,3 +1149,35 @@ def _qty(value, allow_zero: bool = False) -> float:
 
 def _step_order(step: str) -> int:
     return STEPS.index(step) if step in STEPS else 99
+
+
+def _short_when(when: str) -> str:
+    try:
+        d = datetime.fromisoformat(when)
+    except ValueError:
+        return when
+    return f"{d.day}/{d.month}/{(d.year + 543) % 100:02d} {d.hour:02d}:{d.minute:02d}"
+
+
+def _part_key(code: str) -> str:
+    """A code without its side: RRS-T-022-L-84 and RRS-T-022-R-84 are one part drawn twice."""
+    return re.sub(r"-(L|R)(?=-|$)", "", _key(code))
+
+
+def _name_core(name: str) -> str:
+    text = re.sub(r"\((ซ้าย|ขวา)\)|ซ้าย|ขวา|\d+(\.\d+)?", "", name or "")
+    return re.sub(r"[\s()\[\].,:;\-_/]+", "", text).lower()
+
+
+def _not_this_part(code: str, name: str, codes: list[str], row_name: str, users: set[str]) -> str:
+    """Why a picture of the standard Part List is not of this part ('' = it is)."""
+    side, row_side = side_of(code, name), side_of(next((c for c in codes if c and _key(c) == _key(code)), ""), row_name)
+    if side and row_side and side != row_side:
+        return f"รูปเป็นข้าง{row_side} ชิ้นนี้ข้าง{side}"
+    a, b = _name_core(name), _name_core(row_name)
+    # Thai names share endings ('เสาหลัง' / 'กันชนหลัง'): one name in the other, or most of it alike
+    if a and b and a not in b and b not in a and difflib.SequenceMatcher(None, a, b).ratio() < 0.65:
+        return f"ชื่อไม่ตรงกัน: {row_name}"
+    if len(users) > 1:
+        return f"รูปเดียวใช้กับ {len(users)} ชิ้นส่วน – เป็นรูปรวม ไม่ใช่รูปของชิ้นนี้"
+    return ""

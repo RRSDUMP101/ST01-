@@ -465,6 +465,7 @@ class _Handler(_Base):
             "count": lambda: s.submit_count(device, b.get("lines") or [], b.get("note", "")),
             "pick": lambda: s.submit_pick(device, b.get("job_no", ""), b.get("lines") or [], b.get("note", "")),
             "profile": lambda: s.update_profile(device, b.get("name", ""), b.get("station")),
+            "photo": lambda: s.save_photo(device, b.get("code", ""), b.get("data", "")),
         }
         if method == "GET" and name in gets:
             return call(gets[name])

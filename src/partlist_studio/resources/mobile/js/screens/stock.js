@@ -3,7 +3,7 @@ import { useData } from '../api.js';
 import { Icon } from '../icons.js';
 import { openCount } from '../sheets.js';
 import { Button, Card, Chip, Empty, IconButton, KV, Loader, Page, Section, Seg, StatusChip } from '../ui.js';
-import { PartVisual } from '../view3d.js';
+import { PartTabs } from '../photos.js';
 import { go, html, num, store, tone, useEffect, useState, useStore } from '../lib.js';
 
 export function StockScreen({ route }) {
@@ -52,7 +52,7 @@ export function ItemScreen({ route }) {
             ${it.brand ? html`<${Chip}>${it.brand}</${Chip}>` : null}
             ${it.side ? html`<${Chip} tone=${it.side === 'ซ้าย' ? 'info' : 'violet'}>${it.side}</${Chip}>` : null}
             <${StatusChip} status=${it.status} /></div></div></div>
-        ${it.has_outline || it.has_image ? html`<${PartVisual} item=${it} height=${230} />` : null}
+        <${PartTabs} item=${it} height=${230} onChanged=${state.reload} />
         <${KV} items=${[['ขนาด', it.size], ['วัสดุ', it.material], ['ความหนา', it.thickness ? `${num(it.thickness)} มม.` : ''], ['สเปก', it.spec]]} />
       </${Card}>
       <div class="six">

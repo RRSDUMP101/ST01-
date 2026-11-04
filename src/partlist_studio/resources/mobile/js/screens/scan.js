@@ -4,14 +4,14 @@
 //   pick   หยิบของ: the slot of the part lights up, arrows from the labels around it, a wrong part sounds the alarm
 //   find   นำทางไปที่ตำแหน่งของรหัสหนึ่ง (from the item page)
 //   pair   reads the pairing QR shown on the PC
-import { api, useData } from '../api.js';
+import { api } from '../api.js';
 import { autoCount } from '../ar/autocount.js';
 import { ARScanner } from '../ar/engine.js';
 import { Icon } from '../icons.js';
 import { countSession, lookAlike, pickSession } from '../sessions.js';
 import { openCount, openRecord } from '../sheets.js';
 import { Button, Chip, Seg, Stepper } from '../ui.js';
-import { PartTabs } from '../photos.js';
+import { PartTabsLive } from '../photos.js';
 import { loadOutline, PartVisual } from '../view3d.js';
 import { codeFromText } from './pair.js';
 import { StoreMap } from './pick.js';
@@ -412,7 +412,7 @@ function InfoSheet({ res }) {
   const it = res.item || {};
   return html`<div class="rec">
     <div class="rec-head"><div><div class="rec-name">${it.name}</div><div class="rec-sub">${it.group_name || it.type_name || ''}</div></div></div>
-    <${InfoTabs} code=${it.code} first=${it} />
+    <${PartTabsLive} code=${it.code} first=${it} />
     <div class="six compact">
       <div class="six-cell"><span>พร้อมประกอบ</span><b>${num(it.on_hand)}</b></div>
       <div class="six-cell"><span>ใช้ได้</span><b>${num(it.free)}</b></div>
@@ -423,12 +423,6 @@ function InfoSheet({ res }) {
       <${Button} kind="secondary" icon="count" onClick=${() => openCount(it, { location: res.location, method: 'ar' })}>นับรายการนี้</${Button}>
       <${Button} icon="info" onClick=${() => go(`stock/item/${encodeURIComponent(it.code)}`)}>ดูรายละเอียด</${Button}>
     </div></div>`;
-}
-
-// the tabs of the part, fetched again after a new photo (the result of the scan is not)
-function InfoTabs({ code, first }) {
-  const state = useData('item', { code });
-  return html`<${PartTabs} item=${state.data || first} height=${170} onChanged=${state.reload} />`;
 }
 
 function LocationSheet({ res }) {

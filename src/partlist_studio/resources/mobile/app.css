@@ -528,3 +528,5 @@ textarea.input { resize: vertical; }
 .real-photo { display: grid; gap: 8px; }
 .real-photo .part-img img { object-fit: contain; }
 .real-photo > p { display: flex; align-items: center; gap: 6px; margin: 0; }
+.part-pics { border: 1px solid var(--line); border-radius: 14px; padding: 8px 12px; margin: 6px 0; }
+.part-pics > summary { font-weight: 700; cursor: pointer; color: var(--sub); }

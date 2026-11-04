@@ -1,6 +1,6 @@
 // รูปชิ้นส่วน: two tabs - แบบ 2D (the flat pattern of the DWG) and รูปประกอบจริง (a photo a phone took, else the picture
 // of the standard Part List when the PC found it is this part) - and a button to take a new photo.
-import { api } from './api.js';
+import { api, useData } from './api.js';
 import { Icon } from './icons.js';
 import { Button, Empty, Seg } from './ui.js';
 import { Part3D, PartImage } from './view3d.js';
@@ -69,4 +69,11 @@ export function PartTabs({ item, height = 220, onChanged }) {
           <input ref=${input} type="file" accept="image/*" capture="environment" hidden onChange=${pick} />` : null}
       </div>`}
   </div>`;
+}
+
+// the tabs of a code, fetched again after a new photo (a scan result or a job part is not)
+export function PartTabsLive({ code, first, height = 170 }) {
+  const state = useData('item', { code });
+  const item = state.data ? { ...first, ...state.data } : first;
+  return html`<${PartTabs} item=${item || { code }} height=${height} onChanged=${state.reload} />`;
 }

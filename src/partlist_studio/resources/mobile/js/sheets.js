@@ -2,6 +2,7 @@
 import { api } from './api.js';
 import { countSession } from './sessions.js';
 import { Button, Chip, Stepper, Steps, KV, StatusChip } from './ui.js';
+import { PartTabsLive } from './photos.js';
 import { PartVisual } from './view3d.js';
 import { closeSheet, feedback, html, num, openSheet, store, toast, useState } from './lib.js';
 
@@ -49,6 +50,8 @@ function RecordSheet({ part, close, onDone }) {
         <div class="rec-sub">${part.job_no}${part.job_title ? ` · ${part.job_title}` : ''}</div></div>
       <${StatusChip} status=${part.status} />
     </div>
+    <details class="part-pics"><summary>รูปชิ้นส่วน (แบบ 2D · รูปประกอบจริง)</summary>
+      <${PartTabsLive} code=${part.code} first=${part} height=${160} /></details>
     <${Steps} route=${route} current=${step} />
     <div class="label-sm">ขั้นที่บันทึก</div>
     <div class="chips-row">${route.map((r) => html`<${Chip} active=${r.step === step} tone=${r.waiting > 0 ? 'warn' : 'muted'}

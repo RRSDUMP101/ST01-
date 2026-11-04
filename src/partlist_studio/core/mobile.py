@@ -287,6 +287,7 @@ class MobileService:
         self._requests: OrderedDict[str, dict] = OrderedDict()  # X-Request-Id -> answer (a phone sends again)
         self._cache: dict = {}
         self._seen_saved = datetime.now()
+        self._alias_cache: tuple | None = None
         self.online_url = ""  # the link from outside the factory while the tunnel is on (core/tunnel.py)
 
     # ---- saving, versions --------------------------------------------------------------------------
@@ -449,18 +450,83 @@ class MobileService:
         return job, job.parts[i]
 
     def _flat(self, code: str):
+        """The flat pattern (แบบ 2D) of a code - also of a stock code whose drawing has another code (RRS-A-022-L-84
+        is drawn as RRS-T-022): the same matching as จับคู่รหัสอัตโนมัติ (_aliases)."""
         lookup = getattr(self.state, "xref_lookup", None)
         flats = self.state.flats
         flat = flats.get(code, lookup)
         if flat is None:
-            key = _key(code)
-            for job in self.state.jobs:
-                for p in job.parts:
-                    if p.drawing_code and _key(p.code) == key:
-                        flat = flats.get(p.drawing_code, lookup)
-                        if flat is not None:
-                            return flat
+            for other in sorted(self._aliases_of(code)):
+                flat = flats.flats.get(other)
+                if flat is not None:
+                    break
         return flat
+
+    def _alias_base(self) -> dict:
+        """What the matching works from, kept until the flat patterns, the models, the stock or the jobs change:
+        the links of the job parts (code <-> the code it was drawn as), the shared codes of a standard Part List
+        row, and the flat patterns / standard rows by part number (RRS-?-039-… -> 039)."""
+        from .part_match import split_code, xref_aliases
+
+        stock = self.state.stock
+        flats = getattr(self.state.flats, "flats", {})
+        models = getattr(self.state, "models", [])
+        sign = (id(stock), len(stock.items), len(flats), sum(len(m.rows) for m in models), id(models),
+                sum(len(j.parts) for j in self.state.jobs))
+        if self._alias_cache and self._alias_cache["sign"] == sign:
+            return self._alias_cache
+        links: dict[str, set[str]] = {}
+
+        def link(a: str, b: str) -> None:
+            a, b = _key(a), _key(b)
+            if a and b and a != b:
+                links.setdefault(a, set()).add(b)
+                links.setdefault(b, set()).add(a)
+
+        for job in self.state.jobs:
+            for p in job.parts:
+                link(p.code, p.drawing_code)
+        by_number: dict[str, list[tuple]] = {}  # part number -> (code, name, spec, material, thickness)
+        for f in flats.values():
+            parts = split_code(f.code)
+            if parts:
+                by_number.setdefault(parts.number, []).append((f.code, f.name, "", f.material, f.thickness))
+        for m in models:
+            for r in m.rows:
+                for other in r.codes[1:]:
+                    link(r.codes[0], other)
+                parts = split_code(r.codes[0]) if r.codes else None
+                if parts:
+                    by_number.setdefault(parts.number, []).append((r.codes[0], r.name, r.size, "", 0))
+        self._alias_cache = {"sign": sign, "links": links, "by_number": by_number, "xref": xref_aliases(stock),
+                             "known": {}}
+        return self._alias_cache
+
+    def _aliases_of(self, code: str) -> set[str]:
+        """The keys of the same part under other codes - the automatic code matching of the program (as for a DWG
+        or a Part List against the stock, part_match.match_part): a flat pattern or a row of the standard Part List
+        whose part number is the code's and that the matching ties to this stock code (RRS-T-039 เต้า1 ->
+        RRS-A-039-NO1-PR), plus the code a job part was drawn as. Worked out once per code."""
+        from .part_match import match_part, split_code
+
+        base = self._alias_base()
+        key = _key(code)
+        if key in base["known"]:
+            return base["known"][key]
+        out = set(base["links"].get(key, set()))
+        parts = split_code(code)
+        for other, name, spec, material, thickness in base["by_number"].get(parts.number if parts else "", []):
+            if _key(other) == key:
+                continue
+            try:
+                match = match_part(Part(part_no=other, name=name, spec=spec, material=material, thickness=thickness),
+                                   self.state.stock, aliases=base["xref"])
+            except Exception:  # noqa: BLE001 - a part the matching cannot read: no alias
+                continue
+            if any(_key(item.code) == key for item, _share in match.items):
+                out.add(_key(other))
+        base["known"][key] = out
+        return out
 
     # ---- รูปประกอบจริง: a photo taken by a phone, else the picture of the standard Part List when it is this part ---
     def image_path(self, code: str) -> str:
@@ -492,6 +558,7 @@ class MobileService:
         """The picture of the code in the standard Part List models (and the Part Lists of the jobs made from them),
         when the analysis says it is this part."""
         key = _key(code)
+        keys = {key} | self._aliases_of(code)  # the same part under its drawing / Part List code
         rows = []  # (image, codes, name, where, the part it is: its first code / the code it was drawn as)
         for model in getattr(self.state, "models", []):
             for row in model.rows:
@@ -508,7 +575,7 @@ class MobileService:
             users.setdefault(image, set()).add(_part_key(part))
         note = ""
         for image, codes, row_name, where, _part in rows:
-            if key not in {_key(c) for c in codes if c}:
+            if not keys & {_key(c) for c in codes if c}:
                 continue
             why = _not_this_part(code, name, codes, row_name, users.get(image, set()))
             if why:
@@ -587,7 +654,7 @@ class MobileService:
             "min": _n(item.min_qty if item else 0), "max": _n(item.max_qty if item else 0),
             "material": (flat.material if flat else "") or (item.material if item else ""),
             "thickness": _n(flat.thickness if flat else 0), "spec": item.spec if item else "",
-            "size": "", "has_outline": bool(flat and flat.outline),
+            "size": "", "has_outline": bool(flat and flat.outline), "outline_code": flat.code if flat else "",
         }
         out["photo"] = self.photo_json(real, name)
         out["has_image"] = out["photo"]["has"]
@@ -615,7 +682,7 @@ class MobileService:
         loc = self._location(p.code, item)
         flat = self._flat(p.drawing_code or p.code) or self._flat(p.code)
         nxt = next(iter(waiting), "")
-        return {
+        out = {
             "job_no": job.job_no, "index": i, "key": _key(p.code), "code": p.code, "name": p.name, "unit": p.unit,
             "drawing_code": p.drawing_code, "required": _n(p.required), "from_stock": _n(p.from_stock),
             "to_make": _n(p.to_make), "finished": _n(p.finished), "received": _n(p.received), "issued": _n(p.issued),
@@ -625,9 +692,11 @@ class MobileService:
             "next_qty": _n(waiting.get(nxt, 0)), "scrapped": _n(p.scrapped_total), "location": loc,
             "slot": self._slot(loc) if loc else None, "material": p.material or (flat.material if flat else ""),
             "thickness": _n(p.thickness or (flat.thickness if flat else 0)), "spec": p.spec, "remark": p.remark,
-            "has_outline": bool(flat and flat.outline), "has_image": bool(self.image_path(p.code)),
-            "outline_code": flat.code if flat else "",
+            "has_outline": bool(flat and flat.outline), "outline_code": flat.code if flat else "",
+            "photo": self.photo_json(p.code, p.name),
         }
+        out["has_image"] = out["photo"]["has"]
+        return out
 
     def job_json(self, job: Job, readiness: bool = False) -> dict:
         today = date.today()
@@ -1181,3 +1250,4 @@ def _not_this_part(code: str, name: str, codes: list[str], row_name: str, users:
     if len(users) > 1:
         return f"รูปเดียวใช้กับ {len(users)} ชิ้นส่วน – เป็นรูปรวม ไม่ใช่รูปของชิ้นนี้"
     return ""
+

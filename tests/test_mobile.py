@@ -457,3 +457,28 @@ def test_photo_upload_through_the_server(server):
     status, _h, raw = _call(server, "GET", "/api/item?code=RRS-T-022-R-84", token=token)
     item = json.loads(raw)
     assert item["has_image"] and item["photo"]["version"]
+
+
+def test_scanned_code_finds_its_drawing_and_picture_by_the_code_matching(demo, tmp_path):
+    """The QR of a ticket or a shelf label carries the stock code (RRS-A-039-NO1-PR); the drawing and the standard
+    Part List call the part RRS-T-039 เต้า1 - the automatic code matching (part_match) ties them: แบบ 2D and
+    รูปประกอบจริง show for the stock code too."""
+    from partlist_studio.core.company_files import ModelBOM, ModelRow
+    from partlist_studio.core.stock import StockItem
+
+    state, s = demo
+    state.stock.items.append(StockItem(code="RRS-A-039-NO1-PR", name="เต้าพื้นเรียบเบอร์ 1", unit="ชิ้น", on_hand=3))
+    square = [[(0.0, 0.0), (120.0, 0.0), (120.0, 80.0), (0.0, 80.0)]]
+    state.flats.add_parts([Part(part_no="RRS-T-039", name="เต้า1", qty=1, thickness=3, material="SS400",
+                                outline=square)])
+    picture = tmp_path / "tao.png"
+    picture.write_bytes(b"\x89PNG\r\n\x1a\n" + b"t" * 40)
+    state.models = [ModelBOM("RRS-T-SET", rows=[ModelRow(item_no="9", codes=["RRS-T-039"], name="เต้า1",
+                                                        image=str(picture))])]
+    s.bump("pc")
+    item = s.item_json("RRS-A-039-NO1-PR")
+    assert item["has_outline"] and item["size"].startswith("120")
+    assert item["photo"]["has"] and item["photo"]["kind"] == "standard" and "ลำดับ 9" in item["photo"]["source"]
+    assert s.outline("RRS-A-039-NO1-PR")
+    found = s.resolve(["RRS1|I|RRS-A-039-NO1-PR|P-FIX-01"])[0]
+    assert found["item"]["has_outline"] and found["item"]["photo"]["has"]

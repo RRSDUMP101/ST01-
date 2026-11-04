@@ -530,3 +530,10 @@ textarea.input { resize: vertical; }
 .real-photo > p { display: flex; align-items: center; gap: 6px; margin: 0; }
 .part-pics { border: 1px solid var(--line); border-radius: 14px; padding: 8px 12px; margin: 6px 0; }
 .part-pics > summary { font-weight: 700; cursor: pointer; color: var(--sub); }
+.tc-hint { margin: 0; padding: 0 16px 8px; color: #E2E8F0; font-size: 14px; font-weight: 700; text-align: center; }
+.tc-dot.unsure { background: #EAB308; }
+.tc-img.busy img { filter: brightness(.6); }
+.tc-busy { position: absolute; inset: 0; display: grid; place-items: center; pointer-events: none; }
+.tc-slider span:last-child { width: auto; text-align: right; }
+.btn-row.tight { gap: 6px; flex-wrap: wrap; }
+.tapcount .tc-dot { width: 24px; height: 24px; margin: -12px 0 0 -12px; font-size: 10.5px; border-width: 2px; }

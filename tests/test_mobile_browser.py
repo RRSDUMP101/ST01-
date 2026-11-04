@@ -47,3 +47,41 @@ def test_mobile_app_and_ar_in_a_browser(tmp_path):
         assert "all passed" in run.stdout
     finally:
         server.stop()
+
+
+def test_auto_count_on_synthetic_pictures():
+    """นับอัตโนมัติ (resources/mobile/js/ar/autocount.js) on made-up pictures: a crate of pipe ends near and far,
+    small pieces, L brackets turned every way, a dense dim crate out of focus - tapped on different pieces."""
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node.js not installed")
+    run = subprocess.run([node, str(ROOT / "tools" / "autocount_check.mjs")], capture_output=True, text=True,
+                         timeout=600, cwd=ROOT, check=False)
+    assert run.returncode == 0, run.stdout + run.stderr
+    assert "BAD" not in run.stdout
+
+
+def test_auto_count_in_a_browser(tmp_path):
+    """The fake camera shows a crate of 28 pipe ends: นับจากภาพ, one tap, the worker counts, ใช้จำนวน fills the sheet."""
+    node = _playwright()
+    if not node:
+        pytest.skip("Node.js + Playwright not installed")
+    from mobile_demo import build_demo
+    from mobile_fake_camera import write
+
+    from partlist_studio.core.mobile_server import MobileServer
+
+    _state, service = build_demo(tmp_path / "mobile")
+    server = MobileServer(service, tmp_path / "mobile" / "certs", port=0, http_port=0, host="127.0.0.1")
+    server.start()
+    try:
+        code = service.new_pair_code(minutes=30)
+        _device, token = service.pair(code, "ทดสอบนับ", "store", "")
+        info = tmp_path / "info.json"
+        info.write_text(json.dumps({"app": server.app_url("127.0.0.1"), "token": token}), encoding="utf-8")
+        video = write(tmp_path / "pipes.mjpeg", "landscape", "pipes")
+        run = subprocess.run([node, str(ROOT / "tools" / "autocount_e2e.js"), "--info", str(info), "--video", str(video)],
+                             capture_output=True, text=True, timeout=300, cwd=ROOT, check=False)
+        assert run.returncode == 0, run.stdout[-3000:] + run.stderr[-2000:]
+    finally:
+        server.stop()

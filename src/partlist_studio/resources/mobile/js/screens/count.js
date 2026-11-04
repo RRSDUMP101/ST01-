@@ -39,7 +39,7 @@ export function CountScreen() {
         const d = l.counted - l.system;
         return html`<div class="count-row">
           <button class="cr-main" onClick=${() => openCount({ key: l.key, code: l.code, name: l.name, unit: l.unit, on_hand: l.system, location: l.location }, { value: l.counted })}>
-            <b>${l.code}</b><span>${l.name}</span><small>${l.location ? `📍 ${l.location} · ` : ''}${l.method === 'tap' ? 'นับจากภาพ' : l.method === 'ar' ? 'AR' : 'กรอกเอง'} · ${timeAgo(l.at)}</small></button>
+            <b>${l.code}</b><span>${l.name}</span><small>${l.location ? `📍 ${l.location} · ` : ''}${l.method === 'tap' ? 'นับจากภาพ' : l.method === 'auto' ? 'นับอัตโนมัติ' : l.method === 'ar' ? 'AR' : 'กรอกเอง'} · ${timeAgo(l.at)}</small></button>
           <div class="cr-qty"><b>${num(l.counted)}</b><small>ระบบ ${num(l.system)}</small>
             <${Chip} tone=${d ? (d > 0 ? 'info' : 'bad') : 'ok'}>${d ? `${d > 0 ? '+' : ''}${num(d)}` : 'ตรง'}</${Chip}></div>
           <button class="icon-btn" aria-label="ลบ" onClick=${() => countSession.remove(l.key)}><${Icon} name="trash" size=${18} /></button>

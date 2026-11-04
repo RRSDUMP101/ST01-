@@ -1,7 +1,7 @@
 """A fake camera for testing the AR of the mobile app in Chromium: a store shelf with QR labels, as MJPEG for
 `--use-file-for-fake-video-capture`.
 
-    python tools/mobile_fake_camera.py OUT.mjpeg [portrait|landscape] [noleft]
+    python tools/mobile_fake_camera.py OUT.mjpeg [portrait|landscape] [noleft|pipes]
 """
 
 from __future__ import annotations
@@ -69,8 +69,41 @@ def scene(kind: str, labels, shift: int = 0) -> Image.Image:
     return im
 
 
+PIPES = 28  # pipe ends in the crate of the "pipes" variant (for นับอัตโนมัติ)
+
+
+def pipes_scene(shift: int = 0) -> Image.Image:
+    """A crate of pipe ends (7 x 4) under a shelf label, the light uneven - to count from one tapped piece."""
+    w, h = 1280, 720
+    im = Image.new("RGB", (w, h), (98, 104, 112))
+    d = ImageDraw.Draw(im)
+    for x in range(w):  # light from the left
+        d.line([(x, 0), (x, h)], fill=(int(80 + 50 * x / w), int(86 + 50 * x / w), int(96 + 50 * x / w)))
+    d.rectangle([330, 250, 1210, 690], fill=(120, 84, 52))  # the crate
+    r = 52
+    for row in range(4):
+        for col in range(7):
+            cx, cy = 400 + col * (2 * r + 18) + shift, 320 + row * (2 * r + 2)
+            d.ellipse([cx - r, cy - r, cx + r, cy + r], fill=(60, 64, 70))
+            d.ellipse([cx - r + 10, cy - r + 10, cx + r - 10, cy + r - 10], fill=(196, 200, 206))
+            d.ellipse([cx - r + 20, cy - r + 20, cx + r - 20, cy + r - 20], fill=(150, 154, 160))
+    x, y = 30 + shift, 60
+    d.rounded_rectangle([x, y, x + 330, y + 150], 10, fill=(255, 255, 255), outline=(30, 30, 30), width=2)
+    im.paste(_qr("RRS1|I|RRS-T-022-L-84|P-POST-04", 126), (x + 12, y + 12))
+    d.text((x + 150, y + 22), "P-POST-04", fill=(15, 28, 46), font=_font(LATIN, 30))
+    return im
+
+
 def write(out: str | Path, kind: str = "portrait", variant: str = "", frames: int = 24) -> Path:
     labels = PORTRAIT if kind == "portrait" else LANDSCAPE
+    if variant == "pipes":
+        out = Path(out)
+        with out.open("wb") as fh:
+            for i in range(frames):
+                buf = io.BytesIO()
+                pipes_scene(int(3 * math.sin(i / frames * 2 * math.pi))).save(buf, "JPEG", quality=88)
+                fh.write(buf.getvalue())
+        return out
     if variant == "noleft":
         labels = [lb for lb in labels if "022-L" not in lb[2]]
     out = Path(out)

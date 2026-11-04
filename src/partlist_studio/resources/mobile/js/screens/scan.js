@@ -5,7 +5,7 @@
 //   find   นำทางไปที่ตำแหน่งของรหัสหนึ่ง (from the item page)
 //   pair   reads the pairing QR shown on the PC
 import { api } from '../api.js';
-import { autoCount } from '../ar/autocount.js';
+import { countOnPicture, pick } from '../ar/autocount.js';
 import { ARScanner } from '../ar/engine.js';
 import { Icon } from '../icons.js';
 import { countSession, lookAlike, pickSession } from '../sessions.js';
@@ -396,7 +396,7 @@ export function ScanScreen({ route }) {
     ${mode === 'count' ? html`<div class="ar-panel">
       <div class="row-between"><span><b>นับแล้ว ${countN || 0} รายการ</b><small class="muted"> · แตะการ์ดบนป้ายเพื่อนับ</small></span>
         <${Button} size="sm" kind="secondary" icon="list" onClick=${() => go('count')}>รายการนับ</${Button}></div>
-      <div class="btn-row"><${Button} kind="secondary" icon="hand" disabled=${!engine.current} onClick=${() => freeze(seen.find((r) => r.kind === 'item') || null)}>นับจากภาพ (แตะทีละชิ้น)</${Button}></div>
+      <div class="btn-row"><${Button} kind="secondary" icon="hand" disabled=${!engine.current} onClick=${() => freeze(seen.find((r) => r.kind === 'item') || null)}>นับจากภาพ (แตะชิ้นตัวอย่าง 1 ชิ้น)</${Button}></div>
     </div>` : null}
 
     ${mode === 'info' && seen.length ? html`<div class="ar-panel">
@@ -433,71 +433,89 @@ function LocationSheet({ res }) {
   </div>`;
 }
 
-// count pieces on a still picture: tap each one, a number appears on it; tap a number to take it away.
-// นับอัตโนมัติ: tap one sample piece and set its size - every place that looks like it gets a dot, then fix by hand.
+// นับจากภาพ: the picture stops; tap ONE piece and the pieces that look like it get a dot (green = sure, yellow =
+// check it). Tap a dot to take it away, tap a place to add one; the slider gives fewer / more. นับเอง: only taps.
 function TapCount({ shot, onClose }) {
   const items = shot.items || [];
-  const [dots, setDots] = useState([]);
   const [item, setItem] = useState(shot.res && shot.res.item ? shot.res.item : (items.length === 1 ? items[0] : null));
-  const [auto, setAuto] = useState(null); // {x, y, r, sens} while choosing the sample
+  const [manual, setManual] = useState(false); // นับเอง: every tap is a piece
+  const [result, setResult] = useState(null); // the auto count of the sample (all the peaks, with their scores)
+  const [sens, setSens] = useState(0.5);
+  const [removed, setRemoved] = useState(() => new Set()); // auto dots taken away (index of the peak)
+  const [added, setAdded] = useState([]); // dots added by hand {x, y} (fractions)
   const [busy, setBusy] = useState(false);
   const img = useRef(null);
   const [src] = useState(() => shot.canvas.toDataURL('image/jpeg', 0.85));
+  const W = shot.canvas.width; const H = shot.canvas.height;
+  const peaks = result ? pick(result, sens) : [];
+  // in reading order (rows top to bottom, left to right), so the numbers are easy to check
+  const row = result ? Math.max(4, result.r) : 1;
+  const auto = peaks.filter((p) => !removed.has(p.i))
+    .sort((a, b) => (Math.round(a.y / row) - Math.round(b.y / row)) || (a.x - b.x));
+  const total = auto.length + added.length;
   const at = (e) => {
     const r = img.current.getBoundingClientRect();
     return [(e.clientX - r.left) / r.width, (e.clientY - r.top) / r.height];
   };
+  const run = async (x, y, r = 0) => {
+    setBusy(true);
+    try {
+      const res = await countOnPicture(shot.canvas, x * W, y * H, r);
+      setResult(res);
+      setRemoved(new Set());
+      setAdded([]);
+      setSens(0.5);
+      const n = pick(res, 0.5).length;
+      feedback.found();
+      toast(n > 1 ? `นับได้ ${n} ชิ้น – ตรวจจุดสีเหลือง แตะจุดที่ผิดเพื่อเอาออก แตะที่ว่างเพื่อเพิ่ม`
+        : 'พบชิ้นเดียว – ลองแตะชิ้นตัวอย่างอื่น หรือเลื่อน “มากขึ้น”', n > 1 ? 'ok' : 'warn', 3800);
+    } catch (e) {
+      toast(`นับไม่ได้: ${e.message}`, 'bad');
+    } finally {
+      setBusy(false);
+    }
+  };
   const tap = (e) => {
+    if (busy) return;
     const [x, y] = at(e);
     if (x < 0 || y < 0 || x > 1 || y > 1) return;
     feedback.tick();
-    if (auto && auto.picking) { setAuto({ ...auto, x, y, picking: false }); return; }
-    setDots((d) => [...d, { x, y, auto: false }]);
+    if (!manual && !result) { run(x, y); return; }
+    setAdded((a) => [...a, { x, y }]);
   };
-  const find = (opts = auto) => {
-    if (!opts || opts.x === undefined) return;
-    setBusy(true);
-    setTimeout(() => {
-      try {
-        const found = autoCount(shot.canvas, { x: opts.x, y: opts.y, r: opts.r }, opts.sens);
-        const manual = dots.filter((d) => !d.auto);
-        setDots([...found.map((f) => ({ x: f.x, y: f.y, auto: true })), ...manual]);
-        if (found.length) feedback.found();
-        toast(found.length ? `พบ ${found.length} ชิ้นที่เหมือนตัวอย่าง – แตะจุดที่ผิดเพื่อเอาออก แตะที่ว่างเพื่อเพิ่ม` : 'ไม่พบชิ้นที่เหมือนตัวอย่าง – ลองปรับขนาดหรือความไว', found.length ? 'ok' : 'warn', 3600);
-      } finally {
-        setBusy(false);
-      }
-    }, 30);
-  };
+  const resize = (f) => { if (result) run(result.sample.x / W, result.sample.y / H, result.r * f); };
   const use = () => {
     if (!item) { toast('เลือกรายการที่นับก่อน', 'warn'); return; }
     onClose();
-    openCount(item, { value: dots.length, method: dots.some((d) => d.auto) ? 'auto' : 'tap', location: item.location, visual: false });
+    openCount(item, { value: total, method: result ? 'auto' : 'tap', location: item.location, visual: false });
   };
-  const ratio = shot.canvas.height / shot.canvas.width;
+  const ratio = H / W;
+  const hint = busy ? 'กำลังนับ…' : manual ? 'แตะบนชิ้นงานทีละชิ้น' : !result ? '① แตะชิ้นงาน 1 ชิ้น – ระบบนับชิ้นที่เหมือนกันให้'
+    : '② ตรวจจุด: แตะจุดที่ผิด = เอาออก · แตะที่ว่าง = เพิ่ม';
   return html`<div class="tapcount">
     <div class="tc-top"><button class="ar-btn" onClick=${onClose} aria-label="ปิด"><${Icon} name="close" /></button>
-      <div class="tc-count"><b>${dots.length}</b><span>ชิ้น</span></div>
-      <button class="ar-btn" onClick=${() => setDots((d) => d.slice(0, -1))} aria-label="ย้อน"><${Icon} name="back" /></button></div>
-    <div class="tc-stage"><div class="tc-img" onClick=${tap}>
+      <div class="tc-count"><b>${total}</b><span>ชิ้น</span></div>
+      <button class="ar-btn" aria-label="ย้อน" onClick=${() => (added.length ? setAdded((a) => a.slice(0, -1)) : setResult(null))}><${Icon} name="back" /></button></div>
+    <p class="tc-hint">${hint}</p>
+    <div class="tc-stage"><div class=${`tc-img ${busy ? 'busy' : ''}`} onClick=${tap}>
       <img ref=${img} src=${src} alt="ภาพที่หยุดไว้" draggable="false" />
-      ${auto && auto.x !== undefined ? html`<span class="tc-sample" style=${`left:${auto.x * 100}%;top:${auto.y * 100}%;width:${auto.r * 200}%;height:${(auto.r * 200) / ratio}%`}></span>` : null}
-      ${dots.map((d, i) => html`<button class=${`tc-dot ${d.auto ? 'auto' : ''}`} style=${`left:${d.x * 100}%;top:${d.y * 100}%`}
-        onClick=${(e) => { e.stopPropagation(); feedback.tick(); setDots((all) => all.filter((_, k) => k !== i)); }}>${i + 1}</button>`)}
+      ${result && result.sample ? html`<span class="tc-sample" style=${`left:${(result.sample.x / W) * 100}%;top:${(result.sample.y / H) * 100}%;width:${(result.r / W) * 200}%;height:${(result.r / W) * 200 / ratio}%`}></span>` : null}
+      ${auto.map((p, n) => html`<button class=${`tc-dot auto ${p.unsure ? 'unsure' : ''}`} style=${`left:${(p.x / W) * 100}%;top:${(p.y / H) * 100}%`}
+        onClick=${(e) => { e.stopPropagation(); feedback.tick(); setRemoved((s) => new Set([...s, p.i])); }}>${n + 1}</button>`)}
+      ${added.map((d, k) => html`<button class="tc-dot" style=${`left:${d.x * 100}%;top:${d.y * 100}%`}
+        onClick=${(e) => { e.stopPropagation(); feedback.tick(); setAdded((a) => a.filter((_, j) => j !== k)); }}>${auto.length + k + 1}</button>`)}
+      ${busy ? html`<div class="tc-busy"><span class="spinner"></span></div>` : null}
     </div></div>
     <div class="tc-bottom">
       ${items.length > 1 ? html`<div class="chips-row tight">${items.map((it) => html`<button class=${`chip tap ${item && item.key === it.key ? 'active' : ''}`}
-        onClick=${() => setItem(it)}>${it.code}</button>`)}</div>` : html`<p>${item ? html`นับ <b>${item.code}</b> ${item.name || ''}` : 'แตะบนชิ้นงานทีละชิ้น'}</p>`}
-      ${auto ? html`<div class="tc-auto">
-          <p class="small">${auto.picking ? '① แตะชิ้นตัวอย่าง 1 ชิ้นในภาพ' : '② ปรับวงให้พอดีกับชิ้น แล้วกด หาชิ้นที่เหมือนกัน'}</p>
-          <label class="tc-slider"><span>ขนาด</span><input type="range" min="0.01" max="0.16" step="0.002" value=${auto.r}
-            onInput=${(e) => setAuto({ ...auto, r: Number(e.target.value) })} /></label>
-          <label class="tc-slider"><span>ความไว</span><input type="range" min="0" max="1" step="0.05" value=${auto.sens}
-            onInput=${(e) => setAuto({ ...auto, sens: Number(e.target.value) })} onChange=${(e) => { if (dots.some((d) => d.auto)) find({ ...auto, sens: Number(e.target.value) }); }} /></label>
-          <div class="btn-row"><${Button} kind="secondary" onClick=${() => setAuto(null)}>ปิด</${Button}>
-            <${Button} kind="ok" icon="target" disabled=${busy || auto.picking} onClick=${() => find()}>${busy ? 'กำลังหา…' : 'หาชิ้นที่เหมือนกัน'}</${Button}></div></div>`
-    : html`<div class="btn-row"><${Button} kind="secondary" onClick=${() => setDots([])}>ล้าง</${Button}>
-          <${Button} kind="secondary" icon="target" onClick=${() => setAuto({ picking: true, r: 0.04, sens: 0.5 })}>นับอัตโนมัติ</${Button}>
-          <${Button} kind="ok" icon="check" disabled=${!dots.length} onClick=${use}>ใช้จำนวน ${dots.length}</${Button}></div>`}
+        onClick=${() => setItem(it)}>${it.code}</button>`)}</div>` : html`<p>${item ? html`นับ <b>${item.code}</b> ${item.name || ''}` : ''}</p>`}
+      ${result ? html`<label class="tc-slider"><span>น้อยลง</span><input type="range" min="0" max="1" step="0.05" value=${sens}
+          onInput=${(e) => setSens(Number(e.target.value))} /><span>มากขึ้น</span></label>
+        <div class="btn-row tight"><${Button} size="sm" kind="secondary" onClick=${() => resize(0.8)}>ชิ้นเล็กกว่านี้</${Button}>
+          <${Button} size="sm" kind="secondary" onClick=${() => resize(1.25)}>ชิ้นใหญ่กว่านี้</${Button}>
+          <${Button} size="sm" kind="secondary" icon="target" onClick=${() => { setResult(null); setAdded([]); }}>ตัวอย่างใหม่</${Button}></div>` : null}
+      <div class="btn-row">
+        <${Button} kind="secondary" icon="hand" onClick=${() => { setManual(!manual); setResult(null); setAdded([]); }}>${manual ? 'นับอัตโนมัติ' : 'นับเอง'}</${Button}>
+        <${Button} kind="ok" icon="check" disabled=${!total || busy} onClick=${use}>ใช้จำนวน ${total}</${Button}></div>
     </div></div>`;
 }

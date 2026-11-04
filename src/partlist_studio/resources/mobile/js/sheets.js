@@ -175,7 +175,7 @@ function CountSheet({ item, opts, close }) {
     </div>
     <div class="label-sm">นับได้จริง</div>
     <${Stepper} big value=${qty} onChange=${setQty} min=${0} />
-    ${opts.onTapCount ? html`<${Button} kind="secondary" block icon="hand" onClick=${() => { close(); setTimeout(opts.onTapCount, 200); }}>นับจากภาพ (แตะทีละชิ้น)</${Button}>` : null}
+    ${opts.onTapCount ? html`<${Button} kind="secondary" block icon="hand" onClick=${() => { close(); setTimeout(opts.onTapCount, 200); }}>นับจากภาพ (แตะชิ้นตัวอย่าง 1 ชิ้น)</${Button}>` : null}
     <${Button} size="xl" block icon="check" onClick=${save}>บันทึกยอดนับ ${num(qty)} ${item.unit || ''}</${Button}>
     <p class="muted small">ยอดนับเก็บในรายการนับของเครื่องนี้ก่อน แล้วกด “ส่งผลนับ” ให้สโตร์ยืนยันที่คอม (ระบบร่างใบปรับยอด AJ เฉพาะส่วนต่าง)</p>
   </div>`;

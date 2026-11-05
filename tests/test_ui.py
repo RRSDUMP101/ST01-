@@ -1365,3 +1365,26 @@ def test_laser_add_sheets_each_size_a_new_row(window, app, monkeypatch):
     group = next(g for g in page.groups if g.thickness == 3)
     assert [e[:2] for e in page.sheet_extra[group.key]] == [(2333.0, 2440.0)]
     assert group.sheet_counts()[0][0] == "2333x2440"
+
+
+def test_express_outbox_card(window, app, tmp_path, monkeypatch):
+    """ส่งเข้า Express: saved documents without an Express number are listed; typing the number takes them off."""
+    from partlist_studio.core.movements import DocLine
+    from partlist_studio.core.stock import StockItem, StockList
+
+    state = window.state
+    state.add_stock_source("Express: items.xlsx", StockList(items=[StockItem(code="ST69-0001", name="กระดาษทราย",
+                                                                             unit="แผ่น", on_hand=40)]))
+    doc = state.ledger.new_doc("OU", [DocLine("ST69-0001", "กระดาษทราย", 15, "แผ่น")], remark="ช่างท๊อปฟู")
+    state.post_doc(doc)
+    page = window.pages["express"]
+    app.processEvents()
+    assert page.outbox_table.rowCount() == 1 and page.outbox_table.item(0, 1).text() == doc.doc_no
+    assert "OU 1 ใบ" in page.outbox_info.text()
+    out = tmp_path / "to_express.xlsx"
+    monkeypatch.setattr(window.actions, "save_path", lambda *a, **k: str(out))
+    page.export_outbox()
+    assert out.is_file()
+    page.outbox_table.item(0, 7).setText("OU6900001")
+    app.processEvents()
+    assert doc.express_no == "OU6900001" and page.outbox_table.rowCount() == 0

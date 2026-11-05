@@ -322,7 +322,7 @@ def read_express_file(path: str | Path) -> tuple[StockList, TextReport | None]:
 PD_HEADERS = ["No.", "รหัส", "รายละเอียด", "คลัง", "จำนวน", "หน่วย", "ราคาต่อหน่วย", "จำนวนเงิน"]
 
 
-def pd_lines(lines: list[RequirementLine], warehouse: str = "01") -> list[list]:
+def pd_lines(lines: list[RequirementLine], warehouse: str = "ST01") -> list[list]:
     """Lines of 'PD - จ่ายวัตถุดิบเพื่อผลิต' in the order of the Express screen. Whole units only."""
     rows = []
     for line in lines:
@@ -334,7 +334,7 @@ def pd_lines(lines: list[RequirementLine], warehouse: str = "01") -> list[list]:
     return rows
 
 
-def export_pd_draft(partlist: PartList, lines: list[RequirementLine], path: str | Path, warehouse: str = "01",
+def export_pd_draft(partlist: PartList, lines: list[RequirementLine], path: str | Path, warehouse: str = "ST01",
                     department: str = "", doc_date: date | str | None = None) -> int:
     info = partlist.info
     rows = pd_lines(lines, warehouse)

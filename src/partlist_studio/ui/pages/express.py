@@ -5,14 +5,15 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from PySide6.QtCore import QTimer
-from PySide6.QtWidgets import (QAbstractItemView, QFileDialog, QGridLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
-                               QMessageBox, QScrollArea, QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout,
+from PySide6.QtCore import Qt, QTimer
+from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QFileDialog, QGridLayout, QHBoxLayout, QHeaderView, QLabel,
+                               QLineEdit, QMessageBox, QScrollArea, QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout,
                                QWidget)
 
 from ...core.express import (SYNC_SAME, check_part_codes, code_family, compare_stock, export_new_items, export_pd_draft,
                              new_items, read_express_file)
 from ...core import code_rules
+from ...core import express_out
 from ...core.express_codes import ST_AUTO, ST_EXACT, resolve_models, resolved_to_model, summary
 from ...core.item_form import build_item_form
 from ...core.partlist_express import build_partlist_express
@@ -87,7 +88,7 @@ class ExpressPage(QWidget):
 
         exp = Card("2. ส่งออกเพื่อคีย์เข้า Express (ร่าง)")
         form = QGridLayout()
-        self.warehouse = QLineEdit(s.get("express/warehouse", "01"))
+        self.warehouse = QLineEdit(s.get("express/warehouse", "ST01"))
         self.department = QLineEdit(s.get("express/department", ""))
         self.category = QLineEdit(s.get("express/category", "21"))
         self.account_group = QLineEdit(s.get("express/account_group", "ST01"))
@@ -113,6 +114,7 @@ class ExpressPage(QWidget):
         exp.body.addWidget(note)
         top.addWidget(exp, 1)
         lay.addLayout(top)
+        lay.addWidget(self._outbox_card())
 
         forms = Card("3. รหัส Express ในแบบกระบะ และฟอร์ม Sheet")
         t = QLabel("ใช้รายงาน <b>รายละเอียดสินค้า (STMASR0200)</b> ที่นำเข้าแล้ว: ให้ทุกแถวของแบบกระบะใช้รหัสเต็มใน Express "
@@ -199,6 +201,139 @@ class ExpressPage(QWidget):
         state.xref_changed.connect(self._show_xref)
         self._summary()
         self._show_xref()
+        self.refresh_outbox()
+
+    # ---- ส่งเข้า Express ------------------------------------------------------
+    OUTBOX_COLS = ["ชนิด", "เลขที่ในโปรแกรม", "วันที่", "แผนก", "หมายเหตุ / ผู้จำหน่าย (ใน Express)", "รายการ", "จำนวนเงิน",
+                   "เลขที่ Express (กรอกหลังคีย์)"]
+
+    def _outbox_card(self) -> Card:
+        card = Card("ส่งเข้า Express – รายการที่ยังไม่ได้คีย์")
+        t = QLabel("ใบที่ <b>บันทึกแล้ว</b> แต่ยังไม่มี <b>เลขที่ Express</b>: PD เบิกไปผลิต (รวมแผ่นเหล็กจากแผนตัดเลเซอร์) · "
+                   "OU เบิกใช้ภายใน · RR รับสินค้าที่ซื้อ (ผู้จำหน่าย, อ้างอิง PO) · FR รับชิ้นงานที่ผลิตเสร็จ · "
+                   "AJ ผลตรวจนับ (มือถือ, สต็อกเหล็ก) + รหัสใหม่ที่ยังไม่มีใน Express + จุดสั่งซื้อ Min/Max "
+                   "→ ไฟล์ Excel ชีทละใบ เรียงช่องตามหน้าจอ Express (แผนก, หมายเหตุ, คลัง ST01/ST05, วันที่ พ.ศ.) "
+                   "<br><span style='color:%s'>คีย์แล้วกรอกเลขที่ Express ในตารางนี้ หรือในไฟล์แล้วกด นำเข้าเลขที่ Express "
+                   "– ใบนั้นจะออกจากรายการ · ไม่ต้องส่ง: สถานะผลิตรายชิ้น ของเสีย รูป แผนเลเซอร์/DXF ตำแหน่งชั้นวาง QR "
+                   "มือถือ (เก็บในโปรแกรม)</span>" % theme.MUTED)
+        t.setWordWrap(True)
+        card.body.addWidget(t)
+        self.outbox_table = _table(self.OUTBOX_COLS)
+        self.outbox_table.setEditTriggers(QAbstractItemView.DoubleClicked | QAbstractItemView.EditKeyPressed
+                                          | QAbstractItemView.AnyKeyPressed)
+        for i, w in enumerate([150, 130, 80, 70, 330, 60, 100]):
+            self.outbox_table.setColumnWidth(i, w)
+        self.outbox_table.setMinimumHeight(200)
+        empty_hint(self.outbox_table, "ไม่มีเอกสารรอคีย์เข้า Express")
+        self.outbox_table.itemChanged.connect(self._outbox_edited)
+        card.body.addWidget(self.outbox_table)
+        row = QHBoxLayout()
+        self.outbox_info = QLabel("")
+        self.outbox_info.setObjectName("Hint")
+        self.outbox_info.setWordWrap(True)
+        row.addWidget(self.outbox_info, 1)
+        self.outbox_minmax = QCheckBox("รวมจุดสั่งซื้อ Min/Max")
+        self.outbox_minmax.setChecked(self.state.settings.get("express/outbox_minmax", "1") == "1")
+        self.outbox_minmax.toggled.connect(lambda on: (self.state.settings.set("express/outbox_minmax", "1" if on else "0"),
+                                                       self.refresh_outbox()))
+        row.addWidget(self.outbox_minmax)
+        for text, slot, kind, tip in (
+                ("นำเข้าเลขที่ Express…", self.import_express_numbers, "",
+                 "อ่านไฟล์ส่ง Express ที่กรอกเลขที่ Express แล้ว (ชีท รายการส่ง Express)"),
+                ("ส่งออกไฟล์ส่ง Express…", self.export_outbox, "primary",
+                 "Excel: ชีทรายการ + ชีทละเอกสารตามหน้าจอ Express + สินค้าใหม่ + Min/Max")):
+            b = button(text, kind, tooltip=tip) if kind else button(text, tooltip=tip)
+            b.clicked.connect(slot)
+            row.addWidget(b)
+        card.body.addLayout(row)
+        self.state.ledger_changed.connect(self.refresh_outbox)
+        self.state.stock_changed.connect(self.refresh_outbox)
+        return card
+
+    def _outbox_options(self) -> express_out.Options:
+        return express_out.Options(self.department.text().strip(), self.warehouse.text().strip() or "ST01",
+                                   self.category.text().strip() or "21", self.account_group.text().strip() or "ST01")
+
+    def outbox(self) -> express_out.Outbox:
+        return express_out.outbox(self.state.ledger, self.state.stock, self.state.express_stock(), self.state.partlist,
+                                  self.outbox_minmax.isChecked())
+
+    def refresh_outbox(self) -> None:
+        box = self.outbox()
+        opts = self._outbox_options()
+        t = self.outbox_table
+        t.blockSignals(True)
+        t.setRowCount(len(box.docs))
+        for r, d in enumerate(box.docs):
+            values = [express_out.type_label(d.doc_type), d.doc_no, express_out.thai_date(d.date),
+                      d.department or opts.department, express_out.screen_note(d), len(d.lines), f"{d.total:,.2f}",
+                      d.express_no]
+            for c, v in enumerate(values):
+                item = QTableWidgetItem(str(v))
+                if c < len(values) - 1:
+                    item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+                if c in (5, 6):
+                    item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                if c == 0:
+                    item.setData(Qt.UserRole, d.doc_no)
+                t.setItem(r, c, item)
+        t.blockSignals(False)
+        counts = box.counts()
+        parts = [f"{k} {counts[k]} ใบ" for k in express_out.SEND_TYPES if counts[k]]
+        extra = []
+        if self.state.express_stock() is None:
+            extra.append("รหัสใหม่: นำเข้าทะเบียนสินค้า Express ก่อนจึงตรวจได้")
+        elif counts["NEW"]:
+            extra.append(f"รหัสใหม่ {counts['NEW']} รหัส")
+        if counts["MINMAX"]:
+            extra.append(f"Min/Max {counts['MINMAX']} รายการ")
+        self.outbox_info.setText(" · ".join(parts + extra) or "ไม่มีรายการรอส่งเข้า Express")
+
+    def _outbox_edited(self, item: QTableWidgetItem) -> None:
+        if item.column() != len(self.OUTBOX_COLS) - 1:
+            return
+        key = self.outbox_table.item(item.row(), 0)
+        doc = self.state.ledger.find(key.data(Qt.UserRole)) if key is not None else None
+        if doc is None:
+            return
+        n = express_out.apply_express_numbers(self.state.ledger, {doc.doc_no: item.text().strip()})
+        if n:
+            self.state.save_library()
+            self.state.notify(f"{doc.doc_no} → เลขที่ Express {doc.express_no}")
+            QTimer.singleShot(0, self.state.ledger_changed.emit)
+
+    def export_outbox(self) -> None:
+        box = self.outbox()
+        if box.empty:
+            self.state.notify("ไม่มีรายการรอส่งเข้า Express")
+            return
+        path = self.actions.save_path("ไฟล์ส่ง Express", self.actions.default_name(".xlsx", "ToExpress"), "Excel (*.xlsx)")
+        if not path:
+            return
+        try:
+            n = express_out.write_outbox(box, path, self._outbox_options(), self.state.ledger)
+        except OSError as e:
+            self.actions.error("บันทึกไฟล์ไม่ได้", str(e))
+            return
+        self.state.notify(f"บันทึก {Path(path).name} แล้ว – เอกสาร {n} ใบ · สินค้าใหม่ {len(box.new_items)} · "
+                          f"Min/Max {len(box.min_max)}")
+
+    def import_express_numbers(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(self, "เลือกไฟล์ส่ง Express ที่กรอกเลขที่แล้ว",
+                                              self.state.settings.get("last_dir"), "Excel (*.xlsx)")
+        if not path:
+            return
+        try:
+            numbers = express_out.read_express_numbers(path)
+        except Exception as e:  # noqa: BLE001
+            self.actions.error("อ่านไฟล์ไม่ได้", str(e))
+            return
+        n = express_out.apply_express_numbers(self.state.ledger, numbers)
+        if n:
+            self.state.save_library()
+            self.state.ledger_changed.emit()
+        self.state.notify(f"ใส่เลขที่ Express แล้ว {n} ใบ" if n else "ไม่พบเลขที่ Express ใหม่ในไฟล์ (คอลัมน์สุดท้ายของชีท "
+                          "รายการส่ง Express)")
 
     # ---- import ----------------------------------------------------------
     def import_express(self) -> None:
@@ -258,7 +393,7 @@ class ExpressPage(QWidget):
         path = self.actions.save_path("ร่าง PD จ่ายวัตถุดิบเพื่อผลิต", self.actions.default_name(".xlsx", "PD"),
                                       "Excel (*.xlsx);;CSV (*.csv)")
         if path:
-            n = export_pd_draft(self.state.partlist, self.state.requirements, path, self.warehouse.text().strip() or "01",
+            n = export_pd_draft(self.state.partlist, self.state.requirements, path, self.warehouse.text().strip() or "ST01",
                                 self.department.text().strip())
             self.state.notify(f"บันทึก {Path(path).name} แล้ว ({n} บรรทัด)")
 

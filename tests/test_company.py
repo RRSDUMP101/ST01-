@@ -196,7 +196,7 @@ def test_sheet_conversion_and_pd_draft(tmp_path):
     assert line.required == pytest.approx(300 / sheet_weight_kg(plate))  # 300 kg of 4 mm plate in sheets
     assert "kg/แผ่น" in line.note
     rows = pd_lines(lines)
-    assert rows[0] == [1, "01-B00-0015", plate.name, "01", 3, "ผน", 3226, 9678]  # whole sheets
+    assert rows[0] == [1, "01-B00-0015", plate.name, "ST01", 3, "ผน", 3226, 9678]  # whole sheets
     out = tmp_path / "pd.xlsx"
     assert export_pd_draft(pl, lines, out, department="ขาย1", doc_date="2026-10-10") == 1
     table = read_table(out)

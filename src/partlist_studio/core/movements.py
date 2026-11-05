@@ -53,7 +53,7 @@ class DocLine:
     name: str
     qty: float
     unit: str = ""
-    warehouse: str = "01"
+    warehouse: str = "ST01"
     unit_cost: float = 0
     remark: str = ""
 
@@ -74,6 +74,8 @@ class StockDoc:
     status: str = ST_DRAFT
     express_no: str = ""  # number Express gave when the document was keyed in
     posted_at: str = ""
+    vendor: str = ""  # RR: ผู้จำหน่าย (code / name in Express)
+    ref: str = ""  # RR: the PO it receives (อ้างอิง)
 
     @property
     def type_name(self) -> str:
@@ -220,7 +222,7 @@ def _by_name(name: str, stock: StockList) -> StockItem | None:
 # --------------------------------------------------------------------------
 # Lines from a requirement check / a list of parts
 # --------------------------------------------------------------------------
-def lines_from_requirements(lines: list[RequirementLine], warehouse: str = "01") -> list[DocLine]:
+def lines_from_requirements(lines: list[RequirementLine], warehouse: str = "ST01") -> list[DocLine]:
     """Raw material to issue (PD): whole units, only items Express has."""
     out = []
     for line in lines:
@@ -231,7 +233,7 @@ def lines_from_requirements(lines: list[RequirementLine], warehouse: str = "01")
     return out
 
 
-def lines_from_parts(parts, stock: StockList, warehouse: str = "01", sets: float = 1) -> list[DocLine]:
+def lines_from_parts(parts, stock: StockList, warehouse: str = "ST01", sets: float = 1) -> list[DocLine]:
     """One line per code (parts with the same code are added up)."""
     merged: dict[str, DocLine] = {}
     for p in parts:
@@ -249,11 +251,18 @@ def lines_from_parts(parts, stock: StockList, warehouse: str = "01", sets: float
     return list(merged.values())
 
 
-def export_doc(doc: StockDoc, path: str | Path, company: str = "") -> None:
+def export_doc(doc: StockDoc, path: str | Path, company: str = "", ledger: Ledger | None = None,
+               department: str = "", warehouse: str = "ST01") -> None:
     """The document as an Excel draft in the order of the Express screen."""
     from .express import thai_date
     from .tabular import write_table
 
+    if Path(path).suffix.lower() in (".xlsx", ".xlsm"):
+        from .express_out import Options, doc_sheet
+        from .tabular import write_workbook
+
+        write_workbook(path, [doc_sheet(doc, Options(department, warehouse or "ST01", company=company), ledger)])
+        return
     rows = [[i, ln.code, ln.name, ln.warehouse, ln.qty, ln.unit, ln.unit_cost, ln.amount, ln.remark]
             for i, ln in enumerate(doc.lines, start=1)]
     rows.append(["", "", "รวม", "", sum(ln.qty for ln in doc.lines), "", "", doc.total, ""])

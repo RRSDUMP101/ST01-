@@ -427,6 +427,13 @@ class MobileService:
             raise MobileError("บทบาท ดูอย่างเดียว บันทึกไม่ได้ – ให้หัวหน้าเปลี่ยนบทบาทที่คอม", 403)
 
     # ---- lookups ------------------------------------------------------------------------------------
+    def _warehouse(self) -> str:
+        """คลัง of the lines a phone makes (Express: ST01, ST05 …) - as set on the PC's Express page."""
+        try:
+            return self.state.settings.get("express/warehouse", "ST01") or "ST01"
+        except Exception:  # noqa: BLE001 - no settings (tests)
+            return "ST01"
+
     def _find(self):
         if "find" not in self._cache:
             self._cache["find"] = code_finder(self.state.stock)
@@ -1229,7 +1236,7 @@ class MobileService:
         """The AJ (count) or PD (pick) a submission makes - not saved."""
         stock = self.state.stock
         if sub.kind == "count":
-            lines = [DocLine(ln["code"], ln.get("name", ""), ln["diff"], ln.get("unit", ""), "01", 0,
+            lines = [DocLine(ln["code"], ln.get("name", ""), ln["diff"], ln.get("unit", ""), self._warehouse(), 0,
                              f"นับได้ {ln['counted']:g} (ระบบ {ln['system']:g}) · {sub.by}")
                      for ln in sub.lines if ln.get("diff")]
             for line in lines:
@@ -1248,7 +1255,7 @@ class MobileService:
             for ln in sub.lines:
                 item = self._find()(ln["code"])
                 lines.append(DocLine(item.code if item else ln["code"], (item.name if item else "") or ln.get("name", ""),
-                                     float(ln["qty"]), ln.get("unit", ""), "01", item.unit_cost if item else 0,
+                                     float(ln["qty"]), ln.get("unit", ""), self._warehouse(), item.unit_cost if item else 0,
                                      ln.get("note", "")))
             return StockDoc(sub.step, job=sub.job_no, lines=lines,
                             remark=f"{PHONE_DOCS.get(sub.step, sub.step)} – จากมือถือ ({sub.by})" + (f" · {sub.text}" if sub.text else ""))

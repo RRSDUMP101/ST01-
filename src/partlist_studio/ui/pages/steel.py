@@ -178,7 +178,7 @@ class SteelTab(QWidget):
             if abs(change) < 1e-9:
                 continue
             note = f"นับได้ {qty:g} (เดิม {s.on_hand:g})" if doc_type == "AJ" else "รับเหล็กเข้า"
-            lines.append(DocLine(s.item.code, s.item.name, round(change, 3), s.item.unit_name, s.item.location or "01",
+            lines.append(DocLine(s.item.code, s.item.name, round(change, 3), s.item.unit_name, self.state.settings.get("express/warehouse", "ST01") or "ST01",
                                  s.item.unit_cost, note))
         dialog.deleteLater()
         if not lines:

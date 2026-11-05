@@ -352,7 +352,7 @@ def suggest_raw_uses(parts: list[JobPart] | list[Part], stock: StockList) -> lis
 
 
 def job_documents(job: Job, stock: StockList, ledger: Ledger, raw_uses: list[RawUse] | None = None,
-                  warehouse: str = "01") -> list[StockDoc]:
+                  warehouse: str = "ST01") -> list[StockDoc]:
     """Draft documents for a job (not saved yet):
     PD วัตถุดิบ for the parts to make (from raw_uses with a quantity),
     PD ชิ้นส่วน: all parts of the beds to assembly, FR: finished pieces not yet received."""

@@ -1,5 +1,5 @@
 """อ่านข้อมูล Express (อ่านอย่างเดียว): Express keeps each company in a folder of Visual FoxPro tables (.DBF, Thai text in
-code page 874) on the server, e.g. \\\\Server-express\\e\\ExpressA\\ffff. This module only READS them - it never opens a
+code page 874) on the server, e.g. \\\\<เครื่องเซิร์ฟเวอร์>\\<โฟลเดอร์แชร์>\\ExpressA\\ffff. This module only READS them - it never opens a
 file for writing, never locks it and ignores the .CDX indexes - so it is safe while Express is in use: at worst a
 record being saved at that moment is read half-written and skipped.
 

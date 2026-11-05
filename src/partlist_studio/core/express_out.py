@@ -310,17 +310,52 @@ def read_express_numbers(path: str | Path) -> dict[str, str]:
     return out
 
 
-def apply_express_numbers(ledger: Ledger, numbers: dict[str, str]) -> int:
+def apply_express_numbers(ledger: Ledger, numbers: dict[str, str], only_new: bool = False,
+                          allow_clear: bool = False) -> int:
+    """Put Express numbers on the documents (and their movements). only_new: a file - only documents saved and still
+    without a number (an old file never renumbers or revives anything)."""
     n = 0
     for doc in ledger.docs:
-        ex = numbers.get(doc.doc_no, "").strip()
-        if ex and doc.express_no != ex:
+        if doc.doc_no not in numbers:
+            continue
+        ex = _number_text(numbers.get(doc.doc_no, ""))
+        if only_new and (doc.status != ST_POSTED or doc.express_no):
+            continue
+        if (ex or allow_clear) and doc.express_no != ex:
             doc.express_no = ex
             for m in ledger.movements:
                 if m.doc_no == doc.doc_no:
                     m.express_no = ex
             n += 1
     return n
+
+
+def _number_text(value) -> str:
+    """'PD0000526', 526.0 from an Excel cell -> '526'; upper case, no spaces."""
+    if isinstance(value, float) and value.is_integer():
+        value = int(value)
+    return str(value or "").strip().upper()
+
+
+def preview_express_numbers(ledger: Ledger, numbers: dict[str, str]) -> list[list[str]]:
+    """What a file of Express numbers would do: [doc, number, what happens] - shown before it is applied."""
+    rows = []
+    by_no = {d.doc_no: d for d in ledger.docs}
+    for no, ex in numbers.items():
+        ex = _number_text(ex)
+        doc = by_no.get(no)
+        if doc is None:
+            rows.append([no, ex, "ไม่พบเอกสารนี้ – ข้าม"])
+        elif doc.status != ST_POSTED:
+            rows.append([no, ex, f"สถานะ {doc.status} – ข้าม"])
+        elif doc.express_no and doc.express_no != ex:
+            rows.append([no, ex, f"มีเลขที่ {doc.express_no} อยู่แล้ว – ข้าม (แก้ทีละใบในโปรแกรม)"])
+        elif doc.express_no == ex:
+            rows.append([no, ex, "ตรงกับที่มีแล้ว"])
+        else:
+            warn = check_express_no(doc, ex, ledger)
+            rows.append([no, ex, "ใส่เลขที่" + (" ⚠ " + " · ".join(warn) if warn else "")])
+    return rows
 
 
 def type_label(doc_type: str) -> str:

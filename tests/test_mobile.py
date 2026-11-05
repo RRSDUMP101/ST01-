@@ -98,7 +98,7 @@ def demo(tmp_path):
 
 
 def _pair(service, name="แอน 2", role="store", station=""):
-    code = service.pair_code if service.pairing_open else service.new_pair_code()
+    code = service.new_pair_code(role=role if role == "planner" else "")  # a planner is given on the PC
     return service.pair(code, name, role, station)
 
 
@@ -128,6 +128,15 @@ def test_pairing_devices_and_roles(demo):
         s.pair(code, "late")
     again = MobileService(DemoState(), s.data_dir)  # kept in mobile.json
     assert [d.name for d in again.data.devices] == ["แอน 2"] and again.data.devices[0].role == "viewer"
+    code = s.new_pair_code()
+    asked, _t = s.pair(code, "อยากเป็นหัวหน้า", "planner")
+    assert asked.role == "station"  # a phone cannot make itself a planner
+    code = s.new_pair_code(role="planner")
+    given, _t = s.pair(code, "แอม", "viewer")
+    assert given.role == "planner" and not s.pairing_open  # the PC gave the role; the code is used up
+    code = s.new_pair_code()
+    with pytest.raises(MobileError):
+        s.pair(code, "คอม")  # the name the PC uses for itself
     assert [r.code for r in again.data.store_map.racks][:2] == ["P-POST", "P-FRONT"]
 
 

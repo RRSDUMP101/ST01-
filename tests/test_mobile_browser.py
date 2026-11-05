@@ -35,7 +35,7 @@ def test_mobile_app_and_ar_in_a_browser(tmp_path):
     server = MobileServer(service, tmp_path / "mobile" / "certs", port=0, http_port=0, host="127.0.0.1")
     server.start()
     try:
-        code = service.new_pair_code(minutes=30)
+        code = service.new_pair_code(minutes=30, role="planner")
         device, token = service.pair(code, "ทดสอบ AR", "planner", "พับ")
         service.report_problem(device, "เครื่องพับ 2 ไฮดรอลิกรั่ว", "SO6910-016", 0, "พับ")
         info = tmp_path / "info.json"

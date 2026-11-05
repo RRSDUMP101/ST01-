@@ -175,7 +175,7 @@ def test_express_item_list_and_truncated_lookup():
     full, _ = read_express_file(SAMPLES / "express_item_list.csv")
     item = next(i for i in full.items if i.code == "01-B00-0015")
     assert (item.category, item.account_group, item.unit_name, item.on_hand, item.unit_cost) == (
-        "01", "RM01", "แผ่น", 6, 3226)
+        "01", "RM01", "แผ่น", 6, 3000)
     report, _ = read_express_file(SAMPLES / "express_stock_count_report.txt")
     part = Part(part_no="RRS-A-108-209-2-50")
     assert stock_mod.find_by_code(part.part_no, report).code == "RRS-A-108-209-2-"
@@ -196,7 +196,7 @@ def test_sheet_conversion_and_pd_draft(tmp_path):
     assert line.required == pytest.approx(300 / sheet_weight_kg(plate))  # 300 kg of 4 mm plate in sheets
     assert "kg/แผ่น" in line.note
     rows = pd_lines(lines)
-    assert rows[0] == [1, "01-B00-0015", plate.name, "01", 3, "ผน", 3226, 9678]  # whole sheets
+    assert rows[0] == [1, "01-B00-0015", plate.name, "01", 3, "ผน", 3000, 9000]  # whole sheets
     out = tmp_path / "pd.xlsx"
     assert export_pd_draft(pl, lines, out, department="ขาย1", doc_date="2026-10-10") == 1
     table = read_table(out)

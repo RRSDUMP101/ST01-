@@ -86,9 +86,10 @@ def test_confirm_partial_and_text_checks():
     keyed = bot.run(acts, opts, Fake(), wait_stop=lambda no: True, confirm=lambda no, q: asked.append(no) or True,
                     sleep=lambda s: None)
     assert keyed == ["PD6911-0001", "PD2"] and asked == ["PD6911-0001"]  # only the first PD asks
-    with pytest.raises(bot.Stopped) as e:  # "no" at the check: the new document is left open, nothing typed in it
-        bot.run(acts, opts, Fake(), confirm=lambda no, q: False, sleep=lambda s: None)
-    assert e.value.keyed == [] and e.value.partial == "PD6911-0001"
+    out = Fake()
+    with pytest.raises(bot.Stopped) as e:  # "no" at the check before the new-document key: nothing was pressed
+        bot.run(acts, opts, out, confirm=lambda no, q: False, sleep=lambda s: None)
+    assert e.value.keyed == [] and e.value.partial == "" and out.typed == []
     calls = {"n": 0}
 
     def stop_soon():
@@ -110,6 +111,11 @@ def test_confirm_partial_and_text_checks():
     warn = bot.template_warnings("PD", {bot.HEAD: "{F4}[แผนก]{F10}", bot.LINE: "", bot.END: ""})
     assert any("บันทึก" in w for w in warn) and any("WAIT" in w for w in warn) and any("STOP" in w for w in warn)
     assert bot.template_warnings("PD", bot.DEFAULT_TEMPLATES["PD"]) == []
+    save = {bot.HEAD: "{F4}{WAIT 500}[แผนก]", bot.LINE: "[รหัส]", bot.END: "{F10}{STOP}"}
+    assert any("บันทึก" in e for e in bot.check_template("PD", save))  # refused unless an admin allows saving
+    assert bot.check_template("PD", save, allow_save=True) == []
+    assert any("STOP" in e for e in bot.check_template("PD", {bot.HEAD: "", bot.LINE: "", bot.END: ""}))
+    assert bot.fix_text("A\tB\x1bC\x7f")[0] == "A BC"  # control characters never reach Express as keys
 
 
 def test_ahk_escapes_document_text():
@@ -118,4 +124,4 @@ def test_ahk_escapes_document_text():
     script = bot.to_ahk([bot.actions_for(doc, opts)], opts)
     line = next(x for x in script.splitlines() if x.startswith("SendText") and "ช่าง" in x)
     assert line == 'SendText "ช่าง `"A`" ``x```;MsgBox `"pwn`""'
-    assert 'if MsgBox("OU1: หน้าจอเป็นใบใหม่ว่างแล้ว' in script
+    assert 'if MsgBox("OU1: หน้าต่างด้านหน้าคือหน้าจอเอกสาร' in script

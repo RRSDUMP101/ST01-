@@ -78,6 +78,16 @@ class StockDoc:
     ref: str = ""  # RR: the PO it receives (อ้างอิง)
     keyed_at: str = ""  # typed into Express by the keying bot (waits for its Express number)
     key_partial: str = ""  # the bot stopped half-way through it (open, unsaved in Express) - when
+    # who and when (the name of the user signed in; "" before sign-in existed)
+    created_by: str = ""
+    posted_by: str = ""
+    cancelled_by: str = ""
+    cancelled_at: str = ""
+    cancel_reason: str = ""
+    keyed_by: str = ""
+    express_no_by: str = ""
+    express_no_at: str = ""
+    void_in_express: bool = False  # cancelled here after it was keyed into Express: cancel it in Express too
 
     @property
     def type_name(self) -> str:

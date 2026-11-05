@@ -3,10 +3,15 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QSettings, QStandardPaths, Signal
 
+from ..core import access, fileio
+from ..core.access import Perm
+from ..core.audit import AuditLog
+from ..core.users import UserStore
 from ..core import stock as stock_mod
 from ..core.cad_fix import GAP_TOL
 from ..core.catalog import Catalog
@@ -158,6 +163,7 @@ class AppState(QObject):
     ledger_changed = Signal()
     laser_changed = Signal()  # flat pattern library or cut programs changed
     catalog_changed = Signal()  # assembly groups / shelf locations set by hand
+    actor_changed = Signal()  # someone signed in / out
     message = Signal(str)
 
     def __init__(self, data_dir: str | Path | None = None):
@@ -184,6 +190,14 @@ class AppState(QObject):
         stock_mod.XREF_LOOKUP = self.xref_lookup
         stock_mod.XREF_ENTRIES = lambda: self.xref.entries
         self.load_library()
+        self.audit = AuditLog(self.data_dir() / "audit")
+        self.users_problem = ""
+        try:
+            self.users = UserStore.load(self.data_dir() / "users.json")
+        except (OSError, ValueError, TypeError) as e:  # a broken users file: view only until IT looks at it
+            self.users = UserStore(self.data_dir() / "users.json.unreadable")
+            self.users_problem = f"อ่านรายชื่อผู้ใช้ไม่ได้ ({type(e).__name__}) – ใช้ได้แบบดูอย่างเดียว"
+        self.actor = access.VIEWER if (self.users.active or self.users_problem) else access.OPEN
 
     # ---- company data kept between sessions (stock sources, model BOMs, code table) ------------
     def data_dir(self) -> Path:
@@ -201,13 +215,42 @@ class AppState(QObject):
         return self.xref.lookup(code)
 
     def load_library(self) -> None:
+        """Read library.json. A file that cannot be read is set aside and the newest copy is read instead; when no
+        copy can be read either, nothing is saved (an empty program must never be written over the company data)."""
         file = self.data_dir() / "library.json"
+        self.library_problem = ""
+        self._library_load_failed = False
         if not file.is_file():
             return
-        try:
-            data = json.loads(file.read_text(encoding="utf-8"))
-        except ValueError:
+        tries = [file] + fileio.backups(file)
+        for i, path in enumerate(tries):
+            try:
+                self._read_library(json.loads(path.read_text(encoding="utf-8")))
+            except (ValueError, TypeError, KeyError, AttributeError, OSError) as e:
+                if i == 0:
+                    try:
+                        bad = fileio.set_aside(file)
+                    except OSError:
+                        bad = file
+                    self.library_problem = f"อ่านข้อมูล {file.name} ไม่ได้ ({type(e).__name__}) – เก็บไฟล์เสียไว้ที่ {bad.name}"
+                continue
+            if i > 0:
+                self.library_problem += f" · ใช้สำเนา {path.name} แทน (ข้อมูลหลังสำเนานี้หายไป – ตรวจยอดอีกครั้ง)"
+                self.save_library()
             return
+        self._empty_library()
+        self._library_load_failed = True
+        self.library_problem += " · ไม่มีสำเนาที่อ่านได้ – โปรแกรมจะไม่บันทึกทับจนกว่า IT จะตรวจ"
+
+    def _empty_library(self) -> None:
+        self.stock_sources, self.active_sources, self.models = {}, [], []
+        self.xref, self.ledger, self.jobs, self.raw_uses = CodeXref(), Ledger(), [], []
+        self.flats, self.cut_queue, self.catalog = FlatLibrary(), CutQueue(), Catalog()
+        self._merge_stock()
+
+    def _read_library(self, data: dict) -> None:
+        if not isinstance(data, dict):
+            raise TypeError("library.json is not an object")
         self.stock_sources = {k: StockList.from_dict(v) for k, v in data.get("stock_sources", {}).items()}
         self.active_sources = [n for n in data.get("active_sources", []) if n in self.stock_sources]
         self.models = [ModelBOM.from_dict(m) for m in data.get("models", [])]
@@ -222,6 +265,8 @@ class AppState(QObject):
         self._merge_stock()
 
     def save_library(self) -> None:
+        if getattr(self, "_library_load_failed", False):
+            return  # the data could not be read: do not write an empty program over it
         data = {
             "stock_sources": {k: v.to_dict() for k, v in self.stock_sources.items()},
             "active_sources": self.active_sources,
@@ -234,7 +279,19 @@ class AppState(QObject):
             "cut_queue": self.cut_queue.to_dict(),
             "catalog": self.catalog.to_dict(),
         }
-        (self.data_dir() / "library.json").write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        file = self.data_dir() / "library.json"
+        if not getattr(self, "_backed_up", False) and file.is_file() and file.stat().st_size:
+            try:  # the first save of a session: keep the last good file, and one copy a day
+                shutil.copy2(file, file.with_name(file.name + ".bak"))
+                fileio.backup_daily(file)
+            except OSError:
+                pass
+            self._backed_up = True
+        fileio.atomic_write_text(file, json.dumps(data, ensure_ascii=False))
+
+    def allow_saving_anyway(self) -> None:
+        """IT decided to start again from the copy loaded (or empty): saving is allowed again."""
+        self._library_load_failed = False
 
     def _merge_stock(self) -> None:
         """One item per code over the active sources, the first source first. A list without balances (the steel
@@ -318,14 +375,50 @@ class AppState(QObject):
             return None
         return max(express, key=lambda s: sum(1 for i in s.items if i.code.upper().startswith("RRS")))
 
-    def post_doc(self, doc: StockDoc) -> list[str]:
+    # ---- who is using the program ------------------------------------------------------------
+    @property
+    def signin_on(self) -> bool:
+        return self.users.active or bool(self.users_problem)
+
+    def can(self, perm: Perm) -> bool:
+        return access.can(self.actor, perm)
+
+    def require(self, perm: Perm) -> None:
+        access.require(self.actor, perm)
+
+    def set_actor(self, actor: access.Actor) -> None:
+        old = self.actor
+        self.actor = actor
+        if old.id != actor.id:
+            self.log("user.sign_in" if actor.kind == "pc" and actor.id != "viewer" else "user.sign_out", "user",
+                     actor.id if actor.id != "viewer" else old.id)
+        self.actor_changed.emit()
+
+    def log(self, action: str, obj_type: str = "", obj_id: str = "", before=None, after=None, reason: str = "",
+            source: str = "pc", actor: access.Actor | None = None) -> None:
+        """One line in the audit log (never fails the work when the disk does)."""
+        try:
+            self.audit.append(actor or self.actor, action, obj_type, obj_id, before, after, reason, source)
+        except OSError:
+            pass
+
+    def who(self) -> str:
+        return self.actor.name if self.actor.kind != "open" else ""
+
+    def post_doc(self, doc: StockDoc, actor: access.Actor | None = None) -> list[str]:
         """Save a stock document: balances change and the movements are recorded."""
+        actor = actor or self.actor
+        access.require(actor, Perm.DOC_POST_AJ if doc.doc_type == "AJ" else Perm.DOC_POST)
         new_items = self.stock_sources.setdefault(MOVED_SOURCE, StockList(source=MOVED_SOURCE))
         if doc not in self.ledger.docs:
             if not doc.doc_no:
                 doc.doc_no = self.ledger.next_no(doc.doc_type, doc.date)
             self.ledger.docs.append(doc)
         warnings = self.ledger.post(doc, self.stock, new_items)
+        if doc.status == "บันทึกแล้ว":
+            doc.posted_by = actor.name if actor.kind != "open" else ""
+            self.log("doc.post", "doc", doc.doc_no, after={"type": doc.doc_type, "lines": [
+                {"code": ln.code, "qty": ln.qty} for ln in doc.lines]}, actor=actor)
         if new_items.items and MOVED_SOURCE not in self.active_sources:
             self.active_sources.append(MOVED_SOURCE)
         if not new_items.items:
@@ -334,10 +427,39 @@ class AppState(QObject):
         self.ledger_changed.emit()
         return warnings
 
-    def cancel_doc(self, doc: StockDoc) -> None:
+    def cancel_doc(self, doc: StockDoc, reason: str = "") -> None:
+        """Cancel a saved document (its stock comes back). One already keyed / numbered in Express needs the right
+        to do so and is marked to be cancelled in Express too."""
+        in_express = bool(doc.express_no or doc.keyed_at)
+        self.require(Perm.DOC_CANCEL_KEYED if in_express else Perm.DOC_CANCEL)
         self.ledger.cancel(doc, self.stock)
+        from datetime import datetime
+
+        doc.cancelled_by, doc.cancel_reason = self.who(), reason
+        doc.cancelled_at = datetime.now().isoformat(timespec="seconds")
+        doc.void_in_express = in_express
+        self.log("doc.cancel", "doc", doc.doc_no, after={"express_no": doc.express_no} if in_express else None,
+                 reason=reason)
         self.rebuild_stock()
         self.ledger_changed.emit()
+
+    def set_express_no(self, doc: StockDoc, number: str, source: str = "pc") -> bool:
+        """The one way an Express number is set or changed (the outbox, the bot, a file, the เบิก / รับ page)."""
+        from datetime import datetime
+
+        from ..core import express_out
+
+        self.require(Perm.EXPRESS_NUMBER)
+        number = (number or "").strip().upper()
+        if doc.status == "ยกเลิก":
+            raise ValueError(f"{doc.doc_no} ยกเลิกแล้ว – ใส่เลขที่ Express ไม่ได้")
+        if number == doc.express_no:
+            return False
+        before = doc.express_no
+        express_out.apply_express_numbers(self.ledger, {doc.doc_no: number}, allow_clear=True)
+        doc.express_no_by, doc.express_no_at = self.who(), datetime.now().isoformat(timespec="seconds")
+        self.log("doc.express_no", "doc", doc.doc_no, {"express_no": before}, {"express_no": number}, source=source)
+        return True
 
     def save_jobs(self) -> None:
         self.save_library()

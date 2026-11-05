@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 from PySide6.QtCore import QSize, Qt, QTimer
-from PySide6.QtGui import QAction, QColor, QGuiApplication, QKeySequence, QShortcut
-from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow,
+from PySide6.QtGui import QAction, QColor, QCursor, QGuiApplication, QKeySequence, QShortcut
+from PySide6.QtWidgets import (QApplication, QFrame, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow,
                                QMessageBox, QPushButton, QStackedWidget, QTabWidget, QVBoxLayout, QWidget)
 
 from .. import APP_NAME, __version__
+from ..core import access
+from ..core.access import AccessDenied, Perm
 from ..core.movements import DOC_TYPES
 from . import theme
 from .actions import Actions
@@ -181,8 +184,78 @@ class MainWindow(QMainWindow):
             signal.connect(self._steps_changed)
         self.refresh_steps()
         self.pages["mobile"].refresh()  # the badge of the inbox in the sidebar
+        self._setup_users()
         if self.mobile_hub.option("autostart") or self.mobile_hub.option("online_auto"):
             QTimer.singleShot(800, self._start_mobile)
+
+    # ---- who is using the program ---------------------------------------------------------------
+    def _setup_users(self) -> None:
+        self.user_btn = QPushButton()
+        self.user_btn.setFlat(True)
+        self.user_btn.setCursor(Qt.PointingHandCursor)
+        self.user_btn.clicked.connect(self.lock)
+        self.statusBar().addPermanentWidget(self.user_btn)
+        self.state.actor_changed.connect(self._show_user)
+        self._show_user()
+        self._last_input = time.monotonic()
+        self._last_cursor = QCursor.pos()
+        for signal in (self.state.ledger_changed, self.state.partlist_changed, self.state.stock_changed,
+                       self.state.jobs_changed, self.state.message):  # work done = someone is here
+            signal.connect(self._touched)
+        self._idle_timer = QTimer(self)
+        self._idle_timer.timeout.connect(self._check_idle)
+        self._idle_timer.start(30_000)
+        problems = [p for p in (self.state.library_problem, self.state.users_problem) if p]
+        if problems:
+            QTimer.singleShot(300, lambda: QMessageBox.warning(self, "ข้อมูลของโปรแกรม", "\n\n".join(problems)))
+        if self.state.signin_on:
+            QTimer.singleShot(200, self.lock)
+
+    def _show_user(self) -> None:
+        a = self.state.actor
+        self.user_btn.setText(("👤 " + a.label) if self.state.signin_on else "👤 ยังไม่ได้ตั้งผู้ใช้ (ใช้ได้ทุกอย่าง)")
+        self.user_btn.setToolTip("กดเพื่อสลับผู้ใช้ / ล็อกหน้าจอ" if self.state.signin_on else
+                                 "ผู้ใช้ › ผู้ใช้และสิทธิ์ เพื่อเปิดการเข้าสู่ระบบ")
+
+    def lock(self) -> None:
+        from .login_dialog import LoginDialog
+
+        if not self.state.signin_on:
+            self.open_users()
+            return
+        bot = self.findChild(QWidget, "ExpressBotDialog")
+        if bot is not None and getattr(bot, "worker", None) is not None:
+            return  # the keying bot is running: lock when it is done
+        self.state.set_actor(access.VIEWER)
+        LoginDialog(self.state, self).exec()
+
+    def open_users(self) -> None:
+        from .login_dialog import UsersDialog
+
+        if self.state.signin_on and not self.state.can(Perm.USERS):
+            self.actions.error("ผู้ใช้และสิทธิ์", str(AccessDenied(Perm.USERS, self.state.actor)))
+            return
+        UsersDialog(self.state, self).exec()
+        self._show_user()
+
+    def _touched(self, *_args) -> None:
+        self._last_input = time.monotonic()
+
+    def _check_idle(self) -> None:
+        """Every 30 s (no event filter: it would slow every event of the program): the mouse moved or work was done."""
+        pos = QCursor.pos()
+        if pos != self._last_cursor:
+            self._last_cursor = pos
+            self._last_input = time.monotonic()
+        try:
+            minutes = int(self.state.settings.get("auth/idle_minutes", "10") or 0)
+        except ValueError:
+            minutes = 10
+        a = self.state.actor
+        if not minutes or not self.state.signin_on or a.id in ("viewer", "open"):
+            return
+        if time.monotonic() - self._last_input > minutes * 60 and QApplication.activeModalWidget() is None:
+            self.lock()
 
     def _start_mobile(self) -> None:
         if not self.mobile_hub.start():
@@ -248,6 +321,9 @@ class MainWindow(QMainWindow):
         ex.addSeparator()
         ex.addAction("ตรวจรูปแบบรหัส Express", lambda: (self.go("express"), self.pages["express"].audit_codes()))
         ex.addAction("ตั้งรหัสใหม่ตามกฎรหัส…", self.pages["express"].new_code)
+        users = self.menuBar().addMenu("ผู้ใช้")
+        users.addAction("สลับผู้ใช้ / ล็อกหน้าจอ", self.lock)
+        users.addAction("ผู้ใช้และสิทธิ์…", self.open_users)
         work = self.menuBar().addMenu("ขั้นตอนงาน")
         act = QAction("ทำขั้นต่อไป ›", self)
         act.setShortcut(QKeySequence("Ctrl+Return"))
@@ -492,6 +568,7 @@ class MainWindow(QMainWindow):
         if self.actions.confirm_discard():
             self.save_session()
             self.mobile_hub.stop()
+            self._idle_timer.stop()
             event.accept()
         else:
             event.ignore()

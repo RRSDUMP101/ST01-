@@ -11,3 +11,17 @@ dist/
 google_token.json
 *credentials*.json
 packaging/third_party/
+# the program's own data (stock ledger, users, audit log, phones, certificates) never goes into the repository
+library.json*
+mobile.json
+users.json
+audit/
+backups/
+*.corrupt-*
+*.key
+*.pem
+*.ahk
+cloudflared*
+ToExpress*.xlsx
+*service_account*.json
+client_secret*.json

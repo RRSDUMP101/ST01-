@@ -13,12 +13,12 @@ def _setup():
                                        unit_cost=600, min_qty=2, max_qty=10),
                              StockItem(code="ST69-0001", name="กระดาษทรายแห้งกลมเบอร์80", unit="แผ่น", on_hand=40),
                              StockItem(code="01-B00-0015", name="เหล็กแผ่นดำ 4มม.4x8ฟุต", unit="แผ่น", on_hand=5,
-                                       unit_cost=3226)])
+                                       unit_cost=3000)])
     express = StockList(items=[StockItem(code="STORE-67-0850", name="สายถักหุ้มสายไฟ10mm.(สีดำ)", min_qty=2, max_qty=10),
                                StockItem(code="ST69-0001", name="กระดาษทราย"),
                                StockItem(code="01-B00-0015", name="เหล็กแผ่นดำ")])
     ledger = Ledger()
-    pd = ledger.new_doc("PD", [DocLine("01-B00-0015", "เหล็กแผ่นดำ 4มม.4x8ฟุต", 2, "แผ่น", "01", 3226)],
+    pd = ledger.new_doc("PD", [DocLine("01-B00-0015", "เหล็กแผ่นดำ 4มม.4x8ฟุต", 2, "แผ่น", "01", 3000)],
                         job="SO6700001", remark="ช่างรองโตโยต้าระยองMR0DA8CB605903316", department="SET",
                         date="2026-07-08")
     ou = ledger.new_doc("OU", [DocLine("ST69-0001", "กระดาษทรายแห้งกลมเบอร์80", 15, "แผ่น")], remark="ช่างท๊อปฟู",
@@ -63,7 +63,7 @@ def test_outbox_workbook_like_the_express_screens_and_numbers_back(tmp_path):
     assert ["สำหรับแผนก", "SET", "เลขที่เอกสาร", "(Express ออกให้)", "วันที่", "08/07/69"] == cells[1]
     assert cells[2][:2] == ["หมายเหตุ", "SO6700001 ช่างรองโตโยต้าระยองMR0DA8CB605903316"]
     line = next(r for r in cells if r and r[0] == 1)
-    assert line[:8] == [1, "01-B00-0015", "เหล็กแผ่นดำ 4มม.4x8ฟุต", "01", 2, "แผ่น", 3226, 6452]  # คลัง as on the line
+    assert line[:8] == [1, "01-B00-0015", "เหล็กแผ่นดำ 4มม.4x8ฟุต", "01", 2, "แผ่น", 3000, 6000]  # คลัง as on the line
     rr_cells = [[c for c in row if c is not None] for row in wb[rr.doc_no].iter_rows(values_only=True)]
     assert rr_cells[1][:4] == ["ผู้จำหน่าย", "อ-092", "อ้างอิง (PO)", "PO6900012"]
     assert next(r for r in rr_cells if r and r[0] == 1)[3] == "ST05"

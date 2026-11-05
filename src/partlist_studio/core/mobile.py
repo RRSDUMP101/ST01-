@@ -24,7 +24,6 @@ import difflib
 import hashlib
 import json
 import math
-import os
 import re
 import secrets
 import socket
@@ -34,6 +33,8 @@ from dataclasses import asdict, dataclass, field
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
+from . import fileio
+from .access import Perm
 from .catalog import (
     GROUP_NAMES,
     GROUP_ORDER,
@@ -218,9 +219,7 @@ class MobileData:
     def save(self, path: Path) -> None:
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(self.to_dict(), ensure_ascii=False, indent=1), encoding="utf-8")
-        os.replace(tmp, path)
+        fileio.atomic_write_text(path, json.dumps(self.to_dict(), ensure_ascii=False, indent=1))
 
 
 def lan_addresses() -> list[str]:
@@ -285,6 +284,7 @@ class MobileService:
         self.data = MobileData.load(self.path)
         self.on_event = on_event  # callable(kind, payload) for the PC: 'problem', 'count', 'pick', 'device', 'record'
         self.pair_code = ""
+        self.pair_role = ""
         self.pair_expires: datetime | None = None
         self._cond = threading.Condition()
         self._version = 1
@@ -343,15 +343,19 @@ class MobileService:
         return answer
 
     # ---- pairing and devices ---------------------------------------------------------------------------
-    def new_pair_code(self, minutes: float | None = None) -> str:
+    def new_pair_code(self, minutes: float | None = None, role: str = "") -> str:
+        """A code to pair one phone. role: the role the PC gives it ("" = the phone may ask for station / store /
+        viewer, never planner - a planner is given on the PC)."""
         alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
         self.pair_code = "".join(secrets.choice(alphabet) for _ in range(8))
+        self.pair_role = role if role in ROLES else ""
         self.pair_expires = datetime.now() + timedelta(minutes=minutes or self.data.option("pair_minutes"))
         return self.pair_code
 
     def close_pairing(self) -> None:
         self.pair_code = ""
         self.pair_expires = None
+        self.pair_role = ""
 
     @property
     def pairing_open(self) -> bool:
@@ -365,12 +369,17 @@ class MobileService:
         name = " ".join((name or "").split())[:40]
         if not name:
             raise MobileError("ใส่ชื่อผู้ใช้ก่อน")
-        role = role if role in ROLES else "station"
+        if name.lower() in ("คอม", "pc", "ระบบ", "system"):
+            raise MobileError("ชื่อนี้ใช้ไม่ได้ – ใส่ชื่อคน")
+        given = getattr(self, "pair_role", "")
+        role = given or (role if role in ROLES and role != "planner" else "station")
         station = station if station in STEPS else ""
         token = secrets.token_urlsafe(32)
         device = Device(id=secrets.token_hex(6), name=name, role=role, token_hash=_hash(token), station=station,
                         last_seen=_now(), last_ip=ip, agent=(agent or "")[:160])
         self.data.devices.append(device)
+        if self.data.option("remote_pair") or given:
+            self.close_pairing()  # one phone per code when it can be used from outside or carries a role
         self.save()
         self._event("device", device)
         return device, token
@@ -1261,16 +1270,20 @@ class MobileService:
                             remark=f"{PHONE_DOCS.get(sub.step, sub.step)} – จากมือถือ ({sub.by})" + (f" · {sub.text}" if sub.text else ""))
         raise MobileError("รายการนี้ไม่มีเอกสาร")
 
-    def confirm(self, sub_id: str, by: str = "คอม", post: bool = True) -> StockDoc | None:
+    def confirm(self, sub_id: str, by: str = "คอม", post: bool = True, actor=None) -> StockDoc | None:
         """Count → AJ, pick → PD; posted at once (post=False: a draft for the เบิก / รับ page). A count where every
         line matches makes no document."""
         sub = self._submission(sub_id)
         if not sub.is_open or sub.kind == "problem":
             raise MobileError("รายการนี้ปิดแล้ว" if not sub.is_open else "ใช้ แก้แล้ว กับการแจ้งปัญหา")
         doc = self.document_for(sub)
+        can = getattr(self.state, "can", None)
+        if post and doc.doc_type == "AJ" and can is not None and not can(Perm.DOC_POST_AJ):
+            post = False  # a count adjustment is saved by accounting: it waits as a draft
         if doc.lines:
+            doc.created_by = f"{sub.by} (มือถือ)"
             if post:
-                self.state.post_doc(doc)
+                self.state.post_doc(doc, actor) if actor is not None else self.state.post_doc(doc)
                 job = next((j for j in self.state.jobs if j.job_no == doc.job), None) if doc.job else None
                 if job is not None:
                     mark_document(job, doc)

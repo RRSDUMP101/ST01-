@@ -1422,6 +1422,7 @@ def test_express_bot_dialog_types_and_asks_the_number(window, app, monkeypatch):
     monkeypatch.setattr(dlg_mod.QMessageBox, "question",
                         staticmethod(lambda *a, **k: asked.append(a[2]) or dlg_mod.QMessageBox.Yes))
     d = dlg_mod.ExpressBotDialog(state, [doc], window, output_factory=Fake)
+    d.ask_saved = lambda label: "saved"
     d.countdown_s = 0
     d.delay.setValue(0)
     for e in d.tpl_edits["OU"].values():  # no waits in the test
@@ -1436,7 +1437,39 @@ def test_express_bot_dialog_types_and_asks_the_number(window, app, monkeypatch):
     assert d.worker is None
     assert Fake.typed[:4] == ["{F4}", "ST01", "{ENTER}", "ช่างท๊อปฟู"] and "ST69-0001" in Fake.typed and "15" in Fake.typed
     assert doc.express_no == "OU6900001" and doc.keyed_at and not doc.key_partial
-    assert any("หน้าจอเป็นใบใหม่" in q for q in asked)  # the {CONFIRM} after the new-document key
+    assert any("หน้าจอเอกสารชนิดนี้" in q for q in asked)  # the {CONFIRM} before the new-document key
     assert "ได้เลขที่" in d.log.toPlainText()
     assert "OU" in json.loads(state.settings.get(dlg_mod.SETTINGS_KEY))["templates"]
     d.close()
+
+
+def test_sign_in_users_and_roles(window, app, monkeypatch):
+    """ผู้ใช้และสิทธิ์: the first admin turns sign-in on; a PIN signs in; the role limits what can be done."""
+    from partlist_studio.core import access
+    from partlist_studio.ui import login_dialog as ld
+
+    state = window.state
+    assert not state.signin_on and "ยังไม่ได้ตั้งผู้ใช้" in window.user_btn.text()
+    admin, code = state.users.add("นุ๊ก", ["admin"], "4821")
+    ann, _ = state.users.add("แอน", ["store"], "7351")
+    d = ld.LoginDialog(state, window)
+    rows = [d.names.item(i).data(ld.Qt.UserRole) for i in range(d.names.count())]
+    d.names.setCurrentRow(rows.index(ann.id))
+    d.pin.setText("0000")
+    d.sign_in()
+    assert "PIN ไม่ถูกต้อง" in d.message.text() and state.actor.id != ann.id
+    d.pin.setText("7351")
+    d.sign_in()
+    assert state.actor.id == ann.id and "แอน" in window.user_btn.text()
+    assert not state.can(access.Perm.EXPRESS_KEY)
+    errors = []
+    monkeypatch.setattr(window.actions, "error", lambda title, text: errors.append(text))
+    window.pages["express"].key_into_express()
+    assert errors and "คีย์เข้า Express" in errors[-1]
+    window.open_users()  # the store cannot manage users
+    assert "จัดการผู้ใช้" in errors[-1]
+    u = ld.UsersDialog(state, window)
+    assert u.table.rowCount() == 2 and "user.sign_in" in u.audit_text.toPlainText()
+    u.close()
+    d.view_only()
+    assert state.actor is access.VIEWER

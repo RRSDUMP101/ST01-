@@ -70,14 +70,14 @@ def test_reads_a_visual_foxpro_table(tmp_path):
 
 def test_company_folders_probe_and_find(tmp_path):
     root = tmp_path / "ExpressA"
-    for folder, name in (("ffff", "บริษัท รุ่งเรืองกระบะดั้มพ์ 101 จำกัด"), ("RRSDP69", "บริษัท รุ่งเรืองกระบะดั้มพ์ 101 จำกัด")):
+    for folder, name in (("ffff", "บริษัทตัวอย่างกระบะ จำกัด"), ("RRSDP69", "บริษัทตัวอย่างกระบะ จำกัด")):
         (root / folder).mkdir(parents=True)
         make_dbf(root / folder / "isinfo.dbf", [("THINAM", "C", 60, 0)], [[name]], eof=True)
     (root / "notes").mkdir()
     make_dbf(root / "ffff" / "STDOC.DBF", FIELDS, [["PD0000526", date(2026, 11, 4), "x", 1, 1.0, 1, True]])
     found = xdb.companies(root)
     assert [(c.folder.name, c.year) for c in found] == [("ffff", ""), ("RRSDP69", "69")]
-    assert found[0].name.startswith("บริษัท รุ่งเรือง") and xdb.folder_ok(root / "ffff")
+    assert found[0].name.startswith("บริษัทตัวอย่าง") and xdb.folder_ok(root / "ffff")
     rows = xdb.probe(root / "ffff")
     assert ["STDOC.DBF", 1, "2026-11-05", "DOCNUM", "C", 12, 0] in rows and any(r[0] == "ISINFO.DBF" for r in rows)
     assert xdb.find_value(root / "ffff", " pd0000526 ") == [("STDOC.DBF", "DOCNUM", 0)]

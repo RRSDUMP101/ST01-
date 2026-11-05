@@ -6,6 +6,7 @@ import re
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QFileDialog, QGridLayout, QHBoxLayout, QHeaderView, QLabel,
                                QLineEdit, QMessageBox, QScrollArea, QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout,
                                QWidget)
@@ -14,6 +15,7 @@ from ...core.express import (SYNC_SAME, check_part_codes, code_family, compare_s
                              new_items, read_express_file)
 from ...core import code_rules
 from ...core import express_out
+from ...core.access import AccessDenied, Perm
 from ...core.express_codes import ST_AUTO, ST_EXACT, resolve_models, resolved_to_model, summary
 from ...core.item_form import build_item_form
 from ...core.partlist_express import build_partlist_express
@@ -240,6 +242,8 @@ class ExpressPage(QWidget):
         for text, slot, kind, tip in (
                 ("คีย์เข้า Express อัตโนมัติ…", self.key_into_express, "",
                  "ให้โปรแกรมพิมพ์เอกสารลงหน้าจอ Express เอง (Windows) – หยุดก่อนบันทึกทุกใบให้ตรวจ"),
+                ("ยกเลิกใน Express แล้ว", self.void_done, "",
+                 "แถว ⚠ ที่เลือก: ยกเลิกใบนั้นใน Express แล้ว (ใบที่ยกเลิกในโปรแกรมหลังคีย์เข้า Express)"),
                 ("นำเข้าเลขที่ Express…", self.import_express_numbers, "",
                  "อ่านไฟล์ส่ง Express ที่กรอกเลขที่ Express แล้ว (ชีท รายการส่ง Express)"),
                 ("ส่งออกไฟล์ส่ง Express…", self.export_outbox, "primary",
@@ -265,16 +269,22 @@ class ExpressPage(QWidget):
         opts = self._outbox_options()
         t = self.outbox_table
         t.blockSignals(True)
-        t.setRowCount(len(box.docs))
-        for r, d in enumerate(box.docs):
-            values = [express_out.type_label(d.doc_type), "คีย์แล้ว รอเลขที่" if d.keyed_at else "รอคีย์", d.doc_no,
+        voids = [d for d in self.state.ledger.docs if d.void_in_express]
+        rows = box.docs + voids
+        t.setRowCount(len(rows))
+        for r, d in enumerate(rows):
+            status = ("⚠ ยกเลิกแล้ว – ยกเลิกใน Express ด้วย" if d.void_in_express else
+                      "หยุดกลางคัน – ตรวจใน Express" if d.key_partial else "คีย์แล้ว รอเลขที่" if d.keyed_at else "รอคีย์")
+            values = [express_out.type_label(d.doc_type), status, d.doc_no,
                       express_out.thai_date(d.date),
                       d.department or opts.department, express_out.screen_note(d), len(d.lines), f"{d.total:,.2f}",
                       d.express_no]
             for c, v in enumerate(values):
                 item = QTableWidgetItem(str(v))
-                if c < len(values) - 1:
+                if c < len(values) - 1 or d.void_in_express or not self.state.can(Perm.EXPRESS_NUMBER):
                     item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+                if c == 1 and d.void_in_express:
+                    item.setForeground(QColor(theme.STATUS_COLORS["ขาด"]))
                 if c in (6, 7):
                     item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
                 if c == 0:
@@ -290,6 +300,8 @@ class ExpressPage(QWidget):
             extra.append(f"รหัสใหม่ {counts['NEW']} รหัส")
         if counts["MINMAX"]:
             extra.append(f"Min/Max {counts['MINMAX']} รายการ")
+        if voids:
+            extra.append(f"⚠ ต้องยกเลิกใน Express {len(voids)} ใบ")
         self.outbox_info.setText(" · ".join(parts + extra) or "ไม่มีรายการรอส่งเข้า Express")
 
     def _outbox_edited(self, item: QTableWidgetItem) -> None:
@@ -299,15 +311,46 @@ class ExpressPage(QWidget):
         doc = self.state.ledger.find(key.data(Qt.UserRole)) if key is not None else None
         if doc is None:
             return
-        n = express_out.apply_express_numbers(self.state.ledger, {doc.doc_no: item.text().strip()})
-        if n:
+        number = item.text().strip()
+        warn = express_out.check_express_no(doc, number, self.state.ledger)
+        if warn and QMessageBox.question(self, "ตรวจเลขที่ Express", "\n".join(warn) + "\n\nใช้เลขที่นี้ไหม?") \
+                != QMessageBox.Yes:
+            QTimer.singleShot(0, self.refresh_outbox)
+            return
+        try:
+            changed = self.state.set_express_no(doc, number, source="outbox")
+        except (AccessDenied, ValueError) as e:
+            self.actions.error("ใส่เลขที่ Express ไม่ได้", str(e))
+            QTimer.singleShot(0, self.refresh_outbox)
+            return
+        if changed:
             self.state.save_library()
             self.state.notify(f"{doc.doc_no} → เลขที่ Express {doc.express_no}")
             QTimer.singleShot(0, self.state.ledger_changed.emit)
 
+    def void_done(self) -> None:
+        """The documents cancelled here are cancelled in Express too."""
+        rows = sorted({i.row() for i in self.outbox_table.selectedIndexes()})
+        docs = [self.state.ledger.find(self.outbox_table.item(r, 0).data(Qt.UserRole)) for r in rows]
+        docs = [d for d in docs if d is not None and d.void_in_express]
+        if not docs:
+            self.state.notify("เลือกแถว ⚠ ยกเลิกใน Express ด้วย ก่อน")
+            return
+        if not self.state.can(Perm.DOC_CANCEL_KEYED):
+            self.actions.error("ทำไม่ได้", str(AccessDenied(Perm.DOC_CANCEL_KEYED, self.state.actor)))
+            return
+        for d in docs:
+            d.void_in_express = False
+            self.state.log("doc.void_in_express_done", "doc", d.doc_no, after={"express_no": d.express_no})
+        self.state.save_library()
+        self.state.ledger_changed.emit()
+
     def key_into_express(self) -> None:
         from ..express_bot_dialog import ExpressBotDialog
 
+        if not self.state.can(Perm.EXPRESS_KEY):
+            self.actions.error("คีย์เข้า Express ไม่ได้", str(AccessDenied(Perm.EXPRESS_KEY, self.state.actor)))
+            return
         docs = self.outbox().docs
         if not docs:
             self.state.notify("ไม่มีเอกสารรอคีย์เข้า Express")
@@ -316,6 +359,9 @@ class ExpressPage(QWidget):
         self.refresh_outbox()
 
     def export_outbox(self) -> None:
+        if not self.state.can(Perm.EXPORT_COST):
+            self.actions.error("ส่งออกไม่ได้", str(AccessDenied(Perm.EXPORT_COST, self.state.actor)))
+            return
         box = self.outbox()
         if box.empty:
             self.state.notify("ไม่มีรายการรอส่งเข้า Express")
@@ -341,12 +387,27 @@ class ExpressPage(QWidget):
         except Exception as e:  # noqa: BLE001
             self.actions.error("อ่านไฟล์ไม่ได้", str(e))
             return
-        n = express_out.apply_express_numbers(self.state.ledger, numbers)
+        if not self.state.can(Perm.EXPRESS_NUMBER):
+            self.actions.error("ใส่เลขที่ Express ไม่ได้", str(AccessDenied(Perm.EXPRESS_NUMBER, self.state.actor)))
+            return
+        preview = express_out.preview_express_numbers(self.state.ledger, numbers)
+        todo = [r for r in preview if r[2].startswith("ใส่เลขที่")]
+        if not todo:
+            self.state.notify("ไม่พบเลขที่ Express ใหม่ในไฟล์ (คอลัมน์สุดท้ายของชีท รายการส่ง Express)")
+            return
+        lines = [f"{no} → {ex}: {what}" for no, ex, what in preview][:25]
+        if QMessageBox.question(self, "นำเข้าเลขที่ Express", f"จะใส่เลขที่ {len(todo)} ใบ:\n" + "\n".join(lines)
+                                + "\n\nใส่เลขที่ไหม?") != QMessageBox.Yes:
+            return
+        n = 0
+        by_no = {d.doc_no: d for d in self.state.ledger.docs}
+        for no, ex, _what in todo:
+            if self.state.set_express_no(by_no[no], ex, source=f"import:{Path(path).name}"):
+                n += 1
         if n:
             self.state.save_library()
             self.state.ledger_changed.emit()
-        self.state.notify(f"ใส่เลขที่ Express แล้ว {n} ใบ" if n else "ไม่พบเลขที่ Express ใหม่ในไฟล์ (คอลัมน์สุดท้ายของชีท "
-                          "รายการส่ง Express)")
+        self.state.notify(f"ใส่เลขที่ Express แล้ว {n} ใบ")
 
     # ---- import ----------------------------------------------------------
     def import_express(self) -> None:

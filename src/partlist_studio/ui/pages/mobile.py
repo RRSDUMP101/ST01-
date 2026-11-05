@@ -33,6 +33,7 @@ from PySide6.QtWidgets import (
 
 from ...core import certs
 from ...core import tunnel as tunnels
+from ...core.access import AccessDenied, Perm
 from ...core.mobile import KIND_NAMES, ROLES
 from ...core.production import STEPS
 from ...core.qr import location_payload
@@ -323,6 +324,8 @@ class MobilePage(QWidget):
             self._show_qr()
 
     def toggle_online(self) -> None:
+        if not self._allowed(Perm.ONLINE):
+            return
         if self.hub.online_state in (tunnels.ON, tunnels.STARTING):
             self.hub.stop_online()
             self.state.notify("ปิดลิงก์ออนไลน์แล้ว – มือถือใช้ได้เฉพาะใน Wi-Fi โรงงาน")
@@ -335,6 +338,8 @@ class MobilePage(QWidget):
         self.refresh()
 
     def pick_cloudflared(self) -> None:
+        if not self._allowed(Perm.ONLINE):
+            return
         path, _ = QFileDialog.getOpenFileName(self, "เลือกไฟล์ cloudflared", str(Path.home() / "Downloads"),
                                               "cloudflared (cloudflared* *.tgz *.exe);;ทุกไฟล์ (*)")
         if not path:
@@ -686,8 +691,22 @@ class MobilePage(QWidget):
     def _autostart_toggled(self, on: bool) -> None:
         self.hub.set_options(autostart=bool(on))
 
+    def _allowed(self, perm) -> bool:
+        if self.state.can(perm):
+            return True
+        self.actions.error("ไม่มีสิทธิ์", str(AccessDenied(perm, self.state.actor)))
+        return False
+
     def new_code(self) -> None:
-        self.hub.service.new_pair_code()
+        if not self._allowed(Perm.DEVICE_ADMIN):
+            return
+        choices = ["ให้มือถือเลือก (หน้างานผลิต / สโตร์ / ดูอย่างเดียว)", *ROLES.values()]
+        name, ok = QInputDialog.getItem(self, "รหัสจับคู่ใหม่", "บทบาทของเครื่องที่จะจับคู่ด้วยรหัสนี้", choices, 0, False)
+        if not ok:
+            return
+        role = next((k for k, v in ROLES.items() if v == name), "")
+        self.hub.service.new_pair_code(role=role)
+        self.state.log("device.pair_code", "device", "", after={"role": role or "phone chooses"})
         self._show_qr()
 
     def copy_link(self) -> None:
@@ -695,12 +714,16 @@ class MobilePage(QWidget):
         self.state.notify("คัดลอกลิงก์แล้ว – ส่งให้มือถือแล้วเปิดในเบราว์เซอร์")
 
     def apply_ports(self) -> None:
+        if not self._allowed(Perm.DEVICE_ADMIN):
+            return
         self.hub.set_options(port=self.port.value(), http_port=self.http_port.value())
         if self.hub.running and not self.hub.restart():
             self.actions.error("เปิดการเชื่อมต่อมือถือไม่ได้", self.hub.error)
         self.refresh()
 
     def renew_cert(self) -> None:
+        if not self._allowed(Perm.DEVICE_ADMIN):
+            return
         if QMessageBox.question(self, "สร้างใบรับรองใหม่", "มือถือทุกเครื่องจะต้องติดตั้งใบรับรองใหม่ก่อนใช้แอปต่อ\nสร้างใหม่หรือไม่?") \
                 != QMessageBox.Yes:
             return
@@ -717,13 +740,17 @@ class MobilePage(QWidget):
         return devices[rows[0]] if rows and rows[0] < len(devices) else None
 
     def change_role(self) -> None:
+        if not self._allowed(Perm.DEVICE_ADMIN):
+            return
         d = self._device()
         if d is None:
             return
         names = list(ROLES.values())
         name, ok = QInputDialog.getItem(self, "บทบาท", f"บทบาทของ {d.name}", names, names.index(ROLES.get(d.role, names[0])), False)
         if ok:
-            self.hub.service.set_device(d.id, role=next(k for k, v in ROLES.items() if v == name))
+            role = next(k for k, v in ROLES.items() if v == name)
+            self.state.log("device.role", "device", d.id, {"role": d.role}, {"role": role})
+            self.hub.service.set_device(d.id, role=role)
 
     def change_station(self) -> None:
         d = self._device()
@@ -736,11 +763,16 @@ class MobilePage(QWidget):
             self.hub.service.set_device(d.id, station="" if name == options[0] else name)
 
     def toggle_revoke(self) -> None:
+        if not self._allowed(Perm.DEVICE_ADMIN):
+            return
         d = self._device()
         if d is not None:
+            self.state.log("device.revoke" if not d.revoked else "device.restore", "device", d.id)
             self.hub.service.set_device(d.id, revoked=not d.revoked)
 
     def remove_device(self) -> None:
+        if not self._allowed(Perm.DEVICE_ADMIN):
+            return
         d = self._device()
         if d is not None and QMessageBox.question(self, "ลบเครื่อง", f"ลบ {d.name}? เครื่องนี้จะใช้แอปไม่ได้จนกว่าจะจับคู่ใหม่") \
                 == QMessageBox.Yes:
@@ -753,11 +785,13 @@ class MobilePage(QWidget):
         self.confirm(False)
 
     def confirm(self, post: bool) -> None:
+        if not self._allowed(Perm.PHONE_CONFIRM):
+            return
         sub = self._selected_sub()
         if sub is None:
             return
         try:
-            doc = self.hub.service.confirm(sub.id, "คอม", post=post)
+            doc = self.hub.service.confirm(sub.id, self.state.who() or "คอม", post=post, actor=self.state.actor)
         except Exception as e:  # noqa: BLE001 - shown to the user
             self.actions.error("ยืนยันไม่ได้", str(e))
             return
@@ -770,14 +804,17 @@ class MobilePage(QWidget):
             self.state.ledger_changed.emit()
 
     def reject(self) -> None:
+        if not self._allowed(Perm.PHONE_CONFIRM):
+            return
         sub = self._selected_sub()
         if sub is not None:
-            self.hub.service.reject(sub.id, "คอม")
+            self.hub.service.reject(sub.id, self.state.who() or "คอม")
+            self.state.log("phone.reject", "submission", sub.id)
 
     def solve(self) -> None:
         sub = self._selected_sub()
         if sub is not None:
-            self.hub.service.solve_problem(sub.id, "คอม")
+            self.hub.service.solve_problem(sub.id, self.state.who() or "คอม")
 
     def _phone_event(self, kind: str, payload) -> None:
         if kind == "problem":

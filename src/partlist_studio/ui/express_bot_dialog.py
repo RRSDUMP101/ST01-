@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (QCheckBox, QDialog, QFileDialog, QFormLayout, QHB
 
 from ..core import express_bot as bot
 from ..core import express_out
+from ..core.access import AccessDenied, Perm
 from .widgets import button, fit_to_screen
 
 SETTINGS_KEY = "express/bot"
@@ -96,6 +97,7 @@ class ExpressBotDialog(QDialog):
     def __init__(self, state, docs, parent=None, output_factory=None):
         super().__init__(parent)
         self.setWindowTitle("คีย์เข้า Express อัตโนมัติ")
+        self.setObjectName("ExpressBotDialog")
         fit_to_screen(self, 1180, 820)
         self.state = state
         self.docs = docs
@@ -179,9 +181,17 @@ class ExpressBotDialog(QDialog):
             reset = button("คืนค่าเริ่มต้นของหน้าจอนี้")
             reset.clicked.connect(lambda _=False, t=t: self._reset(t))
             wl.addWidget(reset, 0, Qt.AlignLeft)
+            if not state.can(Perm.EXPRESS_CONFIG):  # templates decide what is pressed in Express: IT only
+                for e in edits.values():
+                    e.setReadOnly(True)
+                reset.setEnabled(False)
             self.tpl_edits[t] = edits
             self.tpl_tabs.addTab(w, t)
         rl.addWidget(self.tpl_tabs)
+        if not state.can(Perm.EXPRESS_CONFIG):
+            lock = QLabel("แก้ลำดับการกด / หน้าต่าง / ชื่อโปรแกรม ได้เฉพาะ ผู้ดูแล / IT")
+            lock.setObjectName("Hint")
+            rl.addWidget(lock)
         help_label = QLabel(HELP)
         help_label.setWordWrap(True)
         help_label.setObjectName("Hint")
@@ -226,6 +236,9 @@ class ExpressBotDialog(QDialog):
         if not sys.platform.startswith("win") and output_factory is None:
             self.run_btn.setEnabled(False)
             self.status.setText("คีย์อัตโนมัติใช้ได้บน Windows ที่ติดตั้ง Express – เครื่องนี้ส่งออก AutoHotkey หรือดูลำดับได้")
+        if not state.can(Perm.EXPRESS_CONFIG):
+            for w in (self.window_edit, self.process_edit, self.delay):
+                w.setEnabled(False)
         if self.doc_list.count():
             self.doc_list.setCurrentRow(0)
         self._preview()
@@ -254,7 +267,9 @@ class ExpressBotDialog(QDialog):
 
     def _actions(self, docs):
         opts = self._read_options()
-        errors = [e for t in sorted({d.doc_type for d in docs}) for e in bot.check_template(t, opts.templates[t])]
+        allow = self.state.settings.get("express/bot_allow_save", "0") == "1"
+        errors = [e for t in sorted({d.doc_type for d in docs})
+                  for e in bot.check_template(t, opts.templates[t], allow)]
         if errors:
             raise bot.TemplateError("\n".join(errors))
         return [bot.actions_for(d, opts) for d in docs]
@@ -339,6 +354,16 @@ class ExpressBotDialog(QDialog):
         if warnings and QMessageBox.question(self, "ตรวจก่อนคีย์", "\n".join(warnings[:12]) + "\n\nคีย์ต่อไหม?") \
                 != QMessageBox.Yes:
             return
+        again = [d for d in docs if d.keyed_at or d.key_partial or d.express_no]
+        if again:
+            reason, ok = QInputDialog.getText(
+                self, "คีย์ซ้ำ", "ใบนี้คีย์เข้า Express ไปแล้ว: " + ", ".join(d.doc_no for d in again)
+                + "\nตรวจใน Express ก่อนว่าไม่มีใบซ้ำ\nเหตุผลที่คีย์อีกครั้ง (จำเป็น):")
+            if not ok or not reason.strip():
+                return
+            for d in again:
+                self.state.log("doc.rekey", "doc", d.doc_no, before={"keyed_at": d.keyed_at, "express_no": d.express_no},
+                               reason=reason.strip())
         types = sorted({d.doc_type for d in docs})
         if len(types) > 1:
             self.status.setText("หลายชนิดเอกสาร: โปรแกรมหยุดทุกใบ – ระหว่างนั้นเปิดหน้าจอของใบถัดไปใน Express ได้")
@@ -354,6 +379,9 @@ class ExpressBotDialog(QDialog):
         self.run_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
         self._log(f"เริ่ม {len(docs)} ใบ: " + ", ".join(d.doc_no for d in docs) + f" → หน้าต่าง “{self.options.window}”")
+        self.state.log("bot.run_start", "bot_run", "", after={"docs": [d.doc_no for d in docs],
+                                                             "window": self.options.window,
+                                                             "process": self.options.process})
         self._countdown, self._started = self.countdown_s, False
         self._tick()
 
@@ -370,6 +398,19 @@ class ExpressBotDialog(QDialog):
         self._started = True
         threading.Thread(target=self.worker.run, daemon=True, name="express-bot").start()
 
+    def closeEvent(self, event) -> None:  # noqa: N802 - Qt
+        if self.worker is not None:
+            event.ignore()  # a run goes on typing even when the window is gone: stop it first
+            self.status.setText("กำลังคีย์อยู่ – กด หยุด ก่อนปิด")
+            return
+        super().closeEvent(event)
+
+    def reject(self) -> None:
+        if self.worker is not None:
+            self.status.setText("กำลังคีย์อยู่ – กด หยุด ก่อนปิด")
+            return
+        super().reject()
+
     def stop(self) -> None:
         if self.worker is not None:
             self.worker.cancel = True
@@ -384,24 +425,44 @@ class ExpressBotDialog(QDialog):
     def _stop_reached(self, doc_no: str) -> None:
         doc = self._by_no.get(doc_no)
         label = f"{doc_no} ({doc.doc_type} {doc.type_name})" if doc is not None else doc_no
-        if doc is not None:
-            doc.keyed_at = datetime.now().isoformat(timespec="seconds")
-            doc.key_partial = ""
         self._log(f"หยุดรอบันทึก {label}")
-        prompt = (f"{label}: คีย์ครบแล้ว – ตรวจในหน้าจอ Express แล้วกดบันทึก\n"
-                  "ใส่เลขที่ที่ Express ออกให้ (เว้นว่างได้) แล้วกด OK เพื่อคีย์ใบถัดไป · Cancel = หยุด")
-        while True:
-            no, ok = QInputDialog.getText(self, "ตรวจและบันทึกใน Express", prompt)
-            no = no.strip().upper()
-            warn = express_out.check_express_no(doc, no, self.state.ledger) if ok and no and doc is not None else []
-            if not warn or QMessageBox.question(self, "ตรวจเลขที่ Express", "\n".join(warn) + "\n\nใช้เลขที่นี้ไหม?") \
-                    == QMessageBox.Yes:
-                break
-        if ok and no and doc is not None:
-            express_out.apply_express_numbers(self.state.ledger, {doc.doc_no: no})
-            self._log(f"ได้เลขที่ {doc.doc_no} → {no}")
+        answer = self.ask_saved(label)
+        now = datetime.now().isoformat(timespec="seconds")
+        if doc is not None and answer == "saved":
+            doc.keyed_at, doc.key_partial, doc.keyed_by = now, "", self.state.who()
+            self.state.log("doc.keyed", "doc", doc.doc_no, source="bot")
+            prompt = f"{label}: เลขที่ที่ Express ออกให้ (เว้นว่างได้ – ใส่ภายหลังในหน้า Express)"
+            while True:
+                no, ok = QInputDialog.getText(self, "เลขที่ Express", prompt)
+                no = no.strip().upper()
+                warn = express_out.check_express_no(doc, no, self.state.ledger) if ok and no else []
+                if not warn or QMessageBox.question(self, "ตรวจเลขที่ Express", "\n".join(warn)
+                                                    + "\n\nใช้เลขที่นี้ไหม?") == QMessageBox.Yes:
+                    break
+            if ok and no:
+                try:
+                    self.state.set_express_no(doc, no, source="bot")
+                    self._log(f"ได้เลขที่ {doc.doc_no} → {no}")
+                except (AccessDenied, ValueError) as e:
+                    self._log(f"ใส่เลขที่ไม่ได้ {doc.doc_no}: {e}")
+        elif doc is not None:  # typed but not saved: it is open in Express, someone must close it there
+            doc.key_partial = now
+            self.state.log("doc.key_partial", "doc", doc.doc_no, source="bot")
+            self._log(f"ไม่ได้บันทึก {doc.doc_no} – ปิดใบนั้นใน Express โดยไม่บันทึก")
         self.state.save_library()
-        self.worker.answer(ok)
+        self.worker.answer(answer != "stop")
+
+    def ask_saved(self, label: str) -> str:
+        """At {STOP}: 'saved' (the person saved it in Express), 'skip' (not saved, go on) or 'stop'."""
+        box = QMessageBox(self)
+        box.setWindowTitle("ตรวจและบันทึกใน Express")
+        box.setText(f"{label}: คีย์ครบแล้ว\nตรวจในหน้าจอ Express แล้วกดบันทึกใน Express เอง")
+        saved = box.addButton("บันทึกใน Express แล้ว", QMessageBox.AcceptRole)
+        skip = box.addButton("ไม่บันทึก – ข้ามใบนี้", QMessageBox.RejectRole)
+        box.addButton("หยุด", QMessageBox.DestructiveRole)
+        box.setDefaultButton(saved)
+        box.exec()
+        return "saved" if box.clickedButton() is saved else "skip" if box.clickedButton() is skip else "stop"
 
     def _confirm_asked(self, doc_no: str, question: str) -> None:
         ok = QMessageBox.question(self, "ยืนยันก่อนคีย์ต่อ", f"{doc_no}: {question}") == QMessageBox.Yes
@@ -412,10 +473,6 @@ class ExpressBotDialog(QDialog):
         if self.worker is None:
             return
         now = datetime.now().isoformat(timespec="seconds")
-        for no in keyed:
-            doc = self._by_no.get(no)
-            if doc is not None and not doc.keyed_at:
-                doc.keyed_at = now
         half = self._by_no.get(partial) if partial else None
         if half is not None:
             half.key_partial = now
@@ -424,6 +481,9 @@ class ExpressBotDialog(QDialog):
                                 f"ใบ {partial} พิมพ์ไปบางส่วนแล้ว และยังเปิดอยู่ใน Express (ยังไม่บันทึก)\n"
                                 "ใน Express: ยกเลิก/ปิดใบนั้นโดยไม่บันทึก ก่อนคีย์ใหม่ – ใบนี้จะไม่ถูกติ๊กในรอบถัดไป")
         self._log(f"สรุป: คีย์ {len(keyed)} ใบ" + (f" · {error}" if error else ""))
+        target = getattr(getattr(self.worker, "out", None), "target", "")
+        self.state.log("bot.run_end", "bot_run", "", after={"keyed": keyed, "partial": partial, "window": target},
+                       reason=error)
         self.state.save_library()
         self.state.ledger_changed.emit()
         self.run_btn.setEnabled(True)

@@ -44,7 +44,8 @@ MODIFIERS = ("CTRL", "ALT", "SHIFT")
 
 # A start from the Express screens (PD / OU: สำหรับแผนก, หมายเหตุ, เลขที่เอกสาร, วันที่ then the grid of รายการสินค้า
 # <F8>: รหัส, รายละเอียด (filled by Express), คลัง, จำนวน, หน่วย (filled), ราคาต่อหน่วย (Express costs the stock)).
-_NEW_DOC = "{F4}{WAIT 1200}{CONFIRM หน้าจอเป็นใบใหม่ว่างแล้ว (เลขที่เอกสารยังเป็นเลขใหม่)?}"
+_NEW_DOC = ("{CONFIRM หน้าต่างด้านหน้าคือหน้าจอเอกสารชนิดนี้ใน Express ของบริษัทที่ถูกต้อง และยังไม่มีใบค้างอยู่?}"
+            "{F4}{WAIT 1200}")
 _ISSUE = {HEAD: _NEW_DOC + "[แผนก]{ENTER}{WAIT 300}[หมายเหตุ]{ENTER}{ENTER}[วันที่]{ENTER}{F8}{WAIT 600}",
           LINE: "[รหัส]{ENTER}{WAIT 400}{ENTER}[คลัง]{ENTER}[จำนวน]{ENTER}{ENTER}{ENTER}{WAIT 200}",
           END: "{STOP}"}
@@ -151,13 +152,21 @@ def parse(template: str, fields: dict[str, str]) -> list[tuple[str, str, int]]:
     return out
 
 
-def check_template(doc_type: str, parts: dict[str, str]) -> list[str]:
+def check_template(doc_type: str, parts: dict[str, str], allow_save: bool = False) -> list[str]:
+    """Errors that stop a run: a wrong token; a save key or no {STOP} at the end (unless an admin allowed saving)."""
     errors = []
+    parsed = {}
     for section, fields in ((HEAD, DOC_FIELDS), (LINE, LINE_FIELDS), (END, DOC_FIELDS)):
         try:
-            parse(parts.get(section, ""), fields)
+            parsed[section] = parse(parts.get(section, ""), fields)
         except TemplateError as e:
             errors.append(f"{doc_type} {section}: {e}")
+    if not allow_save and not errors:
+        if any(k == "key" and v in SAVE_KEYS for toks in parsed.values() for k, v, _t in toks):
+            errors.append(f"{doc_type}: มีปุ่มบันทึก ({', '.join(sorted(SAVE_KEYS))}) – ให้คนตรวจแล้วกดบันทึกเอง "
+                          "(ผู้ดูแลเปิดให้บันทึกเองได้ในตั้งค่า)")
+        if not any(k == "stop" for k, _v, _t in parsed[END]):
+            errors.append(f"{doc_type}: ท้ายเอกสารต้องมี {{STOP}} – ให้คนตรวจก่อนบันทึก")
     return errors
 
 
@@ -182,7 +191,8 @@ def template_warnings(doc_type: str, parts: dict[str, str]) -> list[str]:
 def fix_text(text: str) -> tuple[str, list[str]]:
     """The text Express can store (Thai code page 874): NFC, known replacements; returns (text, characters left out)."""
     text = unicodedata.normalize("NFC", text)
-    text = "".join(CP874_FIXES.get(ch, ch) for ch in text)
+    text = "".join(" " if ch in "\t\r\n" else CP874_FIXES.get(ch, ch) for ch in text)
+    text = "".join(ch for ch in text if ch >= " " and ch != "\x7f")  # a control character would act as a key
     bad = sorted({ch for ch in text if not _cp874(ch)})
     return "".join(ch for ch in text if ch not in bad), bad
 
@@ -401,7 +411,8 @@ class WindowsKeyboard(Output):
           "SPACE": 0x20, "CTRL": 0x11, "ALT": 0x12, "SHIFT": 0x10,
           **{f"F{i}": 0x6F + i for i in range(1, 13)}, **{c: ord(c) for c in "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"}}
 
-    BROWSERS = ("chrome.exe", "msedge.exe", "firefox.exe", "explorer.exe", "brave.exe", "opera.exe")
+    BROWSERS = ("chrome.exe", "msedge.exe", "firefox.exe", "explorer.exe", "brave.exe", "opera.exe", "excel.exe",
+                "winword.exe", "outlook.exe", "line.exe")  # never typed into, even when the title matches
 
     def __init__(self, clipboard=None, process: str = ""):
         if not sys.platform.startswith("win"):
@@ -494,7 +505,8 @@ class WindowsKeyboard(Output):
         out = []
         for hwnd, text in found:
             exe = self._exe(hwnd)
-            if exe == "<this program>" or exe in self.BROWSERS or "part list studio" in text.lower():
+            if exe == "<this program>" or exe in self.BROWSERS or "part list studio" in text.lower() \
+                    or "toexpress" in text.lower():  # the outbox file / AutoHotkey script open in an editor
                 continue
             if self.process and self.process not in exe:
                 continue

@@ -5,12 +5,14 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import QDate, Qt
-from PySide6.QtWidgets import (QComboBox, QDateEdit, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMenu,
+from PySide6.QtWidgets import (QComboBox, QInputDialog, QDateEdit, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMenu,
                                QMessageBox, QSplitter, QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget)
 
 from ...core.movements import (DOC_TYPES, HISTORY_HEADERS, ST_CANCELLED, ST_DRAFT, ST_POSTED, DocLine,
                                StockDoc, export_doc, export_history, history_rows, lines_from_parts,
                                lines_from_requirements)
+from ...core import express_out
+from ...core.access import AccessDenied, Perm
 from ...core.production import RAW_HEADERS, RawUse, mark_document, suggest_raw_uses
 from ...core.stock import find_by_code
 from ..state import AppState
@@ -182,6 +184,7 @@ class MovementsPage(QWidget):
                           d.status, d.express_no] for d in docs], status_col=4, data=docs)
         if current in docs:
             self.docs.selectRow(docs.index(current))
+            self._load_header(current)  # a number set elsewhere (Express page, bot) shows here at once
         elif docs:
             self.docs.selectRow(0)
         else:
@@ -200,15 +203,24 @@ class MovementsPage(QWidget):
             self.lines.setRowCount(0)
             self.total.setText("")
             return
-        self.caption.setText(f"{doc.doc_no} · {doc.doc_type} {doc.type_name} · {doc.status}")
+        self._load_header(doc)
+        self._fill_lines()
+
+    def _load_header(self, doc: StockDoc) -> None:
+        who = " · ".join(x for x in (f"บันทึกโดย {doc.posted_by}" if doc.posted_by else "",
+                                     f"ยกเลิกโดย {doc.cancelled_by}" if doc.cancelled_by else "",
+                                     f"เหตุผล: {doc.cancel_reason}" if doc.cancel_reason else "",
+                                     "⚠ ต้องยกเลิกใน Express ด้วย" if doc.void_in_express else "") if x)
+        self.caption.setText(f"{doc.doc_no} · {doc.doc_type} {doc.type_name} · {doc.status}" + (f" · {who}" if who else ""))
         self.date.setDate(QDate.fromString(doc.date, "yyyy-MM-dd"))
         for w, v in ((self.job, doc.job), (self.department, doc.department), (self.remark, doc.remark),
                      (self.express_no, doc.express_no), (self.vendor, doc.vendor), (self.ref, doc.ref)):
             w.setText(v)
+            w.setModified(False)
         draft = doc.status == ST_DRAFT
         for w in (self.date, self.job, self.department, self.remark, self.vendor, self.ref):
             w.setEnabled(draft)
-        self._fill_lines()
+        self.express_no.setEnabled(doc.status == ST_POSTED and self.state.can(Perm.EXPRESS_NUMBER))
 
     def _fill_lines(self) -> None:
         doc = self.doc
@@ -229,7 +241,20 @@ class MovementsPage(QWidget):
         doc = self.doc
         if doc is None:
             return
-        doc.express_no = self.express_no.text().strip()
+        if self.express_no.isModified():  # only what was typed here - never a stale field over a number set elsewhere
+            self.express_no.setModified(False)
+            number = self.express_no.text().strip()
+            warn = express_out.check_express_no(doc, number, self.state.ledger)
+            if warn and QMessageBox.question(self, "ตรวจเลขที่ Express", "\n".join(warn) + "\n\nใช้เลขที่นี้ไหม?") \
+                    != QMessageBox.Yes:
+                self.express_no.setText(doc.express_no)
+            else:
+                try:
+                    if self.state.set_express_no(doc, number, source="movements"):
+                        self.state.save_library()
+                except (AccessDenied, ValueError) as e:
+                    self.actions.error("ใส่เลขที่ Express ไม่ได้", str(e))
+                    self.express_no.setText(doc.express_no)
         if doc.status == ST_DRAFT:
             doc.date = self.date.date().toString("yyyy-MM-dd")
             doc.job, doc.department, doc.remark, doc.vendor, doc.ref = (
@@ -283,7 +308,11 @@ class MovementsPage(QWidget):
 
     def delete_draft(self) -> None:
         doc = self.doc
+        if doc and doc.status == ST_DRAFT and not self.state.can(Perm.DOC_DELETE_DRAFT):
+            self.actions.error("ลบไม่ได้", str(AccessDenied(Perm.DOC_DELETE_DRAFT, self.state.actor)))
+            return
         if doc and doc.status == ST_DRAFT and QMessageBox.question(self, "ลบร่าง", f"ลบ {doc.doc_no}?") == QMessageBox.Yes:
+            self.state.log("doc.delete_draft", "doc", doc.doc_no, before={"type": doc.doc_type, "lines": len(doc.lines)})
             self.state.ledger.docs.remove(doc)
             self.doc = None
             self.state.save_library()
@@ -301,7 +330,12 @@ class MovementsPage(QWidget):
                                 f"บันทึก {doc.doc_no} {doc.type_name} {len(doc.lines)} บรรทัด?\n"
                                 "ยอดคงเหลือในโปรแกรมจะเปลี่ยนทันที") != QMessageBox.Yes:
             return
-        warnings = self.state.post_doc(doc)
+        try:
+            warnings = self.state.post_doc(doc)
+        except AccessDenied as e:
+            self.actions.error("บันทึกไม่ได้", str(e) + ("\nใบปรับยอดให้ บัญชี / ผู้ดูแล บันทึก – เก็บเป็นร่างไว้"
+                                                       if doc.doc_type == "AJ" else ""))
+            return
         job = next((j for j in self.state.jobs if j.job_no == doc.job), None)
         if job is not None:
             mark_document(job, doc)
@@ -314,13 +348,26 @@ class MovementsPage(QWidget):
         self.state.notify(f"บันทึก {doc.doc_no} แล้ว – ส่งออกร่างเพื่อคีย์เข้า Express ได้ที่ ส่งออก ▾")
 
     def cancel_doc(self) -> None:
+        self._save_header()
         doc = self.doc
         if doc is None or doc.status == ST_CANCELLED:
             return
-        if QMessageBox.question(self, "ยกเลิกเอกสาร", f"ยกเลิก {doc.doc_no}?"
-                                + ("\nยอดที่ตัด/รับไปแล้วจะถูกคืน" if doc.status == ST_POSTED else "")) != QMessageBox.Yes:
+        in_express = doc.express_no or doc.keyed_at
+        text = f"ยกเลิก {doc.doc_no}?" + ("\nยอดที่ตัด/รับไปแล้วจะถูกคืน" if doc.status == ST_POSTED else "")
+        if in_express:
+            text += (f"\n\n⚠ ใบนี้คีย์เข้า Express แล้ว ({doc.express_no or 'รอเลขที่'}) – ต้องยกเลิกใน Express ด้วย "
+                     "(โปรแกรมไม่ยกเลิกใน Express ให้)")
+        reason, ok = QInputDialog.getText(self, "ยกเลิกเอกสาร", text + "\n\nเหตุผล (จำเป็น):")
+        if not ok:
             return
-        self.state.cancel_doc(doc)
+        if not reason.strip() and doc.status == ST_POSTED:
+            self.actions.error("ยกเลิกไม่ได้", "ใส่เหตุผลการยกเลิก")
+            return
+        try:
+            self.state.cancel_doc(doc, reason.strip())
+        except AccessDenied as e:
+            self.actions.error("ยกเลิกไม่ได้", str(e))
+            return
         self.state.save_library()
         self.refresh()
 

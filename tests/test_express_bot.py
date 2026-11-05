@@ -77,3 +77,45 @@ def test_run_types_stops_and_guards():
     out = Fake()
     bot.run(acts[:1], opts, out, wait_stop=lambda no: True, sleep=lambda s: None)
     assert "paste SO6700001 ช่างรองโตโยต้าระยอง" in out.typed and "9900001" in out.typed
+
+
+def test_confirm_partial_and_text_checks():
+    opts = bot.BotOptions(delay_ms=0)
+    acts = [bot.actions_for(_doc(), opts), bot.actions_for(StockDoc("PD", "PD2", lines=[DocLine("A", "a", 1)]), opts)]
+    asked = []
+    keyed = bot.run(acts, opts, Fake(), wait_stop=lambda no: True, confirm=lambda no, q: asked.append(no) or True,
+                    sleep=lambda s: None)
+    assert keyed == ["PD6911-0001", "PD2"] and asked == ["PD6911-0001"]  # only the first PD asks
+    with pytest.raises(bot.Stopped) as e:  # "no" at the check: the new document is left open, nothing typed in it
+        bot.run(acts, opts, Fake(), confirm=lambda no, q: False, sleep=lambda s: None)
+    assert e.value.keyed == [] and e.value.partial == "PD6911-0001"
+    calls = {"n": 0}
+
+    def stop_soon():
+        calls["n"] += 1
+        return calls["n"] > 12
+
+    with pytest.raises(bot.Stopped) as e:  # stopped while typing the first document
+        bot.run(acts, opts, Fake(), should_stop=stop_soon, confirm=lambda no, q: True, sleep=lambda s: None)
+    assert e.value.partial == "PD6911-0001" and e.value.keyed == []
+    slept = []
+    calls["n"] = 0
+    with pytest.raises(bot.Stopped):  # a long {WAIT} is cut short by a stop
+        bot.run(acts, opts, Fake(), should_stop=lambda: len(slept) > 3, sleep=slept.append)
+    assert len(slept) <= 5
+    text, bad = bot.fix_text("ยาว 1−2 × 3 “ok” 😀")
+    assert text == "ยาว 1-2 x 3 \"ok\" " and bad == ["😀"]
+    a = [[bot.Action("doc", "D1"), bot.Action("text", "x😀", label="หัวเอกสาร หมายเหตุ")]]
+    assert bot.check_text(a) and a[0][1].value == "x"
+    warn = bot.template_warnings("PD", {bot.HEAD: "{F4}[แผนก]{F10}", bot.LINE: "", bot.END: ""})
+    assert any("บันทึก" in w for w in warn) and any("WAIT" in w for w in warn) and any("STOP" in w for w in warn)
+    assert bot.template_warnings("PD", bot.DEFAULT_TEMPLATES["PD"]) == []
+
+
+def test_ahk_escapes_document_text():
+    opts = bot.BotOptions(delay_ms=0)
+    doc = StockDoc("OU", "OU1", remark='ช่าง "A" `x`;\nMsgBox "pwn"', lines=[DocLine("A", "a", 1)])
+    script = bot.to_ahk([bot.actions_for(doc, opts)], opts)
+    line = next(x for x in script.splitlines() if x.startswith("SendText") and "ช่าง" in x)
+    assert line == 'SendText "ช่าง `"A`" ``x```;MsgBox `"pwn`""'
+    assert 'if MsgBox("OU1: หน้าจอเป็นใบใหม่ว่างแล้ว' in script

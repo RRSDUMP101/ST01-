@@ -13,6 +13,8 @@ A screen is described by a template, editable on the PC (Express page → คี
               SHIFT+ (e.g. {CTRL+S}); {KEY n} = n times
     {WAIT ms} wait (Express opens a screen or fills the name of an item)
     {STOP}    stop here (the document stays open on the screen, not saved)
+    {CONFIRM ข้อความ}  ask a person before going on (e.g. "is the screen a new empty document?") - by default only on
+              the first document of each type in a run
     text      typed as is
 
 The templates shipped are a start from the screens of the company's Express: try them once on each screen (a test run
@@ -21,9 +23,11 @@ types into Notepad) and adjust the order of the keys. The same actions can be wr
 
 from __future__ import annotations
 
+import os
 import re
 import sys
 import time
+import unicodedata
 from dataclasses import dataclass, field
 
 from .express import thai_date
@@ -40,7 +44,8 @@ MODIFIERS = ("CTRL", "ALT", "SHIFT")
 
 # A start from the Express screens (PD / OU: สำหรับแผนก, หมายเหตุ, เลขที่เอกสาร, วันที่ then the grid of รายการสินค้า
 # <F8>: รหัส, รายละเอียด (filled by Express), คลัง, จำนวน, หน่วย (filled), ราคาต่อหน่วย (Express costs the stock)).
-_ISSUE = {HEAD: "{F4}{WAIT 1200}[แผนก]{ENTER}{WAIT 300}[หมายเหตุ]{ENTER}{ENTER}[วันที่]{ENTER}{F8}{WAIT 600}",
+_NEW_DOC = "{F4}{WAIT 1200}{CONFIRM หน้าจอเป็นใบใหม่ว่างแล้ว (เลขที่เอกสารยังเป็นเลขใหม่)?}"
+_ISSUE = {HEAD: _NEW_DOC + "[แผนก]{ENTER}{WAIT 300}[หมายเหตุ]{ENTER}{ENTER}[วันที่]{ENTER}{F8}{WAIT 600}",
           LINE: "[รหัส]{ENTER}{WAIT 400}{ENTER}[คลัง]{ENTER}[จำนวน]{ENTER}{ENTER}{ENTER}{WAIT 200}",
           END: "{STOP}"}
 DEFAULT_TEMPLATES: dict[str, dict[str, str]] = {
@@ -48,7 +53,7 @@ DEFAULT_TEMPLATES: dict[str, dict[str, str]] = {
     "OU": dict(_ISSUE),
     "FR": dict(_ISSUE),
     "AJ": dict(_ISSUE),
-    "RR": {HEAD: "{F4}{WAIT 1200}[ผู้จำหน่าย]{ENTER}{WAIT 500}[อ้างอิง]{ENTER}[แผนก]{ENTER}{ENTER}[วันที่]{ENTER}"
+    "RR": {HEAD: _NEW_DOC + "[ผู้จำหน่าย]{ENTER}{WAIT 500}[อ้างอิง]{ENTER}[แผนก]{ENTER}{ENTER}[วันที่]{ENTER}"
                  "{F8}{WAIT 600}",
            LINE: "[รหัส]{ENTER}{WAIT 400}{ENTER}[คลัง]{ENTER}[จำนวน]{ENTER}{ENTER}[ราคาต่อหน่วย]{ENTER}{ENTER}"
                  "{ENTER}{WAIT 200}",
@@ -57,15 +62,22 @@ DEFAULT_TEMPLATES: dict[str, dict[str, str]] = {
 SCREEN_HINTS = {"PD": "4.สินค้า → PD - จ่ายวัตถุดิบเพื่อผลิต", "OU": "4.สินค้า → OU - จ่ายสินค้าใช้ภายใน",
                 "RR": "1.ซื้อ → RR - รับสินค้า", "FR": "4.สินค้า → FR - รับสินค้าสำเร็จรูปจากการผลิต",
                 "AJ": "4.สินค้า → JU - ปรับปรุงเพิ่ม/ลดสินค้า (จำนวน = ส่วนต่าง +/−)"}
+NEW_KEY_HINT = ("ปุ่มเปิดใบใหม่ตั้งต้นเป็น {F4} – ถ้าไม่เปิดใบใหม่ ลอง {F2} (หน้าจอสมุดรายวันของ Express ใช้ F2) · "
+                "ห้ามใส่ปุ่มบันทึก ({F10}) จนกว่าจะทดลองแล้ว")
+SAVE_KEYS = {"F10", "CTRL+S"}
+# characters Express (Thai code page 874) cannot store, and what to type instead
+CP874_FIXES = {"\u2212": "-", "\u2013": "-", "\u2014": "-", "\u2018": "'", "\u2019": "'", "\u201c": '"',
+               "\u201d": '"', "\u00d7": "x", "\u00a0": " ", "\u2022": "-", "\u2026": "...", "\u00b0": " องศา"}
 _TOKEN = re.compile(r"\{([^{}]+)\}|\[([^\[\]]+)\]|([^{\[]+)")
 
 
 @dataclass
 class Action:
-    kind: str  # text | key | wait | stop | doc (a document starts)
+    kind: str  # text | key | wait | stop | confirm | doc (a document starts)
     value: str = ""
     times: int = 1
     label: str = ""  # what it is, shown while running
+    doc_type: str = ""  # on the doc action
 
 
 @dataclass
@@ -77,6 +89,9 @@ class BotOptions:
         default_factory=lambda: {k: dict(v) for k, v in DEFAULT_TEMPLATES.items()})
     warehouse: str = "01"
     department: str = ""
+    process: str = ""  # part of the program file name of Express (e.g. "express"), "" = any program
+    confirm_first_only: bool = True  # {CONFIRM} only on the first document of each type in a run
+    remark_ref: bool = False  # add our document number to หมายเหตุ (to find the document in Express later)
 
 
 class TemplateError(ValueError):
@@ -90,7 +105,7 @@ def _num(v: float) -> str:
 def doc_values(doc: StockDoc, options: BotOptions) -> dict[str, str]:
     from .express_out import express_remark
 
-    return {"department": doc.department or options.department, "remark": express_remark(doc),
+    return {"department": doc.department or options.department, "remark": express_remark(doc, options.remark_ref),
             "date": thai_date(doc.date), "job": doc.job, "vendor": doc.vendor, "ref": doc.ref, "doc_no": doc.doc_no}
 
 
@@ -125,6 +140,8 @@ def parse(template: str, fields: dict[str, str]) -> list[tuple[str, str, int]]:
                 out.append(("wait", parts[1], 1))
             elif parts[0] == "STOP":
                 out.append(("stop", "", 1))
+            elif parts[0] == "CONFIRM":
+                out.append(("confirm", key.strip()[len("CONFIRM"):].strip() or "ไปต่อได้ไหม?", 1))
             else:
                 times = int(parts[1]) if len(parts) == 2 and parts[1].isdigit() else 1
                 combo = parts[0].split("+")
@@ -144,11 +161,61 @@ def check_template(doc_type: str, parts: dict[str, str]) -> list[str]:
     return errors
 
 
+def template_warnings(doc_type: str, parts: dict[str, str]) -> list[str]:
+    """Not errors, but risky: a save key, no stop at the end, no wait after a key that opens something."""
+    out = []
+    try:
+        sections = {sec: parse(parts.get(sec, ""), DOC_FIELDS if sec != LINE else LINE_FIELDS) for sec in (HEAD, LINE, END)}
+    except TemplateError:
+        return out
+    for sec, toks in sections.items():
+        if any(k == "key" and v in SAVE_KEYS for k, v, _t in toks):
+            out.append(f"{doc_type}: มีปุ่มบันทึก ({', '.join(sorted(SAVE_KEYS))}) – Express จะบันทึกเองโดยไม่มีคนตรวจ")
+        for i, (k, v, _t) in enumerate(toks):
+            if k == "key" and v in ("F2", "F4", "F8") and not (i + 1 < len(toks) and toks[i + 1][0] == "wait"):
+                out.append(f"{doc_type}: ไม่มี {{WAIT}} หลัง {{{v}}} – Express อาจยังเปิดหน้าจอไม่ทัน")
+    if not any(k in ("stop", "confirm") for k, _v, _t in sections[END]):
+        out.append(f"{doc_type}: ท้ายเอกสารไม่มี {{STOP}} – โปรแกรมจะไม่หยุดให้ตรวจก่อนบันทึก")
+    return out
+
+
+def fix_text(text: str) -> tuple[str, list[str]]:
+    """The text Express can store (Thai code page 874): NFC, known replacements; returns (text, characters left out)."""
+    text = unicodedata.normalize("NFC", text)
+    text = "".join(CP874_FIXES.get(ch, ch) for ch in text)
+    bad = sorted({ch for ch in text if not _cp874(ch)})
+    return "".join(ch for ch in text if ch not in bad), bad
+
+
+def _cp874(ch: str) -> bool:
+    try:
+        ch.encode("cp874")
+        return True
+    except UnicodeEncodeError:
+        return False
+
+
+def check_text(docs_actions: list[list[Action]]) -> list[str]:
+    """Fix the typed text in place; returns what could not be typed (document, where, characters)."""
+    problems = []
+    current = ""
+    for actions in docs_actions:
+        for a in actions:
+            if a.kind == "doc":
+                current = a.value
+            elif a.kind == "text":
+                fixed, bad = fix_text(a.value)
+                a.value = fixed
+                if bad:
+                    problems.append(f"{current} {a.label}: ตัด {' '.join(repr(c) for c in bad)} (Express เก็บไม่ได้)")
+    return problems
+
+
 def actions_for(doc: StockDoc, options: BotOptions) -> list[Action]:
     tpl = options.templates.get(doc.doc_type) or DEFAULT_TEMPLATES.get(doc.doc_type)
     if not tpl:
         raise TemplateError(f"ไม่มีแบบการคีย์ของ {doc.doc_type}")
-    out = [Action("doc", doc.doc_no, label=f"{doc.doc_no} ({doc.doc_type})")]
+    out = [Action("doc", doc.doc_no, label=f"{doc.doc_no} ({doc.doc_type})", doc_type=doc.doc_type)]
 
     names = {v: k for k, v in {**DOC_FIELDS, **LINE_FIELDS}.items()}
 
@@ -184,25 +251,41 @@ def _ahk_key(name: str, times: int) -> str:
     return "".join(_AHK_MODS[m] for m in combo[:-1]) + "{" + base + (f" {times}" if times > 1 else "") + "}"
 
 
+def _ahk_str(text: str) -> str:
+    """Text inside an AutoHotkey "…" string: ` and " escaped, line breaks and control characters dropped."""
+    text = "".join(ch for ch in str(text) if ch >= " " or ch == "\t").replace("\t", " ")
+    return text.replace("`", "``").replace('"', '`"').replace(";", "`;")
+
+
+def _ahk_comment(text: str) -> str:
+    return "".join(ch for ch in str(text) if ch >= " ")
+
+
 def to_ahk(docs_actions: list[list[Action]], options: BotOptions) -> str:
-    win = options.window.replace('"', "")
+    win = _ahk_str(options.window)
     lines = ["#Requires AutoHotkey v2.0", "; คีย์เข้า Express อัตโนมัติ – สร้างโดย RRS Part List Studio",
              "; เปิดหน้าจอเอกสารใน Express ไว้ก่อน · กด Ctrl+Alt+Q เพื่อหยุด", "SetKeyDelay 30, 20",
              'SetTitleMatchMode 2', "^!q::ExitApp", f'if !WinExist("{win}") {{', f'    MsgBox "ไม่พบหน้าต่าง {win}"',
              "    ExitApp", "}", f'WinActivate "{win}"', f'WinWaitActive "{win}",, 5', ""]
+    current = ""
     for actions in docs_actions:
         for a in actions:
             if a.kind == "doc":
-                lines.append(f"; ---- {a.label}")
+                current = a.value
+                lines.append(f"; ---- {_ahk_comment(a.label)}")
             elif a.kind == "text":
-                text = a.value.replace("`", "``").replace('"', '`"')
-                lines.append(f'SendText "{text}"')
+                lines.append(f'SendText "{_ahk_str(a.value)}"')
             elif a.kind == "key":
                 lines.append(f'Send "{_ahk_key(a.value, a.times)}"')
             elif a.kind == "wait":
                 lines.append(f"Sleep {a.value}")
             elif a.kind == "stop":
-                lines.append(f'MsgBox "{a.label}: ตรวจในหน้าจอ Express แล้วกดบันทึกเอง จากนั้นกด OK เพื่อคีย์ใบถัดไป"')
+                lines.append(f'MsgBox "{_ahk_str(current)}: ตรวจในหน้าจอ Express แล้วกดบันทึกเอง จากนั้นกด OK เพื่อคีย์ใบถัดไป"')
+                lines.append(f'WinActivate "{win}"')
+            elif a.kind == "confirm":
+                lines.append(f'if MsgBox("{_ahk_str(current)}: {_ahk_str(a.value)}",, "YesNo") = "No"')
+                lines.append("    ExitApp")
+                lines.append(f'WinActivate "{win}"')
             if a.kind in ("text", "key"):
                 lines.append(f"Sleep {max(options.delay_ms, 0)}")
     lines.append('MsgBox "คีย์ครบแล้ว – อย่าลืมใส่เลขที่ Express ในโปรแกรม"')
@@ -213,7 +296,13 @@ def to_ahk(docs_actions: list[list[Action]], options: BotOptions) -> str:
 # Running: an output that types (the Windows keyboard, or a stand-in in the tests)
 # --------------------------------------------------------------------------
 class Stopped(Exception):
-    """The run was stopped: the user, the window lost, the mouse in the top-left corner."""
+    """The run was stopped: the user, the window lost, the mouse in the top-left corner, a stop key.
+    keyed: documents typed up to their {STOP}; partial: the document typed half-way (open, unsaved in Express)."""
+
+    def __init__(self, message: str, keyed: list[str] | None = None, partial: str = ""):
+        super().__init__(message)
+        self.keyed = list(keyed or [])
+        self.partial = partial
 
 
 class Output:
@@ -234,42 +323,73 @@ class Output:
 
 
 def run(docs_actions: list[list[Action]], options: BotOptions, out: Output, progress=None, wait_stop=None,
-        should_stop=lambda: False, sleep=time.sleep) -> list[str]:
-    """Type the documents; progress(done, total, label); wait_stop(label) is called at {STOP} and returns False to end
-    the run. Returns the document numbers keyed (up to their {STOP} / end)."""
+        should_stop=lambda: False, sleep=time.sleep, confirm=None) -> list[str]:
+    """Type the documents; progress(done, total, label); wait_stop(doc_no) is called at {STOP} and returns False to end
+    the run; confirm(doc_no, question) at {CONFIRM} (False = end, nothing more typed into that document).
+    Returns the document numbers keyed (up to their {STOP} / end); a stop raises Stopped with the same list and the
+    document left half-typed."""
+    keyed: list[str] = []
+    state = {"current": "", "typed": False}
+
+    def stop(message: str):
+        partial = state["current"] if state["current"] and state["typed"] and state["current"] not in keyed else ""
+        return Stopped(message, keyed, partial)
+
+    def check():
+        if should_stop() or out.abort_requested():
+            raise stop("หยุดแล้ว")
+
+    def pause(ms: int) -> None:
+        left = max(int(ms), 0) / 1000
+        while left > 0:  # in slices: a stop is seen during long waits too
+            check()
+            step = min(left, 0.05)
+            sleep(step)
+            left -= step
+
     if not out.activate(options.window):
         raise Stopped(f"ไม่พบหน้าต่างที่ชื่อมี “{options.window}” – เปิด Express (หน้าจอเอกสาร) ไว้ก่อน")
     total = sum(len(a) for a in docs_actions)
-    done, keyed = 0, []
+    done = 0
+    confirmed_types: set[str] = set()
     for actions in docs_actions:
-        current = ""
+        state["current"], state["typed"] = "", False
+        doc_type = ""
         for a in actions:
-            if should_stop() or out.abort_requested():
-                raise Stopped("หยุดแล้ว")
+            check()
             if a.kind in ("text", "key") and not out.still_there(options.window):
-                raise Stopped(f"หน้าต่าง {options.window} ไม่ได้อยู่ด้านหน้า – หยุดเพื่อไม่ให้พิมพ์ผิดที่")
+                raise stop(f"หน้าต่าง {options.window} ไม่ได้อยู่ด้านหน้า – หยุดเพื่อไม่ให้พิมพ์ผิดที่")
             if a.kind == "doc":
-                current = a.value
+                state["current"], doc_type = a.value, a.doc_type
             elif a.kind == "text":
                 out.text(a.value, options.paste_thai and not a.value.isascii())
+                state["typed"] = True
             elif a.kind == "key":
                 out.key(a.value, a.times)
+                state["typed"] = True
             elif a.kind == "wait":
-                sleep(int(a.value) / 1000)
+                pause(int(a.value))
+            elif a.kind == "confirm":
+                if confirm is not None and not (options.confirm_first_only and doc_type in confirmed_types):
+                    if not confirm(state["current"], a.value):
+                        raise stop(f"{state['current']}: ไม่ได้ยืนยัน – หยุด")
+                    confirmed_types.add(doc_type)
+                    if not out.activate(options.window):
+                        raise stop(f"ไม่พบหน้าต่าง {options.window}")
             elif a.kind == "stop":
-                if current and current not in keyed:
-                    keyed.append(current)
-                if wait_stop is not None and not wait_stop(current):
+                if state["current"] and state["current"] not in keyed:
+                    keyed.append(state["current"])
+                if wait_stop is not None and not wait_stop(state["current"]):
                     return keyed
                 if not out.activate(options.window):
-                    raise Stopped(f"ไม่พบหน้าต่าง {options.window}")
+                    raise stop(f"ไม่พบหน้าต่าง {options.window}")
             if a.kind in ("text", "key"):
-                sleep(max(options.delay_ms, 0) / 1000)
+                pause(options.delay_ms)
             done += 1
             if progress:
                 progress(done, total, a.label)
-        if current and current not in keyed:
-            keyed.append(current)
+        if state["current"] and state["current"] not in keyed:
+            keyed.append(state["current"])
     return keyed
 
 
@@ -281,7 +401,9 @@ class WindowsKeyboard(Output):
           "SPACE": 0x20, "CTRL": 0x11, "ALT": 0x12, "SHIFT": 0x10,
           **{f"F{i}": 0x6F + i for i in range(1, 13)}, **{c: ord(c) for c in "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"}}
 
-    def __init__(self, clipboard=None):
+    BROWSERS = ("chrome.exe", "msedge.exe", "firefox.exe", "explorer.exe", "brave.exe", "opera.exe")
+
+    def __init__(self, clipboard=None, process: str = ""):
         if not sys.platform.startswith("win"):
             raise OSError("คีย์อัตโนมัติใช้ได้บน Windows (เครื่องที่ติดตั้ง Express)")
         import ctypes
@@ -299,7 +421,18 @@ class WindowsKeyboard(Output):
         user32.GetWindowTextLengthW.argtypes = [HWND]
         user32.GetWindowTextW.argtypes = [HWND, wintypes.LPWSTR, ctypes.c_int]
         user32.GetCursorPos.argtypes = [ctypes.POINTER(wintypes.POINT)]
+        user32.GetWindowThreadProcessId.argtypes = [HWND, ctypes.POINTER(wintypes.DWORD)]
+        user32.GetWindowThreadProcessId.restype = wintypes.DWORD
+        user32.GetAsyncKeyState.argtypes, user32.GetAsyncKeyState.restype = [ctypes.c_int], ctypes.c_short
+        user32.AttachThreadInput.argtypes = [wintypes.DWORD, wintypes.DWORD, wintypes.BOOL]
+        self.kernel32 = k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        k32.OpenProcess.argtypes, k32.OpenProcess.restype = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD], wintypes.HANDLE
+        k32.QueryFullProcessImageNameW.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR,
+                                                   ctypes.POINTER(wintypes.DWORD)]
+        k32.CloseHandle.argtypes = [wintypes.HANDLE]
+        self.process = (process or "").strip().lower()
         self.hwnd = None
+        self.target = ""  # "title — program.exe" of the window typed into
         self.clipboard = clipboard  # set_text(str) for paste_thai (default: the Windows clipboard, any thread)
 
         ulong_ptr = ctypes.c_size_t
@@ -322,7 +455,28 @@ class WindowsKeyboard(Output):
         self.KEYBDINPUT, self.INPUT = KEYBDINPUT, INPUT
 
     # ---- windows ----------------------------------------------------------------------------------
-    def _find(self, title: str):
+    def _exe(self, hwnd) -> str:
+        """The program file of a window (express.exe …), "" when Windows does not tell."""
+        ctypes, wintypes = self.ctypes, self.wintypes
+        pid = wintypes.DWORD()
+        self.user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        if pid.value == os.getpid():
+            return "<this program>"
+        h = self.kernel32.OpenProcess(0x1000, False, pid.value)  # PROCESS_QUERY_LIMITED_INFORMATION
+        if not h:
+            return ""
+        try:
+            buf = ctypes.create_unicode_buffer(520)
+            size = wintypes.DWORD(520)
+            if self.kernel32.QueryFullProcessImageNameW(h, 0, buf, ctypes.byref(size)):
+                return buf.value.replace("/", "\\").rsplit("\\", 1)[-1].lower()
+            return ""
+        finally:
+            self.kernel32.CloseHandle(h)
+
+    def candidates(self, title: str) -> list[tuple[int, str, str]]:
+        """Visible top-level windows whose title has `title` (not this program, browsers, Explorer):
+        (hwnd, title, program)."""
         ctypes, wintypes, user32 = self.ctypes, self.wintypes, self.user32
         found = []
         proc = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
@@ -332,22 +486,44 @@ class WindowsKeyboard(Output):
                 n = user32.GetWindowTextLengthW(hwnd)
                 buf = ctypes.create_unicode_buffer(n + 1)
                 user32.GetWindowTextW(hwnd, buf, n + 1)
-                if title.lower() in buf.value.lower() and "part list studio" not in buf.value.lower():
-                    found.append(hwnd)
+                if title.lower() in buf.value.lower():
+                    found.append((hwnd, buf.value))
             return True
 
         user32.EnumWindows(proc(each), 0)
-        return found[0] if found else None
+        out = []
+        for hwnd, text in found:
+            exe = self._exe(hwnd)
+            if exe == "<this program>" or exe in self.BROWSERS or "part list studio" in text.lower():
+                continue
+            if self.process and self.process not in exe:
+                continue
+            out.append((hwnd, text, exe))
+        return out
 
     def activate(self, title: str) -> bool:
-        hwnd = self._find(title)
-        if not hwnd:
+        found = self.candidates(title)
+        if not found:
             return False
+        if len(found) > 1 and self.hwnd not in [h for h, _t, _e in found]:
+            raise Stopped("พบหลายหน้าต่างที่ชื่อมี “%s”: %s – พิมพ์ชื่อหน้าต่างให้ละเอียดขึ้น หรือใส่ชื่อโปรแกรม"
+                          % (title, " · ".join(f"{t} — {e or '?'}" for _h, t, e in found[:5])))
+        hwnd = self.hwnd if self.hwnd in [h for h, _t, _e in found] else found[0][0]
         self.hwnd = hwnd
+        self.target = next(f"{t} — {e or '?'}" for h, t, e in found if h == hwnd)
+        if self.still_there(title):
+            return True  # already in front: no key at all (a lone Alt would open the Express menu)
         if self.user32.IsIconic(hwnd):
             self.user32.ShowWindow(hwnd, 9)  # SW_RESTORE
-        self.key("ALT")  # Windows lets a program bring another window forward after a key press
-        self.user32.SetForegroundWindow(hwnd)
+        self._send([self._vk(0x87, True)])  # a key-up of F24, which no program uses: Windows then lets us bring
+        if not self.user32.SetForegroundWindow(hwnd):  # another window forward
+            fg = self.user32.GetForegroundWindow()
+            mine = self.kernel32.GetCurrentThreadId()
+            theirs = self.user32.GetWindowThreadProcessId(fg, None) if fg else 0
+            if theirs and theirs != mine:
+                self.user32.AttachThreadInput(mine, theirs, True)
+                self.user32.SetForegroundWindow(hwnd)
+                self.user32.AttachThreadInput(mine, theirs, False)
         time.sleep(0.4)
         return self.still_there(title)
 
@@ -358,7 +534,10 @@ class WindowsKeyboard(Output):
     def abort_requested(self) -> bool:
         pt = self.wintypes.POINT()
         self.user32.GetCursorPos(self.ctypes.byref(pt))
-        return pt.x <= 2 and pt.y <= 2  # the mouse pushed into the top-left corner
+        if pt.x <= 2 and pt.y <= 2:  # the mouse pushed into the top-left corner
+            return True
+        down = lambda vk: bool(self.user32.GetAsyncKeyState(vk) & 0x8000)  # noqa: E731
+        return down(0x13) or (down(0x11) and down(0x12) and down(0x51))  # Pause, or Ctrl+Alt+Q
 
     # ---- input ------------------------------------------------------------------------------------
     def _send(self, items) -> None:
@@ -388,6 +567,10 @@ class WindowsKeyboard(Output):
         u.OpenClipboard.argtypes = [wintypes.HWND]
         u.SetClipboardData.argtypes, u.SetClipboardData.restype = [wintypes.UINT, wintypes.HANDLE], wintypes.HANDLE
         data = (text + "\0").encode("utf-16-le")
+        try:
+            ansi = (text + "\0").encode("cp874")  # Express is a Thai ANSI program: give it the text in its code page
+        except UnicodeEncodeError:
+            ansi = None
         for _ in range(10):
             if u.OpenClipboard(None):
                 break
@@ -401,6 +584,13 @@ class WindowsKeyboard(Output):
             ctypes.memmove(ptr, data, len(data))
             k32.GlobalUnlock(h)
             u.SetClipboardData(13, h)  # CF_UNICODETEXT, the clipboard owns it now
+            if ansi is not None:
+                for fmt, payload in ((1, ansi), (16, (0x041E).to_bytes(4, "little"))):  # CF_TEXT, CF_LOCALE (Thai)
+                    hh = k32.GlobalAlloc(0x0002, len(payload))
+                    pp = k32.GlobalLock(hh)
+                    ctypes.memmove(pp, payload, len(payload))
+                    k32.GlobalUnlock(hh)
+                    u.SetClipboardData(fmt, hh)
         finally:
             u.CloseClipboard()
 
@@ -416,3 +606,15 @@ class WindowsKeyboard(Output):
             up = self.KEYBDINPUT(wVk=0, wScan=code, dwFlags=0x0004 | 0x0002, time=0, dwExtraInfo=0)
             self._send([self.INPUT(type=1, ki=down), self.INPUT(type=1, ki=up)])
             time.sleep(0.004)
+
+
+def windows_codepage() -> int | None:
+    """The code page of non-Unicode programs (874 = Thai) on Windows, None elsewhere."""
+    if not sys.platform.startswith("win"):
+        return None
+    import ctypes
+
+    try:
+        return int(ctypes.windll.kernel32.GetACP())
+    except Exception:  # noqa: BLE001
+        return None

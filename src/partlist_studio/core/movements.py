@@ -77,6 +77,7 @@ class StockDoc:
     vendor: str = ""  # RR: ผู้จำหน่าย (code / name in Express)
     ref: str = ""  # RR: the PO it receives (อ้างอิง)
     keyed_at: str = ""  # typed into Express by the keying bot (waits for its Express number)
+    key_partial: str = ""  # the bot stopped half-way through it (open, unsaved in Express) - when
 
     @property
     def type_name(self) -> str:

@@ -1418,7 +1418,11 @@ def test_express_bot_dialog_types_and_asks_the_number(window, app, monkeypatch):
             self.typed.append("{" + name + "}")
 
     monkeypatch.setattr(dlg_mod.QInputDialog, "getText", staticmethod(lambda *a, **k: ("OU6900001", True)))
+    asked = []
+    monkeypatch.setattr(dlg_mod.QMessageBox, "question",
+                        staticmethod(lambda *a, **k: asked.append(a[2]) or dlg_mod.QMessageBox.Yes))
     d = dlg_mod.ExpressBotDialog(state, [doc], window, output_factory=Fake)
+    d.countdown_s = 0
     d.delay.setValue(0)
     for e in d.tpl_edits["OU"].values():  # no waits in the test
         e.setPlainText(e.toPlainText().replace("{WAIT 1200}", "").replace("{WAIT 600}", "").replace("{WAIT 400}", "")
@@ -1431,6 +1435,8 @@ def test_express_bot_dialog_types_and_asks_the_number(window, app, monkeypatch):
         time.sleep(0.01)
     assert d.worker is None
     assert Fake.typed[:4] == ["{F4}", "ST01", "{ENTER}", "ช่างท๊อปฟู"] and "ST69-0001" in Fake.typed and "15" in Fake.typed
-    assert doc.express_no == "OU6900001" and doc.keyed_at
+    assert doc.express_no == "OU6900001" and doc.keyed_at and not doc.key_partial
+    assert any("หน้าจอเป็นใบใหม่" in q for q in asked)  # the {CONFIRM} after the new-document key
+    assert "ได้เลขที่" in d.log.toPlainText()
     assert "OU" in json.loads(state.settings.get(dlg_mod.SETTINGS_KEY))["templates"]
     d.close()

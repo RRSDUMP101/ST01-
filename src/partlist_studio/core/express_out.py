@@ -20,6 +20,7 @@ pictures, laser layouts and DXF, shelf locations, QR codes and phones.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -154,14 +155,44 @@ def outbox(ledger: Ledger, stock: StockList, express: StockList | None, partlist
 # --------------------------------------------------------------------------
 # One document as on its Express screen
 # --------------------------------------------------------------------------
-def express_remark(doc: StockDoc) -> str:
-    """หมายเหตุ as keyed in Express: PD / FR carry the job / SO there (Express PD has no job field)."""
+def express_remark(doc: StockDoc, with_ref: bool = False) -> str:
+    """หมายเหตุ as keyed in Express: PD / FR carry the job / SO there (Express PD has no job field).
+    with_ref: our document number at the end ("#PD6911-0001"), to find the document in Express later."""
     parts = [doc.job] if doc.job and doc.doc_type in ("PD", "FR", "AJ") else []
     if doc.remark and doc.remark not in parts:
         parts.append(doc.remark)
     if doc.job and doc.doc_type in ("OU", "RR") and doc.job not in " ".join(parts):
         parts.append(f"งาน {doc.job}")
-    return " ".join(parts).strip()
+    text = " ".join(parts).strip()
+    if with_ref and doc.doc_no:
+        ref = f"#{doc.doc_no}"
+        text = f"{text[:REMARK_WIDTH - len(ref) - 1].rstrip()} {ref}".strip()
+    return text
+
+
+REMARK_WIDTH = 60  # หมายเหตุ in Express takes about this many characters (seen on the PD screen)
+NUMBER_RE = re.compile(r"^([A-Z]{2,4})(\d{5,9})$")
+
+
+def check_express_no(doc: StockDoc, number: str, ledger: Ledger | None = None) -> list[str]:
+    """Warnings about an Express number typed for a document (it is kept anyway when the user says so):
+    the prefix of another type (a count goes in as JU), not letters + digits as Express gives them, used by another
+    document already."""
+    number = (number or "").strip().upper()
+    if not number:
+        return []
+    out = []
+    want = EXPRESS_TYPES.get(doc.doc_type, doc.doc_type)
+    m = NUMBER_RE.match(number)
+    if not m:
+        out.append(f"“{number}” ไม่ใช่รูปแบบเลขที่ของ Express (ตัวอักษร + ตัวเลข เช่น {want}0000526)")
+    elif not m.group(1).startswith(want) and not want.startswith(m.group(1)):
+        out.append(f"เลขที่ขึ้นต้นด้วย {m.group(1)} แต่ใบนี้เป็น {want} ใน Express")
+    if ledger is not None:
+        other = next((d for d in ledger.docs if d is not doc and d.express_no.strip().upper() == number), None)
+        if other is not None:
+            out.append(f"เลขที่ {number} ใช้กับ {other.doc_no} อยู่แล้ว")
+    return out
 
 
 def screen_note(doc: StockDoc) -> str:

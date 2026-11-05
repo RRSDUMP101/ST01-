@@ -3,7 +3,9 @@
 import io
 import sys
 import tarfile
+import tempfile
 import time
+from pathlib import Path
 
 import pytest
 
@@ -128,3 +130,64 @@ def test_short_link_from_is_gd_else_tinyurl():
     assert "is.gd" in asked[0] and "encouraging-referring-grass-arabic.trycloudflare.com" in asked[0]
     assert tunnels.shorten(long, lambda url, timeout: Resp(b"Error: rate limit")) == ""  # not a short link
     assert tunnels.shorten("", opener) == ""
+
+
+def test_download_errors_in_words_not_html():
+    import ssl
+    import urllib.error
+
+    bad_cert = urllib.error.URLError(ssl.SSLCertVerificationError(1, "[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed"))
+    assert "CERTIFICATE_VERIFY_FAILED" in tunnels.describe_error(bad_cert) and "<" not in tunnels.describe_error(bad_cert)
+    assert "หมดเวลา" in tunnels.describe_error(urllib.error.URLError(TimeoutError("timed out")))
+    assert tunnels.describe_error(OSError()) == "OSError"
+
+    def refuse(url, timeout):
+        raise bad_cert
+
+    with pytest.raises(OSError, match="CERTIFICATE_VERIFY_FAILED"):  # tests: no curl
+        tunnels.download_cloudflared(Path(tempfile.mkdtemp()), None, refuse)
+    assert tunnels.ssl_context().verify_mode == ssl.CERT_REQUIRED
+    assert tunnels.install_hint()
+
+
+def test_download_falls_back_to_curl(tmp_path, monkeypatch):
+    import ssl
+    import urllib.error
+
+    program = b"\x7fELF" + b"x" * 1_200_000
+    (tmp_path / "src.bin").write_bytes(program)
+    curl = tmp_path / "fakecurl.py"
+    curl.write_text("import shutil, sys\nshutil.copy(sys.argv[-1].replace('URL', ''), sys.argv[sys.argv.index('-o') + 1])\n")
+    monkeypatch.setattr(tunnels, "_exe_name", lambda: "cloudflared")
+    monkeypatch.setattr(tunnels, "RELEASES", str(tmp_path) + "/")
+    monkeypatch.setattr(tunnels, "asset_name", lambda: "src.bin")
+    calls = []
+    real_popen = tunnels.subprocess.Popen
+
+    def popen(cmd, **kw):
+        calls.append(cmd)
+        return real_popen([sys.executable, str(curl), *cmd[1:]], **kw)
+
+    monkeypatch.setattr(tunnels.subprocess, "Popen", popen)
+
+    def refuse(url, timeout):
+        raise urllib.error.URLError(ssl.SSLCertVerificationError(1, "CERTIFICATE_VERIFY_FAILED"))
+
+    path = tunnels.download_cloudflared(tmp_path / "data", None, refuse, curl="curl")
+    assert path.read_bytes() == program and calls and calls[0][0] == "curl"
+    assert not list((tmp_path / "data" / "bin").glob("*.download"))
+
+
+def test_install_cloudflared_by_hand(tmp_path, monkeypatch):
+    monkeypatch.setattr(tunnels, "_exe_name", lambda: "cloudflared")
+    program = b"\xcf\xfa\xed\xfe" + b"m" * 1_100_000
+    packed = tmp_path / "cloudflared-darwin-amd64.tgz"
+    with tarfile.open(packed, "w:gz") as tar:
+        info = tarfile.TarInfo("cloudflared")
+        info.size = len(program)
+        tar.addfile(info, io.BytesIO(program))
+    path = tunnels.install_cloudflared(tmp_path / "data", packed)
+    assert path.read_bytes() == program and tunnels.find_cloudflared(tmp_path / "data") == path
+    (tmp_path / "note.txt").write_text("hello")
+    with pytest.raises(OSError):
+        tunnels.install_cloudflared(tmp_path / "data2", tmp_path / "note.txt")

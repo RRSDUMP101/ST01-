@@ -166,7 +166,7 @@ class MobileHub(QObject):
         try:
             tunnels.download_cloudflared(self.folder, lambda done, total: self.download_progress.emit(done, total))
         except Exception as e:  # noqa: BLE001 - shown on the page
-            self.online_error = f"ดาวน์โหลด cloudflared ไม่ได้: {e}"
+            self.online_error = f"ดาวน์โหลด cloudflared ไม่ได้: {e or type(e).__name__} · {tunnels.install_hint()}"
             self.downloading = False
             self.online_changed.emit()
             return

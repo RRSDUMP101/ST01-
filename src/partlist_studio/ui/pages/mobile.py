@@ -4,7 +4,9 @@ location labels."""
 
 from __future__ import annotations
 
+import html
 from datetime import datetime
+from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QColor, QGuiApplication, QPainter, QPen, QPixmap
@@ -279,6 +281,9 @@ class MobilePage(QWidget):
         self.online_copy = button("คัดลอกลิงก์ออนไลน์", tooltip="ลิงก์ของแอป (ไม่มีรหัสจับคู่)")
         self.online_copy.clicked.connect(self.copy_online)
         row.addWidget(self.online_copy)
+        self.online_pick = button("เลือกไฟล์ cloudflared…", tooltip="ใช้ cloudflared ที่ดาวน์โหลดเอง (โปรแกรม หรือไฟล์ .tgz ของ Mac)")
+        self.online_pick.clicked.connect(self.pick_cloudflared)
+        row.addWidget(self.online_pick)
         row.addStretch(1)
         card.body.addLayout(row)
         self.online_status = QLabel()
@@ -329,6 +334,22 @@ class MobilePage(QWidget):
             self.actions.error("เปิดลิงก์ออนไลน์ไม่ได้", self.hub.online_error)
         self.refresh()
 
+    def pick_cloudflared(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(self, "เลือกไฟล์ cloudflared", str(Path.home() / "Downloads"),
+                                              "cloudflared (cloudflared* *.tgz *.exe);;ทุกไฟล์ (*)")
+        if not path:
+            return
+        try:
+            tunnels.install_cloudflared(self.hub.folder, path)
+        except OSError as e:
+            self.actions.error("ใช้ไฟล์นี้ไม่ได้", str(e))
+            return
+        self.hub.online_error = ""
+        self.state.notify("ติดตั้ง cloudflared แล้ว – กำลังเปิดลิงก์ออนไลน์")
+        if self.hub.online_state not in (tunnels.ON, tunnels.STARTING):
+            self.toggle_online()
+        self.refresh()
+
     def copy_online(self) -> None:
         if self.hub.online:
             QGuiApplication.clipboard().setText(self.hub.share_url())
@@ -362,7 +383,7 @@ class MobilePage(QWidget):
         elif state == tunnels.STARTING:
             text = "กำลังเปิด…" if not self.hub.downloading else self.online_status.text() or "กำลังดาวน์โหลด cloudflared …"
         elif self.hub.online_error:
-            text = f"<b style='color:{theme.STATUS_COLORS['ขาด']}'>เปิดไม่ได้</b> – {self.hub.online_error}"
+            text = f"<b style='color:{theme.STATUS_COLORS['ขาด']}'>เปิดไม่ได้</b> – {html.escape(self.hub.online_error)}"
         else:
             text = "ปิดอยู่ – มือถือใช้ได้เฉพาะใน Wi-Fi โรงงาน"
         self.online_status.setText(text)

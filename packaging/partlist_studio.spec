@@ -20,7 +20,7 @@ a = Analysis(
         (str(ROOT / "src" / "partlist_studio" / "resources"), "partlist_studio/resources"),
         (str(ROOT / "samples"), "samples"),
     ] + ([(str(LIBREDWG), "libredwg")] if LIBREDWG.is_dir() else []),
-    hiddenimports=["ezdxf.addons.odafc", "openpyxl", "xlrd", "gspread", "google_auth_oauthlib.flow",
+    hiddenimports=["certifi", "ezdxf.addons.odafc", "openpyxl", "xlrd", "gspread", "google_auth_oauthlib.flow",
                    "segno"],
     excludes=["tkinter", "matplotlib", "PySide6.QtWebEngineCore", "PySide6.Qt3DCore"],
 )

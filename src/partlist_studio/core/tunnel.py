@@ -56,6 +56,18 @@ def _exe_name() -> str:
     return "cloudflared.exe" if sys.platform.startswith("win") else "cloudflared"
 
 
+def install_hint() -> str:
+    """How to put cloudflared on this computer by hand, when the program cannot download it."""
+    if sys.platform == "darwin":
+        return ("ติดตั้งเองได้: เปิด Terminal พิมพ์ brew install cloudflared (ต้องมี Homebrew) "
+                "หรือดาวน์โหลด cloudflared-darwin-amd64.tgz (Intel) / -arm64.tgz (ชิป M) จาก "
+                "github.com/cloudflare/cloudflared/releases แตกไฟล์ แล้วกด เลือกไฟล์ cloudflared…")
+    if sys.platform.startswith("win"):
+        return ("ติดตั้งเองได้: ดาวน์โหลด cloudflared-windows-amd64.exe จาก github.com/cloudflare/cloudflared/releases "
+                "แล้วกด เลือกไฟล์ cloudflared…")
+    return "ติดตั้ง cloudflared เอง (developers.cloudflare.com) แล้วเปิดอีกครั้ง"
+
+
 def find_cloudflared(folder: str | Path) -> Path | None:
     """The program's own copy (data folder/bin), else one installed on the PC."""
     own = Path(folder) / "bin" / _exe_name()
@@ -71,19 +83,88 @@ def find_cloudflared(folder: str | Path) -> Path | None:
     return None
 
 
-def download_cloudflared(folder: str | Path, progress=None, opener=None) -> Path:
-    """Download cloudflared once into the data folder (bin/); progress(done_bytes, total_bytes)."""
-    name = asset_name()
-    if not name:
-        raise OSError("ดาวน์โหลด cloudflared ให้เครื่องแบบนี้ไม่ได้ – ติดตั้งเองจาก developers.cloudflare.com")
-    if opener is None:
-        import urllib.request
+def ssl_context():
+    """The https check of the downloads: the certificates of the computer + those of certifi + macOS's own list.
+    A program packed for macOS has no certificate list of its own: without these every https download failed
+    there with CERTIFICATE_VERIFY_FAILED."""
+    import ssl
 
-        opener = urllib.request.urlopen
-    target = Path(folder) / "bin" / _exe_name()
-    target.parent.mkdir(parents=True, exist_ok=True)
+    ctx = ssl.create_default_context()
+    files = ["/etc/ssl/cert.pem"] if sys.platform == "darwin" else []
+    try:
+        import certifi
+
+        files.insert(0, certifi.where())
+    except Exception:  # noqa: BLE001 - not packed: the computer's own certificates only
+        pass
+    for cafile in files:
+        try:
+            if Path(cafile).is_file():
+                ctx.load_verify_locations(cafile=cafile)
+        except Exception:  # noqa: BLE001 - a broken file: the others still count
+            continue
+    return ctx
+
+
+def url_opener():
+    """urlopen(url, timeout) with ssl_context()."""
+    import urllib.request
+
+    ctx = ssl_context()
+    return lambda url, timeout: urllib.request.urlopen(url, timeout=timeout, context=ctx)
+
+
+def describe_error(e: BaseException) -> str:
+    """A download error in words (str() of a urllib error is '<urlopen error …>', or even empty)."""
+    import ssl
+    import urllib.error
+
+    reason = getattr(e, "reason", None) if isinstance(e, urllib.error.URLError) else None
+    inner = reason if isinstance(reason, BaseException) else e
+    if isinstance(e, urllib.error.HTTPError):
+        return f"เซิร์ฟเวอร์ตอบ HTTP {e.code}" + (f" {e.reason}" if e.reason else "")
+    if isinstance(inner, ssl.SSLCertVerificationError) or "CERTIFICATE_VERIFY_FAILED" in str(inner):
+        return "ตรวจใบรับรอง https ไม่ผ่าน (CERTIFICATE_VERIFY_FAILED)"
+    if isinstance(inner, (TimeoutError, OSError)) and "timed out" in str(inner).lower():
+        return "เชื่อมต่อหมดเวลา – อินเทอร์เน็ตช้าหรือถูกบล็อก"
+    if isinstance(inner, OSError) and getattr(inner, "errno", None) in (8, -2, -3, 11001, 11004):
+        return "หาเซิร์ฟเวอร์ไม่เจอ – เครื่องนี้ยังไม่ต่ออินเทอร์เน็ต"
+    text = str(reason if reason is not None else e).strip()
+    return f"{type(inner).__name__}: {text}" if text else type(inner).__name__
+
+
+def _find_curl() -> str | None:
+    found = shutil.which("curl")
+    if found:
+        return found
+    for guess in ("/usr/bin/curl", r"C:\Windows\System32\curl.exe"):
+        if Path(guess).is_file():
+            return guess
+    return None
+
+
+def _curl_fetch(url: str, dest: Path, progress=None, curl: str | None = None) -> None:
+    """Download with the computer's curl (macOS / Windows 10+): it checks https with the certificates of the
+    system, so it still works when Python's check does not."""
+    curl = curl or _find_curl()
+    if not curl:
+        raise OSError("ไม่มี curl ในเครื่อง")
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    proc = subprocess.Popen([curl, "-fsSL", "--retry", "2", "--connect-timeout", "30", "-o", str(dest), url],
+                            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, stdin=subprocess.DEVNULL,
+                            creationflags=flags)
+    while proc.poll() is None:
+        time.sleep(0.3)
+        if progress and dest.exists():
+            progress(dest.stat().st_size, 0)
+    err = (proc.stderr.read() or b"").decode("utf-8", "replace").strip() if proc.stderr else ""
+    if proc.returncode != 0:
+        raise OSError(f"curl รหัส {proc.returncode} {err[-160:]}".strip())
+
+
+def _fetch(url: str, progress=None, opener=None) -> bytes:
     buf = io.BytesIO()
-    with opener(RELEASES + name, timeout=60) as resp:
+    with (opener or url_opener())(url, timeout=60) as resp:
         total = int(resp.headers.get("Content-Length") or 0) if getattr(resp, "headers", None) else 0
         while True:
             chunk = resp.read(256 * 1024)
@@ -92,7 +173,31 @@ def download_cloudflared(folder: str | Path, progress=None, opener=None) -> Path
             buf.write(chunk)
             if progress:
                 progress(buf.tell(), total)
-    data = buf.getvalue()
+    return buf.getvalue()
+
+
+def download_cloudflared(folder: str | Path, progress=None, opener=None, curl: str | None = None) -> Path:
+    """Download cloudflared once into the data folder (bin/); progress(done_bytes, total_bytes).
+    Python's download first, else the computer's curl (opener given: the tests - no curl)."""
+    name = asset_name()
+    if not name:
+        raise OSError("ดาวน์โหลด cloudflared ให้เครื่องแบบนี้ไม่ได้ – ติดตั้งเองจาก developers.cloudflare.com")
+    target = Path(folder) / "bin" / _exe_name()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        data = _fetch(RELEASES + name, progress, opener)
+    except Exception as e:  # noqa: BLE001 - try curl, else say why
+        first = describe_error(e)
+        if opener is not None and curl is None:
+            raise OSError(first) from e
+        tmp = target.parent / (name + ".download")
+        try:
+            _curl_fetch(RELEASES + name, tmp, progress, curl)
+            data = tmp.read_bytes()
+        except Exception as e2:  # noqa: BLE001
+            raise OSError(f"{first} · ลองด้วย curl ก็ไม่ได้: {describe_error(e2)}") from e
+        finally:
+            tmp.unlink(missing_ok=True)
     if name.endswith(".tgz"):
         try:
             with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as tar:
@@ -106,7 +211,41 @@ def download_cloudflared(folder: str | Path, progress=None, opener=None) -> Path
     part.write_bytes(data)
     part.chmod(0o755)
     os.replace(part, target)
+    _unquarantine(target)
     return target
+
+
+def install_cloudflared(folder: str | Path, source: str | Path) -> Path:
+    """Copy a cloudflared the user downloaded (the program, or the .tgz of macOS) into the data folder (bin/)."""
+    source = Path(source)
+    data = source.read_bytes()
+    if source.name.endswith((".tgz", ".tar.gz")):
+        try:
+            with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as tar:
+                member = next((m for m in tar.getmembers() if m.isfile() and Path(m.name).name == "cloudflared"), None)
+                data = tar.extractfile(member).read() if member is not None else b""
+        except tarfile.TarError:
+            data = b""
+    if len(data) < 1_000_000:
+        raise OSError("ไฟล์นี้ไม่ใช่โปรแกรม cloudflared")
+    target = Path(folder) / "bin" / _exe_name()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    part = target.with_suffix(target.suffix + ".part")
+    part.write_bytes(data)
+    part.chmod(0o755)
+    os.replace(part, target)
+    _unquarantine(target)
+    return target
+
+
+def _unquarantine(path: Path) -> None:
+    """macOS: a file marked "downloaded from the internet" would not run from the app."""
+    if sys.platform != "darwin":
+        return
+    try:
+        subprocess.run(["xattr", "-d", "com.apple.quarantine", str(path)], capture_output=True, check=False)
+    except OSError:
+        pass
 
 
 class Tunnel:
@@ -239,10 +378,7 @@ def shorten(url: str, opener=None, timeout: float = 8.0) -> str:
     The long link of a quick tunnel is made by Cloudflare at random and cannot be chosen."""
     if not url:
         return ""
-    if opener is None:
-        import urllib.request
-
-        opener = urllib.request.urlopen
+    opener = opener or url_opener()
     from urllib.parse import quote
 
     for _name, api, ok in SHORTENERS:

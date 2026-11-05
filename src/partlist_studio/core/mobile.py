@@ -72,7 +72,7 @@ PROBLEM_TOPICS = ["เครื่องเสีย", "วัสดุไม่
 DEFAULT_OPTIONS = {"port": 8443, "http_port": 8080, "autostart": False, "pair_minutes": 15,
                    # ใช้จากนอกโรงงาน (core/tunnel.py): the way, its token / link, open with the app, pair from outside
                    "online_mode": "quick", "online_token": "", "online_url": "", "online_auto": False,
-                   "remote_pair": False}
+                   "remote_pair": False, "online_short": True}
 KEEP_CLOSED = 400  # closed inbox entries kept
 
 
@@ -289,6 +289,7 @@ class MobileService:
         self._seen_saved = datetime.now()
         self._alias_cache: tuple | None = None
         self.online_url = ""  # the link from outside the factory while the tunnel is on (core/tunnel.py)
+        self.online_short = ""  # the same, shortened (is.gd) to send by LINE
 
     # ---- saving, versions --------------------------------------------------------------------------
     def save(self) -> None:
@@ -730,7 +731,7 @@ class MobileService:
                 "device": device.to_json(), "roles": ROLES, "steps": STEPS,
                 "groups": [{"key": g, "name": GROUP_NAMES[g]} for g in GROUP_ORDER],
                 "scrap_reasons": SCRAP_REASONS, "problem_topics": PROBLEM_TOPICS, "events": self.version,
-                "online_url": self.online_url}
+                "online_url": self.online_url, "online_short": self.online_short}
 
     def dashboard(self, device: Device | None = None) -> dict:
         jobs = [j for j in self.state.jobs if j.status not in CLOSED]

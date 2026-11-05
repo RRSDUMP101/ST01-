@@ -1259,9 +1259,11 @@ def test_mobile_page_pairs_a_phone_and_confirms_its_work(window, app, monkeypatc
     assert not hub.running and "ปิดอยู่" in page.status.text()
 
 
-def test_mobile_page_online_link_from_outside(window, app):
+def test_mobile_page_online_link_from_outside(window, app, monkeypatch):
     """ใช้จากนอกโรงงาน: a link of my own (Tailscale Funnel …) - the phones learn it (hello), the QR can show it, and the
     pairing code goes into it only when pairing from outside is allowed."""
+    import time
+
     from partlist_studio.core import tunnel as tunnels
     from partlist_studio.ui.pages import mobile as page_mod
 
@@ -1284,6 +1286,18 @@ def test_mobile_page_online_link_from_outside(window, app):
     page.remote_pair.setChecked(True)
     assert page._link().endswith(f"#pair={hub.service.pair_code}") and page.qr.toolTip() == page._link()
     page.remote_pair.setChecked(False)
+    # a quick tunnel's long link gets a short one to send (is.gd) - the phones see both
+    monkeypatch.setattr(page_mod.tunnels, "shorten", lambda url: "https://is.gd/RRSabc")
+    hub.set_options(online_mode=tunnels.QUICK)
+    hub.reshorten()
+    for _ in range(100):
+        app.processEvents()
+        if hub.short_url:
+            break
+        time.sleep(0.02)
+    assert hub.short_url == "https://is.gd/RRSabc" and hub.service.online_short == hub.short_url
+    assert page._link() == "https://is.gd/RRSabc" and "is.gd/RRSabc" in page.online_status.text()
+    hub.set_options(online_mode=tunnels.OWN)
     page.toggle_online()  # off again: the phones stop seeing the link
     app.processEvents()
     assert not hub.online and hub.service.online_url == "" and page.address.findData(page_mod.ONLINE) < 0

@@ -105,3 +105,26 @@ def test_own_link_and_cloudflared_files(tmp_path, monkeypatch):
     assert tunnels.find_cloudflared(tmp_path) == path
     with pytest.raises(OSError):  # an error page instead of the program
         tunnels.download_cloudflared(tmp_path / "x", None, lambda url, timeout: Resp(b"<html>rate limited</html>"))
+
+
+def test_short_link_from_is_gd_else_tinyurl():
+    class Resp(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    asked = []
+
+    def opener(url, timeout):
+        asked.append(url)
+        if "is.gd" in url:
+            raise OSError("down")
+        return Resp(b"https://tinyurl.com/2abc9xyz\n")
+
+    long = "https://encouraging-referring-grass-arabic.trycloudflare.com/"
+    assert tunnels.shorten(long, opener) == "https://tinyurl.com/2abc9xyz"
+    assert "is.gd" in asked[0] and "encouraging-referring-grass-arabic.trycloudflare.com" in asked[0]
+    assert tunnels.shorten(long, lambda url, timeout: Resp(b"Error: rate limit")) == ""  # not a short link
+    assert tunnels.shorten("", opener) == ""

@@ -55,6 +55,7 @@ class MobileHub(QObject):
     online_changed = Signal()  # the link from outside the factory (its state comes from the tunnel's thread)
     download_progress = Signal(int, int)  # cloudflared being downloaded: bytes, total
     _downloaded = Signal()  # from the download thread: open the tunnel on the main thread
+    _shortened = Signal(str, str)  # (long link, short link) from the thread that asked is.gd
 
     def __init__(self, state: AppState):
         super().__init__()
@@ -69,6 +70,9 @@ class MobileHub(QObject):
         self.downloading = False
         self.online_changed.connect(self._online_now)
         self._downloaded.connect(self.start_online)
+        self._shortened.connect(self._short_now)
+        self.short_url = ""
+        self._short_for = ""
         for signal in (state.jobs_changed, state.stock_changed, state.ledger_changed, state.catalog_changed,
                        state.laser_changed, state.models_changed):
             signal.connect(self._pc_changed)
@@ -183,10 +187,32 @@ class MobileHub(QObject):
         url = self.online_url()
         if self.tunnel is not None and self.tunnel.state == tunnels.ERROR:
             self.online_error = self.tunnel.error
-        if self.service.online_url != url:
-            self.service.online_url = url
+        if url != self._short_for:  # a new link: shorten it (the long one of a quick tunnel only)
+            self._short_for, self.short_url = url, ""
+            if url and self.option("online_short") and self.option("online_mode") == tunnels.QUICK:
+                threading.Thread(target=self._shorten, args=(url,), daemon=True, name="shorten").start()
+        if self.service.online_url != url or self.service.online_short != self.short_url:
+            self.service.online_url, self.service.online_short = url, self.short_url
             self.service.bump("online")
         self.changed.emit()
+
+    def _shorten(self, url: str) -> None:
+        self._shortened.emit(url, tunnels.shorten(url + "/"))
+
+    @Slot(str, str)
+    def _short_now(self, url: str, short: str) -> None:
+        if url == self._short_for and url == self.online_url():
+            self.short_url = short
+            self._online_now()
+
+    def reshorten(self) -> None:
+        """The short-link option changed: shorten the link again (or drop the short one)."""
+        self._short_for = ""
+        self._online_now()
+
+    def share_url(self) -> str:
+        """The link to send: the short one when there is one."""
+        return self.short_url or (self.online_url() + "/" if self.online else "")
 
     def restart(self) -> bool:
         was_online = self.tunnel is not None and self.tunnel.running

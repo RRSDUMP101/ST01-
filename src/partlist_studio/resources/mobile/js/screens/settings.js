@@ -83,7 +83,7 @@ function OnlineCard({ hello }) {
   return html`<${Section} title="ใช้นอกโรงงาน (ออนไลน์)">
     <${Card}>${here ? html`<p class="small"><b>✓ กำลังใช้แบบออนไลน์</b> – ใช้ได้ทุกที่ที่มีอินเทอร์เน็ต (4G / Wi-Fi อื่น)</p>
         <p class="small muted">เพิ่มหน้านี้ลงหน้าจอหลักไว้ใช้นอกโรงงาน · ถ้าคอมปิดโปรแกรมหรือปิดออนไลน์ แอปจะเชื่อมต่อไม่ได้</p>`
-      : origin ? html`<p class="small">คอมเปิดลิงก์ออนไลน์อยู่: <b>${origin.replace('https://', '')}</b></p>
+      : origin ? html`<p class="small">คอมเปิดลิงก์ออนไลน์อยู่: <b>${(hello.online_short || origin).replace('https://', '')}</b></p>
         <${Button} block icon="send" onClick=${open}>เปิดแอปแบบออนไลน์ (ใช้ได้ทุกที่)</${Button}>
         <p class="small muted">ใช้เครื่องเดิม ชื่อเดิม ไม่ต้องจับคู่ใหม่ · แล้วเพิ่มลงหน้าจอหลักอีกไอคอนสำหรับใช้นอกโรงงาน</p>`
       : html`<p class="small muted">คอมยังไม่ได้เปิดลิงก์ออนไลน์ – เปิดได้ที่คอม หน้า มือถือ & AR → ใช้จากนอกโรงงาน</p>`}

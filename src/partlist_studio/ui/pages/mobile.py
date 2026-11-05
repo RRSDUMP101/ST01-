@@ -261,6 +261,12 @@ class MobilePage(QWidget):
         self.remote_pair.setChecked(bool(self.hub.option("remote_pair")))
         self.remote_pair.toggled.connect(self._remote_pair_toggled)
         form.addRow("", self.remote_pair)
+        self.online_short = QCheckBox("ย่อลิงก์ชั่วคราวให้สั้น (is.gd) ไว้ส่งทาง LINE")
+        self.online_short.setToolTip("ลิงก์ของ Cloudflare ยาวและสุ่มใหม่ทุกครั้ง (ตั้งชื่อเองไม่ได้) – ย่อเป็น https://is.gd/xxxxxx "
+                                     "โดยส่งลิงก์ไปที่ is.gd · ลิงก์อย่างเดียวเข้าใช้ไม่ได้ ต้องเป็นเครื่องที่จับคู่แล้ว")
+        self.online_short.setChecked(bool(self.hub.option("online_short")))
+        self.online_short.toggled.connect(self._online_short_toggled)
+        form.addRow("", self.online_short)
         self.online_auto = QCheckBox("เปิดออนไลน์ทุกครั้งที่เปิดโปรแกรม")
         self.online_auto.setChecked(bool(self.hub.option("online_auto")))
         self.online_auto.toggled.connect(self._online_auto_toggled)
@@ -299,6 +305,10 @@ class MobilePage(QWidget):
     def _remote_pair_toggled(self, on: bool) -> None:
         self._online_option(remote_pair=bool(on))
 
+    def _online_short_toggled(self, on: bool) -> None:
+        self._online_option(online_short=bool(on))
+        self.hub.reshorten()
+
     def _online_auto_toggled(self, on: bool) -> None:
         self._online_option(online_auto=bool(on))
 
@@ -321,8 +331,9 @@ class MobilePage(QWidget):
 
     def copy_online(self) -> None:
         if self.hub.online:
-            QGuiApplication.clipboard().setText(self.hub.online_url() + "/")
-            self.state.notify("คัดลอกลิงก์ออนไลน์แล้ว – เครื่องที่จับคู่แล้วกด ใช้นอกโรงงาน ในหน้าตั้งค่าของแอปได้เลย")
+            QGuiApplication.clipboard().setText(self.hub.share_url())
+            self.state.notify(f"คัดลอกลิงก์ออนไลน์แล้ว ({self.hub.share_url()}) – เครื่องที่จับคู่แล้วกด ใช้นอกโรงงาน "
+                              "ในหน้าตั้งค่าของแอปได้เลย")
 
     def _download_progress(self, done: int, total: int) -> None:
         mb = done / 1e6
@@ -343,7 +354,10 @@ class MobilePage(QWidget):
                     "เครื่องใหม่ต้องจับคู่ใน Wi-Fi โรงงานก่อน แล้วกด <b>ใช้นอกโรงงาน</b> ในหน้าตั้งค่าของแอป")
             quick = (" · ลิงก์ชั่วคราวเปลี่ยนทุกครั้งที่เปิดใหม่ – มือถือรับลิงก์ใหม่เองเมื่อเปิดแอปใน Wi-Fi โรงงาน"
                      if self.hub.option("online_mode") == tunnels.QUICK else "")
-            text = (f"<b style='color:{theme.STATUS_COLORS['พร้อม']}'>● ออนไลน์</b> {self.hub.online_url()}<br>"
+            short = self.hub.short_url
+            link = (f"<b style='font-size:13pt'>{short}</b> <span style='color:#6B7A90'>(ลิงก์สั้น · เต็ม "
+                    f"{self.hub.online_url()})</span>" if short else self.hub.online_url())
+            text = (f"<b style='color:{theme.STATUS_COLORS['พร้อม']}'>● ออนไลน์</b> {link}<br>"
                     f"<span style='color:#6B7A90'>{pair}{quick} · เลือก ออนไลน์ ในช่องใต้ QR เพื่อให้ QR เป็นลิงก์ออนไลน์</span>")
         elif state == tunnels.STARTING:
             text = "กำลังเปิด…" if not self.hub.downloading else self.online_status.text() or "กำลังดาวน์โหลด cloudflared …"
@@ -478,7 +492,7 @@ class MobilePage(QWidget):
         for ip in self.hub.addresses():
             self.address.addItem(f"คอมเครื่องนี้: {ip}", ip)
         if self.hub.online:
-            self.address.addItem(f"ออนไลน์ (นอกโรงงาน): {self.hub.online_url()}", ONLINE)
+            self.address.addItem(f"ออนไลน์ (นอกโรงงาน): {self.hub.short_url or self.hub.online_url()}", ONLINE)
         if current:
             self.address.setCurrentIndex(max(0, self.address.findData(current)))
         self.address.setVisible(self.address.count() > 1)
@@ -515,7 +529,9 @@ class MobilePage(QWidget):
         if self._ip() == ONLINE:
             s = self.hub.service
             code = s.pair_code if s.pairing_open and self.hub.option("remote_pair") else ""
-            return self.hub.online_url() + "/" + (f"#pair={code}" if code else "")
+            if not code:
+                return self.hub.share_url()  # the short link: a QR easier to read
+            return self.hub.online_url() + "/" + f"#pair={code}"
         return self.hub.setup_url(self._ip())
 
     def _show_qr(self, *_args) -> None:

@@ -228,3 +228,29 @@ def clean_url(url: str) -> str:
     if not re.match(r"^https?://", url, re.IGNORECASE):
         url = "https://" + url
     return url
+
+
+SHORTENERS = (("is.gd", "https://is.gd/create.php?format=simple&url=", re.compile(r"^https://is\.gd/[A-Za-z0-9_]+$")),
+              ("TinyURL", "https://tinyurl.com/api-create.php?url=", re.compile(r"^https://tinyurl\.com/[A-Za-z0-9]+$")))
+
+
+def shorten(url: str, opener=None, timeout: float = 8.0) -> str:
+    """A short link to url (https://is.gd/AbC123, else TinyURL) for sending by LINE; "" when none answers.
+    The long link of a quick tunnel is made by Cloudflare at random and cannot be chosen."""
+    if not url:
+        return ""
+    if opener is None:
+        import urllib.request
+
+        opener = urllib.request.urlopen
+    from urllib.parse import quote
+
+    for _name, api, ok in SHORTENERS:
+        try:
+            with opener(api + quote(url, safe=""), timeout=timeout) as resp:
+                short = resp.read(200).decode("utf-8", "replace").strip()
+        except Exception:  # noqa: BLE001 - no network / the service is down: the next one
+            continue
+        if ok.match(short):
+            return short
+    return ""

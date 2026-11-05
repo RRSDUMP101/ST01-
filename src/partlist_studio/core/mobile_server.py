@@ -452,6 +452,9 @@ class _Handler(_Base):
             "map": s.store_map,
             "navigate": lambda: s.navigate(q.get("from", ""), q.get("to", "")),
             "mine": lambda: s.my_submissions(device),
+            "docs": lambda: s.docs(int(q.get("limit") or 40)),
+            "doc": lambda: s.doc(q.get("no", "")),
+            "part": lambda: s.part_track(q.get("job", ""), q.get("index")),
         }
         posts = {
             "resolve": lambda: s.resolve(b.get("texts") or []),
@@ -466,6 +469,8 @@ class _Handler(_Base):
             "pick": lambda: s.submit_pick(device, b.get("job_no", ""), b.get("lines") or [], b.get("note", "")),
             "profile": lambda: s.update_profile(device, b.get("name", ""), b.get("station")),
             "photo": lambda: s.save_photo(device, b.get("code", ""), b.get("data", "")),
+            "stockdoc": lambda: s.submit_doc(device, b.get("doc_type", ""), b.get("lines") or [], b.get("job_no", ""),
+                                             b.get("note", "")),
         }
         if method == "GET" and name in gets:
             return call(gets[name])

@@ -66,7 +66,9 @@ CONFIRMED = "ยืนยันแล้ว"
 REJECTED = "ไม่ใช้"
 OPEN = "รอแก้"
 SOLVED = "แก้แล้ว"
-KIND_NAMES = {"count": "นับสต็อก", "pick": "หยิบของ", "problem": "แจ้งปัญหา"}
+KIND_NAMES = {"count": "นับสต็อก", "pick": "หยิบของ", "problem": "แจ้งปัญหา", "doc": "เบิก / รับ"}
+# the stock documents a phone may ask for (the PC confirms them): เบิก = issue, รับ = receive
+PHONE_DOCS = {"PD": "เบิกไปผลิต (PD)", "OU": "เบิกใช้ภายใน (OU)", "RR": "รับสินค้าที่ซื้อ (RR)", "FR": "รับชิ้นงานที่ผลิตเสร็จ (FR)"}
 SCRAP_REASONS = ["พับผิด", "ตัดผิดขนาด", "เชื่อมเสีย", "รอยบุบ/ขีดข่วน", "วัสดุมีตำหนิ", "แบบผิด"]
 PROBLEM_TOPICS = ["เครื่องเสีย", "วัสดุไม่พอ", "แบบไม่ชัด/ผิด", "ขาดชิ้นส่วน", "รอคิวเครื่อง", "คุณภาพ"]
 DEFAULT_OPTIONS = {"port": 8443, "http_port": 8080, "autostart": False, "pair_minutes": 15,
@@ -163,6 +165,9 @@ class Submission:
             diff = sum(1 for ln in self.lines if ln.get("diff"))
             return f"{len(self.lines)} รายการ · ไม่ตรง {diff}"
         picked = sum(float(ln.get("qty") or 0) for ln in self.lines)
+        if self.kind == "doc":
+            what = PHONE_DOCS.get(self.step, self.step)
+            return " · ".join(x for x in (what, self.job_no, f"{len(self.lines)} รายการ", f"{picked:g} หน่วย") if x)
         return f"{self.job_no} · {len(self.lines)} รายการ · {picked:g} ชิ้น"
 
     def to_json(self) -> dict:
@@ -731,7 +736,7 @@ class MobileService:
                 "device": device.to_json(), "roles": ROLES, "steps": STEPS,
                 "groups": [{"key": g, "name": GROUP_NAMES[g]} for g in GROUP_ORDER],
                 "scrap_reasons": SCRAP_REASONS, "problem_topics": PROBLEM_TOPICS, "events": self.version,
-                "online_url": self.online_url, "online_short": self.online_short}
+                "online_url": self.online_url, "online_short": self.online_short, "doc_types": PHONE_DOCS}
 
     def dashboard(self, device: Device | None = None) -> dict:
         jobs = [j for j in self.state.jobs if j.status not in CLOSED]
@@ -1129,6 +1134,87 @@ class MobileService:
         self._event("pick", sub)
         return sub.to_json()
 
+    # ---- เบิก / รับ สต็อก: a document asked for by a phone, posted when the store confirms it on the PC ---------
+    def submit_doc(self, device: Device, doc_type: str, lines: list[dict], job_no: str = "", note: str = "") -> dict:
+        self._need(device)
+        if doc_type not in PHONE_DOCS:
+            raise MobileError("เลือกชนิดเอกสาร เบิก หรือ รับ")
+        job_no = (job_no or "").strip()
+        if job_no:
+            self._job(job_no)
+        find = self._find()
+        out, seen = [], {}
+        for raw in lines or []:
+            code = str(raw.get("code") or "").strip()
+            if not code:
+                continue
+            qty = _qty(raw.get("qty"))
+            item = find(code)
+            key = _key(item.code if item else code)
+            if key in seen:  # the same item twice: one line
+                out[seen[key]]["qty"] = _n(out[seen[key]]["qty"] + qty)
+                continue
+            seen[key] = len(out)
+            out.append({"key": key, "code": item.code if item else code, "name": item.name if item else "",
+                        "unit": item.unit_name if item else "", "qty": _n(qty), "on_hand": _n(item.on_hand if item else 0),
+                        "found": item is not None, "location": self._location(code, item),
+                        "note": str(raw.get("note") or "")[:120]})
+        if not out:
+            raise MobileError("ยังไม่มีรายการ")
+        sub = Submission(id=secrets.token_hex(6), kind="doc", by=device.name, device=device.id, job_no=job_no,
+                         step=doc_type, lines=out, text=" ".join((note or "").split())[:200])
+        self.data.inbox.append(sub)
+        self.save()
+        self._event("doc", sub)
+        return sub.to_json()
+
+    def docs(self, limit: int = 40) -> list[dict]:
+        """The stock documents of the program, newest first (เบิก / รับ / ปรับยอด)."""
+        rows = []
+        for d in self.state.ledger.docs[-limit:][::-1]:
+            rows.append({"doc_no": d.doc_no, "doc_type": d.doc_type, "type_name": d.type_name, "date": d.date,
+                         "job": d.job, "status": d.status, "remark": d.remark, "lines": len(d.lines),
+                         "qty": _n(sum(abs(ln.qty) for ln in d.lines)), "express_no": d.express_no})
+        return rows
+
+    def doc(self, doc_no: str) -> dict:
+        d = self.state.ledger.find(doc_no)
+        if d is None:
+            raise MobileError(f"ไม่พบเอกสาร {doc_no}", 404)
+        find = self._find()
+        out = {"doc_no": d.doc_no, "doc_type": d.doc_type, "type_name": d.type_name, "date": d.date, "job": d.job,
+               "status": d.status, "remark": d.remark, "express_no": d.express_no, "lines": []}
+        for ln in d.lines:
+            item = find(ln.code)
+            out["lines"].append({"code": ln.code, "name": ln.name, "qty": _n(ln.qty), "unit": ln.unit,
+                                 "on_hand": _n(item.on_hand) if item else None, "remark": ln.remark})
+        return out
+
+    # ---- งานผลิต: one part of a job, step by step ---------------------------------------------------------------
+    def part_track(self, job_no: str, index) -> dict:
+        """ติดตามสถานะรายชิ้น: the part of the job with each step (done / waiting / spoilt), its history (who, when),
+        the documents of it and where it is kept."""
+        job, part = self._job_part(job_no, index)
+        i = job.parts.index(part)
+        out = self.part_json(job, i)
+        out["job_title"] = job.title or job.model
+        out["job_due"] = thai_date(job.due) if job.due else ""
+        key = _key(part.code)
+        history = [asdict(e) for e in job.log if _key(e.code) == key][::-1]
+        out["history"] = history[:60]
+        steps = []
+        for s in part.route:
+            done = part.done_at(s)
+            steps.append({"step": s, "done": _n(done), "of": _n(part.to_make), "waiting": _n(part.waiting().get(s, 0)),
+                          "scrapped": _n(part.scrapped.get(s, 0)),
+                          "last": next((h["when"] for h in history if h["step"] == s), "")})
+        out["steps"] = steps
+        out["docs"] = [{"doc_no": d.doc_no, "type_name": d.type_name, "date": d.date, "status": d.status,
+                        "qty": _n(sum(abs(ln.qty) for ln in d.lines if _key(ln.code) == key))}
+                       for d in self.state.ledger.docs if d.job == job.job_no
+                       and any(_key(ln.code) == key for ln in d.lines)][::-1][:20]
+        return out
+
     # ---- the inbox on the PC ---------------------------------------------------------------------------
     def _submission(self, sub_id: str) -> Submission:
         sub = next((s for s in self.data.inbox if s.id == sub_id), None)
@@ -1157,6 +1243,15 @@ class MobileService:
                      for ln in sub.lines]
             return StockDoc("PD", job=sub.job_no, remark=f"จ่ายชิ้นส่วนประกอบกระบะ – หยิบด้วยมือถือ ({sub.by})",
                             lines=lines_from_parts(parts, stock))
+        if sub.kind == "doc":
+            lines = []
+            for ln in sub.lines:
+                item = self._find()(ln["code"])
+                lines.append(DocLine(item.code if item else ln["code"], (item.name if item else "") or ln.get("name", ""),
+                                     float(ln["qty"]), ln.get("unit", ""), "01", item.unit_cost if item else 0,
+                                     ln.get("note", "")))
+            return StockDoc(sub.step, job=sub.job_no, lines=lines,
+                            remark=f"{PHONE_DOCS.get(sub.step, sub.step)} – จากมือถือ ({sub.by})" + (f" · {sub.text}" if sub.text else ""))
         raise MobileError("รายการนี้ไม่มีเอกสาร")
 
     def confirm(self, sub_id: str, by: str = "คอม", post: bool = True) -> StockDoc | None:

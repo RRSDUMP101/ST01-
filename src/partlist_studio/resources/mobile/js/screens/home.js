@@ -27,6 +27,7 @@ export function HomeScreen() {
         <button class="quick-btn quick-scan" onClick=${() => go('scan?mode=info')}><${Icon} name="scan" size=${26} /><span>สแกน AR</span></button>
         <button class="quick-btn" onClick=${() => go('scan?mode=count')}><${Icon} name="count" size=${24} /><span>นับสต็อก</span></button>
         <button class="quick-btn" onClick=${() => go('pick')}><${Icon} name="pick" size=${24} /><span>หยิบของ</span></button>
+        <button class="quick-btn" onClick=${() => go('docs')}><${Icon} name="send" size=${24} /><span>เบิก / รับ</span></button>
         <button class="quick-btn warn" onClick=${() => openProblem({}, state.reload)}><${Icon} name="alert" size=${24} /><span>แจ้งปัญหา</span></button>
       </div>
     </header>

@@ -19,7 +19,8 @@ export function StockScreen({ route }) {
   const state = useData('items', { q, only, group, limit: 80 });
   const countN = useStore((s) => s.countN);
   return html`<${Page} title="สต็อก" sub="ชิ้นส่วนพร้อมประกอบ · วัตถุดิบ · ตำแหน่งเก็บ"
-    actions=${html`<${IconButton} icon="count" label="รายการนับ" badge=${countN || ''} onClick=${() => go('count')} />`}>
+    actions=${html`<${IconButton} icon="send" label="เบิก / รับ สต็อก" onClick=${() => go('docs')} />
+      <${IconButton} icon="count" label="รายการนับ" badge=${countN || ''} onClick=${() => go('count')} />`}>
     <div class="search">
       <${Icon} name="search" size=${20} />
       <input type="search" placeholder="ค้นหารหัส ชื่อ หรือตำแหน่ง" value=${typed} onInput=${(e) => setTyped(e.target.value)} />
@@ -71,6 +72,10 @@ export function ItemScreen({ route }) {
           <div class="btn-row">
             ${it.location ? html`<${Button} icon="target" onClick=${() => go(`scan?mode=find&code=${encodeURIComponent(it.code)}`)}>นำทางด้วย AR</${Button}>` : null}
             <${Button} kind="secondary" icon="count" onClick=${() => openCount(it, { visual: false })}>นับรายการนี้</${Button}>
+          </div>
+          <div class="btn-row">
+            <${Button} kind="secondary" icon="arrow" onClick=${() => go(`docs?type=PD&code=${encodeURIComponent(it.code)}`)}>เบิก</${Button}>
+            <${Button} kind="secondary" icon="box" onClick=${() => go(`docs?type=RR&code=${encodeURIComponent(it.code)}`)}>รับเข้า</${Button}>
           </div>
         </${Card}>
       </${Section}>

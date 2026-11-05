@@ -605,6 +605,16 @@ class MobilePage(QWidget):
                 item = find(ln["code"])
                 rows.append([ln["code"], ln.get("name", ""), ln.get("location", ""), ln["counted"], ln["system"],
                              f"{ln['diff']:+g}" if ln.get("diff") else "ตรง", item.on_hand if item else "-", ln.get("note", "")])
+        elif sub is not None and sub.kind == "doc":
+            from ...core.catalog import code_finder
+
+            find = code_finder(self.state.stock)
+            out = sub.step in ("PD", "OU")
+            for ln in sub.lines:
+                item = find(ln["code"])
+                short = out and item is not None and item.on_hand < ln["qty"]
+                rows.append([ln["code"], ln.get("name", ""), ln.get("location", ""), ln["qty"], "", "",
+                             item.on_hand if item else "-", ("คงเหลือไม่พอ · " if short else "") + ln.get("note", "")])
         elif sub is not None and sub.kind == "pick":
             for ln in sub.lines:
                 rows.append([ln["code"], ln.get("name", ""), ln.get("location", ""), ln["qty"], "", "",

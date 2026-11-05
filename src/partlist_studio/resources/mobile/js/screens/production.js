@@ -1,10 +1,11 @@
 // Production: the queue of every station (pieces waiting at a step), the jobs and one job with its parts.
 import { useData } from '../api.js';
 import { Icon } from '../icons.js';
-import { openProblem, openRecord } from '../sheets.js';
-import { Bar, Card, Chip, Empty, IconButton, Loader, Page, Ring, Section, Seg, Steps, StatusChip } from '../ui.js';
+import { openProblem, openRecord, openScrap } from '../sheets.js';
+import { PartTabsLive } from '../photos.js';
+import { Bar, Button, Card, Chip, Empty, IconButton, Loader, Page, Ring, Section, Seg, Steps, StatusChip } from '../ui.js';
 import { JobRow } from './home.js';
-import { clock, go, html, local, num, pct, useState, useStore } from '../lib.js';
+import { clock, go, html, local, num, pct, timeAgo, useState, useStore } from '../lib.js';
 
 export function ProductionScreen({ route }) {
   const device = useStore((s) => s.device) || {};
@@ -66,7 +67,7 @@ export function JobScreen({ route }) {
       </${Section}>
       <${Section} title="ชิ้นส่วน">
         <${Seg} options=${[['make', 'กำลังผลิต'], ['done', 'เสร็จ'], ['all', 'ทั้งหมด']]} value=${filter} onChange=${setFilter} className="small" />
-        ${parts.length ? parts.map((p) => html`<${Card} className="part-card" onClick=${() => openRecord({ ...p, job_title: j.title }, state.reload)}>
+        ${parts.length ? parts.map((p) => html`<${Card} className="part-card" onClick=${() => go(`prod/part/${encodeURIComponent(j.job_no)}/${p.index}`)}>
           <div class="pc-top"><div><b>${p.code}</b><span>${p.name}</span></div><${StatusChip} status=${p.status} /></div>
           <div class="pc-meta"><span>ต้องผลิต ${num(p.to_make)}</span>${p.from_stock ? html`<span>ใช้สต็อก ${num(p.from_stock)}</span>` : null}
             ${p.scrapped ? html`<span class="bad">เสีย ${num(p.scrapped)}</span>` : null}${p.location ? html`<span>📍 ${p.location}</span>` : null}</div>
@@ -77,5 +78,54 @@ export function JobScreen({ route }) {
         <span class="log-time">${clock(e.when)}</span><span class="log-main"><b>${e.step}</b> ${num(e.qty)} · ${e.code}<small>${e.by || 'คอม'}${e.note ? ` · ${e.note}` : ''}</small></span></div>`)}</${Card}></${Section}>` : null}
     `;
     }}</${Loader}>
+  </${Page}>`;
+}
+
+// ติดตามสถานะรายชิ้น: one part of a job - every step (done / waiting / spoilt), who recorded what and when, its
+// documents, where it is kept, its pictures; record the next step from here.
+export function PartScreen({ route }) {
+  const job = decodeURIComponent(route.parts[2] || '');
+  const index = route.parts[3] || '0';
+  const state = useData('part', { job, index });
+  return html`<${Page} title="ติดตามรายชิ้น" sub=${job} backTo=${`prod/job/${encodeURIComponent(job)}`}>
+    <${Loader} state=${state} rows=${6}>${(p) => html`
+      <${Card} className="job-hero">
+        <${Ring} value=${p.progress} size=${78} stroke=${8} tone=${p.status === 'เสร็จ' ? 'ok' : 'navy'} />
+        <div><h2>${p.code}</h2><p class="muted">${p.name}</p>
+          <div class="chips-row tight"><${StatusChip} status=${p.status} />
+            ${p.scrapped ? html`<${Chip} tone="bad">เสีย ${num(p.scrapped)}</${Chip}>` : null}
+            ${p.location ? html`<${Chip} icon="tag">${p.location}</${Chip}>` : null}</div></div>
+      </${Card}>
+      <div class="six compact">
+        <div class="six-cell"><span>ต้องผลิต</span><b>${num(p.to_make)}</b><small>${p.unit || 'ชิ้น'}</small></div>
+        <div class="six-cell"><span>เสร็จ</span><b>${num(p.finished)}</b></div>
+        <div class="six-cell"><span>รับเข้า / จ่าย</span><b>${num(p.received)} / ${num(p.issued)}</b></div>
+      </div>
+      <${Section} title="สถานะแต่ละขั้น">
+        <${Card} className="track">${p.steps.length ? p.steps.map((s, k) => {
+          const done = s.of > 0 && s.done >= s.of;
+          return html`<div class=${`track-step ${done ? 'done' : s.waiting > 0 ? 'here' : ''}`}>
+            <span class="track-dot">${done ? html`<${Icon} name="check" size=${14} stroke=${3} />` : k + 1}</span>
+            <div class="track-main"><div class="row-between"><b>${s.step}</b><span>${num(s.done)} / ${num(s.of)}</span></div>
+              <${Bar} value=${s.of ? s.done / s.of : 0} tone=${done ? 'ok' : s.waiting > 0 ? 'warn' : 'navy'} thin />
+              <small class="muted">${[s.waiting > 0 ? `รอ ${num(s.waiting)}` : '', s.scrapped ? `เสีย ${num(s.scrapped)}` : '',
+                s.last ? `ล่าสุด ${timeAgo(s.last)}` : ''].filter(Boolean).join(' · ') || 'ยังไม่เริ่ม'}</small></div></div>`;
+        }) : html`<p class="muted small">ชิ้นนี้ใช้จากสต็อก ไม่มีขั้นผลิต</p>`}</${Card}>
+        <div class="btn-row">
+          <${Button} icon="check" disabled=${!p.next_step} onClick=${() => openRecord({ ...p }, state.reload)}>${p.next_step ? `บันทึก${p.next_step}` : 'ไม่มีขั้นที่รอ'}</${Button}>
+          <${Button} kind="danger-soft" icon="close" disabled=${!p.next_step} onClick=${() => openScrap(p, p.next_step, state.reload)}>เสีย…</${Button}>
+          <${Button} kind="warn-soft" icon="alert" onClick=${() => openProblem({ job_no: p.job_no, index: p.index, step: p.next_step, code: p.code, name: p.name }, state.reload)}>แจ้งปัญหา</${Button}>
+        </div>
+      </${Section}>
+      <${Section} title="รูปชิ้นส่วน"><${PartTabsLive} code=${p.code} first=${p} height=${190} /></${Section}>
+      <${Section} title=${`ประวัติ (${p.history.length})`}>
+        ${p.history.length ? html`<${Card} className="log">${p.history.map((e) => html`<div class="log-row">
+          <span class="log-time">${clock(e.when)}</span><span class="log-main"><b>${e.step}</b> ${num(e.qty)}
+          <small>${timeAgo(e.when)} · ${e.by || 'คอม'}${e.note ? ` · ${e.note}` : ''}</small></span></div>`)}</${Card}>`
+        : html`<p class="muted small">ยังไม่มีการบันทึกของชิ้นนี้</p>`}
+      </${Section}>
+      ${p.docs.length ? html`<${Section} title="เอกสาร">${p.docs.map((d) => html`<button class="mini-row" onClick=${() => go(`docs/${encodeURIComponent(d.doc_no)}`)}>
+        <span><b>${d.doc_no}</b><small>${d.type_name} · ${d.date}</small></span><b>${num(d.qty)}</b></button>`)}</${Section}>` : null}
+    `}</${Loader}>
   </${Page}>`;
 }

@@ -5,7 +5,8 @@ import { CountScreen } from './screens/count.js';
 import { HomeScreen } from './screens/home.js';
 import { PairScreen } from './screens/pair.js';
 import { PickJobScreen, PickListsScreen } from './screens/pick.js';
-import { JobScreen, ProductionScreen } from './screens/production.js';
+import { JobScreen, PartScreen, ProductionScreen } from './screens/production.js';
+import { DocScreen, DocsScreen } from './screens/docs.js';
 import { ScanScreen } from './screens/scan.js';
 import { SettingsScreen } from './screens/settings.js';
 import { ItemScreen, StockScreen } from './screens/stock.js';
@@ -26,7 +27,9 @@ const TABS = [
 function screenFor(route) {
   const [a, b] = route.parts;
   switch (route.name) {
-    case 'prod': return b === 'job' ? html`<${JobScreen} route=${route} />` : html`<${ProductionScreen} route=${route} />`;
+    case 'prod': return b === 'job' ? html`<${JobScreen} route=${route} />` : b === 'part' ? html`<${PartScreen} route=${route} key=${route.path} />`
+      : html`<${ProductionScreen} route=${route} />`;
+    case 'docs': return b ? html`<${DocScreen} route=${route} key=${route.path} />` : html`<${DocsScreen} route=${route} />`;
     case 'stock': return b === 'item' ? html`<${ItemScreen} route=${route} />` : html`<${StockScreen} route=${route} />`;
     case 'pick': return b === 'job' ? html`<${PickJobScreen} route=${route} />` : html`<${PickListsScreen} route=${route} />`;
     case 'count': return html`<${CountScreen} />`;

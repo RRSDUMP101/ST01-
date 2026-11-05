@@ -211,7 +211,7 @@ textarea.input { resize: vertical; }
 .avatar { width: 46px; height: 46px; border-radius: 50%; display: grid; place-items: center; background: rgba(255, 255, 255, .16); color: #fff; }
 .conn { display: flex; align-items: center; gap: 6px; margin: 12px 0 0; font-size: 13px; opacity: .9; }
 .conn.off { color: #FFD08A; }
-.quick { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-top: 16px; }
+.quick { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; margin-top: 16px; }
 .quick-btn { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 12px 4px; border-radius: 18px; background: rgba(255, 255, 255, .1); color: #fff;
   font-size: 13px; font-weight: 700; border: 1px solid rgba(255, 255, 255, .14); }
 .quick-btn:active { transform: scale(.96); }
@@ -537,3 +537,13 @@ textarea.input { resize: vertical; }
 .tc-slider span:last-child { width: auto; text-align: right; }
 .btn-row.tight { gap: 6px; flex-wrap: wrap; }
 .tapcount .tc-dot { width: 24px; height: 24px; margin: -12px 0 0 -12px; font-size: 10.5px; border-width: 2px; }
+
+/* ติดตามสถานะรายชิ้น */
+.track { display: grid; gap: 12px; }
+.track-step { display: flex; gap: 12px; align-items: flex-start; }
+.track-dot { flex: none; width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; font-weight: 800; font-size: 13px;
+  background: var(--muted-bg); color: var(--sub); }
+.track-step.done .track-dot { background: var(--ok, #16a34a); color: #fff; }
+.track-step.here .track-dot { background: var(--warn, #f59e0b); color: #fff; }
+.track-main { flex: 1; display: grid; gap: 4px; min-width: 0; }
+.doc-line { display: grid; gap: 8px; }

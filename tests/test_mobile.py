@@ -482,3 +482,51 @@ def test_scanned_code_finds_its_drawing_and_picture_by_the_code_matching(demo, t
     assert s.outline("RRS-A-039-NO1-PR")
     found = s.resolve(["RRS1|I|RRS-A-039-NO1-PR|P-FIX-01"])[0]
     assert found["item"]["has_outline"] and found["item"]["photo"]["has"]
+
+
+def test_issue_and_receive_from_a_phone_wait_for_the_pc(demo):
+    """เบิก / รับ สต็อก: a phone asks for an issue or a receipt; nothing changes until the store confirms on the PC,
+    which posts the document; the documents of the PC can be read on the phone."""
+    state, s = demo
+    device, _t = _pair(s)
+    viewer, _t = _pair(s, "ผู้จัดการ", "viewer")
+    stock = {i.code: i for i in state.stock.items}
+    before = stock["RRS-T-022-L-84"].on_hand
+    with pytest.raises(MobileError):
+        s.submit_doc(device, "AJ", [{"code": "RRS-T-022-L-84", "qty": 1}])  # not a document a phone asks for
+    with pytest.raises(MobileError):
+        s.submit_doc(viewer, "PD", [{"code": "RRS-T-022-L-84", "qty": 1}])
+    sub = s.submit_doc(device, "PD", [{"code": "RRS-T-022-L-84", "qty": 2}, {"code": "RRS-T-022-L-84", "qty": 1}],
+                       "SO6910-015", "ใช้ประกอบคันที่ 1")
+    assert sub["kind"] == "doc" and sub["lines"][0]["qty"] == 3 and len(sub["lines"]) == 1  # twice: one line
+    assert "เบิกไปผลิต" in sub["summary"] and stock["RRS-T-022-L-84"].on_hand == before
+    doc = s.confirm(sub["id"], "แอน 1")
+    assert doc.doc_type == "PD" and doc.job == "SO6910-015" and doc.status == "บันทึกแล้ว"
+    assert stock["RRS-T-022-L-84"].on_hand == before - 3
+    rec = s.submit_doc(device, "RR", [{"code": "RRS-A-033", "qty": 10}])
+    draft = s.confirm(rec["id"], post=False)
+    assert draft.status == "ร่าง" and draft.doc_type == "RR"
+    docs = s.docs()
+    assert docs[0]["doc_no"] == draft.doc_no and docs[1]["doc_no"] == doc.doc_no
+    one = s.doc(doc.doc_no)
+    assert one["lines"][0]["code"] == "RRS-T-022-L-84" and one["lines"][0]["qty"] == 3
+    assert "doc_types" in s.hello(device) and "PD" in s.hello(device)["doc_types"]
+
+
+def test_part_tracking_step_by_step(demo):
+    """ติดตามสถานะรายชิ้น: each step of one part of a job with done / waiting / spoilt, who recorded and when."""
+    state, s = demo
+    device, _t = _pair(s, "ช่างพับ", "station", "พับ")
+    job = next(j for j in state.jobs if any(p.route for p in j.parts))
+    i = next(k for k, p in enumerate(job.parts) if p.route and p.waiting())
+    part = job.parts[i]
+    step = next(iter(part.waiting()))
+    s.record(device, job.job_no, i, step, 1, "ทดสอบ")
+    track = s.part_track(job.job_no, i)
+    first = track["steps"][0]
+    assert first["step"] == part.route[0] and first["of"] == part.to_make
+    assert track["history"][0]["by"] == "ช่างพับ" and track["history"][0]["step"] == step
+    assert any(st["step"] == step and st["last"] for st in track["steps"])
+    assert track["job_no"] == job.job_no and "photo" in track
+    with pytest.raises(MobileError):
+        s.part_track(job.job_no, 999)

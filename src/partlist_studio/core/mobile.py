@@ -428,11 +428,11 @@ class MobileService:
 
     # ---- lookups ------------------------------------------------------------------------------------
     def _warehouse(self) -> str:
-        """คลัง of the lines a phone makes (Express: ST01, ST05 …) - as set on the PC's Express page."""
+        """คลัง of the lines a phone makes (Express: 01, ST01, ST05 …) - as set on the PC's Express page."""
         try:
-            return self.state.settings.get("express/warehouse", "ST01") or "ST01"
+            return self.state.settings.get("express/warehouse", "01") or "01"
         except Exception:  # noqa: BLE001 - no settings (tests)
-            return "ST01"
+            return "01"
 
     def _find(self):
         if "find" not in self._cache:

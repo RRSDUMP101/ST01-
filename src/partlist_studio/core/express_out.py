@@ -6,11 +6,11 @@ Express screens (from the screens of the company's NewRWT):
     OU เบิกใช้ภายใน                      OU - จ่ายสินค้าใช้ภายใน               (เหมือน PD - ไม่ผูกงาน)
     RR รับสินค้าที่ซื้อ                    RR - รับสินค้า (อ้างอิง PO)            ผู้จำหน่าย, อ้างอิง PO, แผนก, วันที่
     FR รับชิ้นงานที่ผลิตเสร็จ               FR - รับสินค้าสำเร็จรูปจากการผลิต      แผนก, หมายเหตุ (งาน / SO)
-    AJ ผลตรวจนับ (มือถือ, สต็อกเหล็ก)     ปรับปรุงยอด                          รหัส, ยอดในระบบ, นับได้, ส่วนต่าง
+    AJ ผลตรวจนับ (มือถือ, สต็อกเหล็ก)     JU - ปรับปรุงเพิ่ม/ลดสินค้า           แผนก, หมายเหตุ; จำนวน = ส่วนต่าง (+ เพิ่ม / − ลด)
     รหัสใหม่                             4.สินค้า → ทะเบียนสินค้า (เพิ่มใหม่)    รหัส, ชื่อ, หน่วย, หมวด, กลุ่มบัญชี
     Min/Max จากการใช้จริง                 จุดสั่งซื้อ / ปริมาณสั่งซื้อ            รหัส, Min, ปริมาณสั่ง
 
-Lines as on every Express document: No. / รหัส / รายละเอียด / คลัง (ST01, ST05 …) / จำนวน + หน่วย / ราคาต่อหน่วย /
+Lines as on every Express document: No. / รหัส / รายละเอียด / คลัง (01, or ST01 / ST05 … per Express company) / จำนวน + หน่วย / ราคาต่อหน่วย /
 จำนวนเงิน; dates DD/MM/YY in the Buddhist year. PD has no job field in Express: the job / SO (and the chassis
 number) go into หมายเหตุ, as the store does now. Express gives its own document number: after keying a document
 in, its number is typed in the sheet "รายการส่ง Express" (or in the program) and read back here - the document
@@ -28,19 +28,20 @@ from .movements import DOC_TYPES, ST_POSTED, Ledger, StockDoc
 from .stock import StockItem, StockList, _key, find_by_code
 from .tabular import Sheet, read_table, write_workbook
 
-DEFAULT_WAREHOUSE = "ST01"
+DEFAULT_WAREHOUSE = "01"
 SEND_TYPES = ("PD", "OU", "RR", "FR", "AJ")
 EXPRESS_SCREENS = {
     "PD": "PD - จ่ายวัตถุดิบเพื่อผลิต",
     "OU": "OU - จ่ายสินค้าใช้ภายใน",
     "RR": "RR - รับสินค้า (ซื้อ)",
     "FR": "FR - รับสินค้าสำเร็จรูปจากการผลิต",
-    "AJ": "ปรับปรุงยอดสินค้า (ตรวจนับ)",
+    "AJ": "JU - ปรับปรุงเพิ่ม/ลดสินค้า",
 }
+EXPRESS_TYPES = {"AJ": "JU"}  # the document type in Express when it is not the same
 LINE_HEADERS = ["No.", "รหัส", "รายละเอียด", "คลัง", "จำนวน", "หน่วย", "ราคาต่อหน่วย", "จำนวนเงิน", "หมายเหตุ"]
 RR_HEADERS = ["No.", "รหัส", "รายละเอียด", "คลัง", "จำนวน", "หน่วย", "ราคาต่อหน่วย", "ส่วนลด", "จำนวนเงิน", "หมายเหตุ"]
-AJ_HEADERS = ["No.", "รหัส", "รายละเอียด", "คลัง", "ยอดในระบบ", "นับได้", "ส่วนต่าง", "หน่วย", "ราคาต่อหน่วย",
-              "มูลค่าส่วนต่าง", "หมายเหตุ"]
+AJ_HEADERS = ["No.", "รหัส", "รายละเอียด", "คลัง", "ยอดในระบบ", "นับได้", "จำนวน (ส่วนต่าง +/−)", "หน่วย",
+              "ราคาต่อหน่วย", "จำนวนเงิน", "หมายเหตุ"]
 SUMMARY_SHEET = "รายการส่ง Express"
 SUMMARY_HEADERS = ["ลำดับ", "ชนิด", "หน้าจอใน Express", "เลขที่ในโปรแกรม", "วันที่", "สำหรับแผนก", "ผู้จำหน่าย / อ้างอิง",
                    "หมายเหตุ (ใน Express)", "รายการ", "จำนวนเงิน", "ชีท", "เลขที่ Express (กรอกหลังคีย์)"]
@@ -54,7 +55,7 @@ MINMAX_HEADERS = ["No.", "รหัสสินค้า", "ชื่อสิ�
 @dataclass
 class Options:
     department: str = ""  # สำหรับแผนก when a document has none (ST01 สโตร์, SET ทั่วไป/ช่าง …)
-    warehouse: str = DEFAULT_WAREHOUSE  # คลัง for lines without one (and the old default "01")
+    warehouse: str = DEFAULT_WAREHOUSE  # คลัง for lines without one
     category: str = "21"  # หมวด of new items
     account_group: str = "ST01"  # กลุ่มบัญชี of new items
     company: str = ""
@@ -172,8 +173,8 @@ def screen_note(doc: StockDoc) -> str:
 
 
 def warehouse_of(line_warehouse: str, options: Options) -> str:
-    w = (line_warehouse or "").strip()
-    return options.warehouse if w in ("", "01") else w
+    """คลัง of a line: its own (01, ST01, ST05 … - each Express company has its own codes), else the one set."""
+    return (line_warehouse or "").strip() or options.warehouse
 
 
 def _counted(doc: StockDoc, ledger: Ledger | None) -> dict[str, float]:
@@ -292,4 +293,6 @@ def apply_express_numbers(ledger: Ledger, numbers: dict[str, str]) -> int:
 
 
 def type_label(doc_type: str) -> str:
-    return f"{doc_type} {DOC_TYPES.get(doc_type, ('', 0))[0]}"
+    """'AJ ปรับปรุงยอด (ตรวจนับ) → JU' - the type in this program and, when it differs, in Express."""
+    base = f"{doc_type} {DOC_TYPES.get(doc_type, ('', 0))[0]}"
+    return base + (f" → {EXPRESS_TYPES[doc_type]}" if EXPRESS_TYPES.get(doc_type, doc_type) != doc_type else "")

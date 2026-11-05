@@ -88,7 +88,7 @@ class ExpressPage(QWidget):
 
         exp = Card("2. ส่งออกเพื่อคีย์เข้า Express (ร่าง)")
         form = QGridLayout()
-        self.warehouse = QLineEdit(s.get("express/warehouse", "ST01"))
+        self.warehouse = QLineEdit(s.get("express/warehouse", "01"))
         self.department = QLineEdit(s.get("express/department", ""))
         self.category = QLineEdit(s.get("express/category", "21"))
         self.account_group = QLineEdit(s.get("express/account_group", "ST01"))
@@ -204,7 +204,7 @@ class ExpressPage(QWidget):
         self.refresh_outbox()
 
     # ---- ส่งเข้า Express ------------------------------------------------------
-    OUTBOX_COLS = ["ชนิด", "เลขที่ในโปรแกรม", "วันที่", "แผนก", "หมายเหตุ / ผู้จำหน่าย (ใน Express)", "รายการ", "จำนวนเงิน",
+    OUTBOX_COLS = ["ชนิด", "สถานะ", "เลขที่ในโปรแกรม", "วันที่", "แผนก", "หมายเหตุ / ผู้จำหน่าย (ใน Express)", "รายการ", "จำนวนเงิน",
                    "เลขที่ Express (กรอกหลังคีย์)"]
 
     def _outbox_card(self) -> Card:
@@ -212,7 +212,7 @@ class ExpressPage(QWidget):
         t = QLabel("ใบที่ <b>บันทึกแล้ว</b> แต่ยังไม่มี <b>เลขที่ Express</b>: PD เบิกไปผลิต (รวมแผ่นเหล็กจากแผนตัดเลเซอร์) · "
                    "OU เบิกใช้ภายใน · RR รับสินค้าที่ซื้อ (ผู้จำหน่าย, อ้างอิง PO) · FR รับชิ้นงานที่ผลิตเสร็จ · "
                    "AJ ผลตรวจนับ (มือถือ, สต็อกเหล็ก) + รหัสใหม่ที่ยังไม่มีใน Express + จุดสั่งซื้อ Min/Max "
-                   "→ ไฟล์ Excel ชีทละใบ เรียงช่องตามหน้าจอ Express (แผนก, หมายเหตุ, คลัง ST01/ST05, วันที่ พ.ศ.) "
+                   "→ ไฟล์ Excel ชีทละใบ เรียงช่องตามหน้าจอ Express (แผนก, หมายเหตุ, คลัง, วันที่ พ.ศ.) · ผลตรวจนับ AJ → JU ปรับปรุงเพิ่ม/ลดสินค้า "
                    "<br><span style='color:%s'>คีย์แล้วกรอกเลขที่ Express ในตารางนี้ หรือในไฟล์แล้วกด นำเข้าเลขที่ Express "
                    "– ใบนั้นจะออกจากรายการ · ไม่ต้องส่ง: สถานะผลิตรายชิ้น ของเสีย รูป แผนเลเซอร์/DXF ตำแหน่งชั้นวาง QR "
                    "มือถือ (เก็บในโปรแกรม)</span>" % theme.MUTED)
@@ -221,7 +221,7 @@ class ExpressPage(QWidget):
         self.outbox_table = _table(self.OUTBOX_COLS)
         self.outbox_table.setEditTriggers(QAbstractItemView.DoubleClicked | QAbstractItemView.EditKeyPressed
                                           | QAbstractItemView.AnyKeyPressed)
-        for i, w in enumerate([150, 130, 80, 70, 330, 60, 100]):
+        for i, w in enumerate([150, 120, 120, 75, 65, 320, 55, 95]):
             self.outbox_table.setColumnWidth(i, w)
         self.outbox_table.setMinimumHeight(200)
         empty_hint(self.outbox_table, "ไม่มีเอกสารรอคีย์เข้า Express")
@@ -238,6 +238,8 @@ class ExpressPage(QWidget):
                                                        self.refresh_outbox()))
         row.addWidget(self.outbox_minmax)
         for text, slot, kind, tip in (
+                ("คีย์เข้า Express อัตโนมัติ…", self.key_into_express, "",
+                 "ให้โปรแกรมพิมพ์เอกสารลงหน้าจอ Express เอง (Windows) – หยุดก่อนบันทึกทุกใบให้ตรวจ"),
                 ("นำเข้าเลขที่ Express…", self.import_express_numbers, "",
                  "อ่านไฟล์ส่ง Express ที่กรอกเลขที่ Express แล้ว (ชีท รายการส่ง Express)"),
                 ("ส่งออกไฟล์ส่ง Express…", self.export_outbox, "primary",
@@ -251,7 +253,7 @@ class ExpressPage(QWidget):
         return card
 
     def _outbox_options(self) -> express_out.Options:
-        return express_out.Options(self.department.text().strip(), self.warehouse.text().strip() or "ST01",
+        return express_out.Options(self.department.text().strip(), self.warehouse.text().strip() or "01",
                                    self.category.text().strip() or "21", self.account_group.text().strip() or "ST01")
 
     def outbox(self) -> express_out.Outbox:
@@ -265,14 +267,15 @@ class ExpressPage(QWidget):
         t.blockSignals(True)
         t.setRowCount(len(box.docs))
         for r, d in enumerate(box.docs):
-            values = [express_out.type_label(d.doc_type), d.doc_no, express_out.thai_date(d.date),
+            values = [express_out.type_label(d.doc_type), "คีย์แล้ว รอเลขที่" if d.keyed_at else "รอคีย์", d.doc_no,
+                      express_out.thai_date(d.date),
                       d.department or opts.department, express_out.screen_note(d), len(d.lines), f"{d.total:,.2f}",
                       d.express_no]
             for c, v in enumerate(values):
                 item = QTableWidgetItem(str(v))
                 if c < len(values) - 1:
                     item.setFlags(item.flags() & ~Qt.ItemIsEditable)
-                if c in (5, 6):
+                if c in (6, 7):
                     item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
                 if c == 0:
                     item.setData(Qt.UserRole, d.doc_no)
@@ -301,6 +304,16 @@ class ExpressPage(QWidget):
             self.state.save_library()
             self.state.notify(f"{doc.doc_no} → เลขที่ Express {doc.express_no}")
             QTimer.singleShot(0, self.state.ledger_changed.emit)
+
+    def key_into_express(self) -> None:
+        from ..express_bot_dialog import ExpressBotDialog
+
+        docs = self.outbox().docs
+        if not docs:
+            self.state.notify("ไม่มีเอกสารรอคีย์เข้า Express")
+            return
+        ExpressBotDialog(self.state, docs, self).exec()
+        self.refresh_outbox()
 
     def export_outbox(self) -> None:
         box = self.outbox()
@@ -393,7 +406,7 @@ class ExpressPage(QWidget):
         path = self.actions.save_path("ร่าง PD จ่ายวัตถุดิบเพื่อผลิต", self.actions.default_name(".xlsx", "PD"),
                                       "Excel (*.xlsx);;CSV (*.csv)")
         if path:
-            n = export_pd_draft(self.state.partlist, self.state.requirements, path, self.warehouse.text().strip() or "ST01",
+            n = export_pd_draft(self.state.partlist, self.state.requirements, path, self.warehouse.text().strip() or "01",
                                 self.department.text().strip())
             self.state.notify(f"บันทึก {Path(path).name} แล้ว ({n} บรรทัด)")
 

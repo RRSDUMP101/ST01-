@@ -1,5 +1,6 @@
 """GUI smoke tests (run headless with QT_QPA_PLATFORM=offscreen)."""
 
+import json
 import os
 from collections import Counter
 
@@ -1379,12 +1380,57 @@ def test_express_outbox_card(window, app, tmp_path, monkeypatch):
     state.post_doc(doc)
     page = window.pages["express"]
     app.processEvents()
-    assert page.outbox_table.rowCount() == 1 and page.outbox_table.item(0, 1).text() == doc.doc_no
+    assert page.outbox_table.rowCount() == 1 and page.outbox_table.item(0, 2).text() == doc.doc_no
     assert "OU 1 ใบ" in page.outbox_info.text()
     out = tmp_path / "to_express.xlsx"
     monkeypatch.setattr(window.actions, "save_path", lambda *a, **k: str(out))
     page.export_outbox()
     assert out.is_file()
-    page.outbox_table.item(0, 7).setText("OU6900001")
+    page.outbox_table.item(0, 8).setText("OU6900001")
     app.processEvents()
     assert doc.express_no == "OU6900001" and page.outbox_table.rowCount() == 0
+
+
+def test_express_bot_dialog_types_and_asks_the_number(window, app, monkeypatch):
+    """คีย์เข้า Express อัตโนมัติ: the dialog types the ticked documents (a stand-in keyboard here), stops before saving and
+    takes the Express number."""
+    import time
+
+    from partlist_studio.core import express_bot as bot
+    from partlist_studio.core.movements import DocLine
+    from partlist_studio.ui import express_bot_dialog as dlg_mod
+
+    state = window.state
+    doc = state.ledger.new_doc("OU", [DocLine("ST69-0001", "กระดาษทราย", 15, "แผ่น")], remark="ช่างท๊อปฟู",
+                               department="ST01")
+    state.post_doc(doc)
+
+    class Fake(bot.Output):
+        typed = []
+
+        def activate(self, title):
+            return True
+
+        def text(self, text, paste=False):
+            self.typed.append(text)
+
+        def key(self, name, times=1):
+            self.typed.append("{" + name + "}")
+
+    monkeypatch.setattr(dlg_mod.QInputDialog, "getText", staticmethod(lambda *a, **k: ("OU6900001", True)))
+    d = dlg_mod.ExpressBotDialog(state, [doc], window, output_factory=Fake)
+    d.delay.setValue(0)
+    for e in d.tpl_edits["OU"].values():  # no waits in the test
+        e.setPlainText(e.toPlainText().replace("{WAIT 1200}", "").replace("{WAIT 600}", "").replace("{WAIT 400}", "")
+                       .replace("{WAIT 300}", "").replace("{WAIT 200}", ""))
+    assert "พิมพ์  “ST69-0001”" in d.preview.toPlainText()
+    d.start()
+    deadline = time.monotonic() + 10
+    while d.worker is not None and time.monotonic() < deadline:
+        app.processEvents()
+        time.sleep(0.01)
+    assert d.worker is None
+    assert Fake.typed[:4] == ["{F4}", "ST01", "{ENTER}", "ช่างท๊อปฟู"] and "ST69-0001" in Fake.typed and "15" in Fake.typed
+    assert doc.express_no == "OU6900001" and doc.keyed_at
+    assert "OU" in json.loads(state.settings.get(dlg_mod.SETTINGS_KEY))["templates"]
+    d.close()

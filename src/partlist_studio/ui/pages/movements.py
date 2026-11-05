@@ -271,7 +271,7 @@ class MovementsPage(QWidget):
 
     def add_line(self) -> None:
         if self.doc and self.doc.status == ST_DRAFT:
-            self.doc.lines.append(DocLine("", "", 1, "", self.state.settings.get("express/warehouse", "ST01") or "ST01"))
+            self.doc.lines.append(DocLine("", "", 1, "", self.state.settings.get("express/warehouse", "01") or "01"))
             self._fill_lines()
 
     def remove_lines(self) -> None:
@@ -336,7 +336,7 @@ class MovementsPage(QWidget):
             return
         if not self.state.requirements and not self.stock_page.run_check(show=False):
             return
-        lines = lines_from_requirements(self.state.requirements, self.state.settings.get("express/warehouse", "ST01") or "ST01")
+        lines = lines_from_requirements(self.state.requirements, self.state.settings.get("express/warehouse", "01") or "01")
         if not lines:
             self.actions.error("ไม่มีวัตถุดิบที่เบิกได้", "ผลตรวจวัตถุดิบไม่มีรายการที่มีรหัสใน Express")
             return
@@ -348,7 +348,7 @@ class MovementsPage(QWidget):
         if not pl.parts:
             self.actions.error("ยังไม่มี Part List", "สร้างหรือนำเข้า Part List ก่อน")
             return
-        lines = lines_from_parts(pl.parts, self.state.stock, self.state.settings.get("express/warehouse", "ST01") or "ST01",
+        lines = lines_from_parts(pl.parts, self.state.stock, self.state.settings.get("express/warehouse", "01") or "01",
                                  max(1, pl.info.build_qty))
         kw = self._info_kw()
         if doc_type in ("PD", "OU"):
@@ -364,7 +364,7 @@ class MovementsPage(QWidget):
         if path:
             s = self.state.settings
             export_doc(self.doc, path, ledger=self.state.ledger, department=s.get("express/department", ""),
-                       warehouse=s.get("express/warehouse", "ST01"))
+                       warehouse=s.get("express/warehouse", "01"))
             self.state.save_library()
             self.state.notify(f"บันทึก {Path(path).name} แล้ว")
 

@@ -642,6 +642,28 @@ class MobileService:
         self._event("photo", {"code": code, "by": device.name})
         return {"ok": True, "photo": self.photo_json(code)}
 
+    def save_count_sample(self, device: Device, data: str, info: dict | None = None) -> dict:
+        """นับอัตโนมัติผิด: the still picture of a count, where it was tapped and how many it found / should be, kept
+        on the PC (mobile/count_samples) to check and improve the counting with real photos."""
+        try:
+            raw = base64.b64decode((data or "").split(",", 1)[-1], validate=True)
+        except (ValueError, TypeError):
+            raise MobileError("รูปไม่ถูกต้อง") from None
+        if raw[:3] != b"\xff\xd8\xff":
+            raise MobileError("รับเฉพาะรูป JPEG")
+        if len(raw) > 2_500_000:
+            raise MobileError("รูปใหญ่เกินไป (เกิน 2.5 MB)")
+        folder = self.data_dir / "count_samples"
+        folder.mkdir(parents=True, exist_ok=True)
+        base = f"count-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{secrets.token_hex(2)}"
+        (folder / f"{base}.jpg").write_bytes(raw)
+        keep = {k: v for k, v in (info or {}).items() if k in ("tap", "found", "real", "method", "r", "item", "dots")}
+        keep.update(by=device.name, when=_now())
+        (folder / f"{base}.json").write_text(json.dumps(keep, ensure_ascii=False), encoding="utf-8")
+        self._event("count_sample", {"by": device.name, "file": f"{base}.jpg", "found": keep.get("found"),
+                                     "real": keep.get("real")})
+        return {"ok": True, "file": f"{base}.jpg"}
+
     def photo_json(self, code: str, name: str = "") -> dict:
         info = self.photo(code, name)
         taken = self.data.photos.get(_key(code)) or {}

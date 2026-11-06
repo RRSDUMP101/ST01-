@@ -469,6 +469,7 @@ class _Handler(_Base):
             "pick": lambda: s.submit_pick(device, b.get("job_no", ""), b.get("lines") or [], b.get("note", "")),
             "profile": lambda: s.update_profile(device, b.get("name", ""), b.get("station")),
             "photo": lambda: s.save_photo(device, b.get("code", ""), b.get("data", "")),
+            "countsample": lambda: s.save_count_sample(device, b.get("data", ""), b.get("info") or {}),
             "stockdoc": lambda: s.submit_doc(device, b.get("doc_type", ""), b.get("lines") or [], b.get("job_no", ""),
                                              b.get("note", "")),
         }

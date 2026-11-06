@@ -215,4 +215,48 @@ for (const [label, W, floorC, how] of [['พื้นปูนมีคราบ
   scenes.push({ name: `3 ชิ้นบน${label}`, img, tap, taps: [pts[1], pts[2]], expect: 3, exact: true });
 }
 
+// ---- the store's own test (photo of 6 Nov): 3 light-blue plastic stirrers on a wood-grain table, side by side, the
+// spoons almost touching, a portrait phone photo, the tap on the thin middle (between two of them) ------------------
+function wood(w, h) {
+  const rgba = new Float32Array(w * h * 4);
+  const ph = Array.from({ length: 6 }, () => rnd() * 6.28);
+  for (let y = 0; y < h; y += 1) for (let x = 0; x < w; x += 1) {
+    const u = x * 0.9 + y * 0.12; // grain across, a little slanted
+    const g = 0.5 * Math.sin(u * 0.045 + ph[0] + 2 * Math.sin(y * 0.004 + ph[1])) + 0.3 * Math.sin(u * 0.17 + ph[2]) + 0.2 * Math.sin(u * 0.61 + ph[3]);
+    const light = 1 + 0.18 * Math.exp(-(((x - w * 0.55) / (w * 0.25)) ** 2) - (((y - h * 0.35) / (h * 0.3)) ** 2)); // a lamp
+    const i = (y * w + x) * 4; const k = (1 + 0.09 * g) * light;
+    rgba[i] = 132 * k; rgba[i + 1] = 118 * k; rgba[i + 2] = 104 * k; rgba[i + 3] = 255;
+  }
+  return { rgba, w, h };
+}
+function stirrer(img, x0, y0, x1, y1, scale, colour) { // a thin stick, a paddle at the top, a spoon at the bottom
+  const L = Math.hypot(x1 - x0, y1 - y0); const ux = (x1 - x0) / L; const uy = (y1 - y0) / L;
+  const inside = (px, py) => {
+    const t = (px - x0) * ux + (py - y0) * uy; const sd = Math.abs(-(px - x0) * uy + (py - y0) * ux);
+    if (t < 0 || t > L) return false;
+    if (t < L * 0.2) return sd < 13 * scale; // the paddle
+    if (t > L * 0.86) { const c = L * 0.93; return ((t - c) / (L * 0.07)) ** 2 + (sd / (24 * scale)) ** 2 < 1; } // the spoon
+    return sd < 5 * scale; // the stick
+  };
+  const minX = Math.floor(Math.min(x0, x1) - 30 * scale); const maxX = Math.ceil(Math.max(x0, x1) + 30 * scale);
+  for (let y = Math.floor(Math.min(y0, y1)); y <= Math.max(y0, y1); y += 1) for (let x = minX; x <= maxX; x += 1) {
+    if (x < 0 || y < 0 || x >= img.w || y >= img.h) continue;
+    let cover = 0; for (let sy = 0; sy < 3; sy += 1) for (let sx = 0; sx < 3; sx += 1) if (inside(x + sx / 3, y + sy / 3)) cover += 1;
+    if (!cover) continue;
+    const a = cover / 9; const i = (y * img.w + x) * 4; const sheen = 1 + 0.1 * Math.sin(x * 0.3);
+    for (let c = 0; c < 3; c += 1) img.rgba[i + c] = img.rgba[i + c] * (1 - a) + colour[c] * sheen * a;
+  }
+}
+for (const [label, W] of [['รูปมือถือแนวตั้ง', 900], ['รูปเล็ก', 360]]) {
+  const H = Math.round(W * 1.45); const k = W / 900;
+  const raw = wood(W, H);
+  const tops = [[W * 0.33, H * 0.34], [W * 0.41, H * 0.33], [W * 0.49, H * 0.34]];
+  const bots = [[W * 0.32, H * 0.84], [W * 0.41, H * 0.83], [W * 0.5, H * 0.85]];
+  for (let j = 0; j < 3; j += 1) stirrer(raw, tops[j][0], tops[j][1], bots[j][0], bots[j][1], k, [150, 182, 205]);
+  const img = finish(raw, 5);
+  const mid = (j) => [(tops[j][0] + bots[j][0]) / 2, (tops[j][1] + bots[j][1]) / 2];
+  scenes.push({ name: `ไม้คนพลาสติก 3 ชิ้นบนโต๊ะลายไม้ · ${label} · แตะระหว่างก้าน`, img, tap: [(mid(1)[0] + mid(2)[0]) / 2, mid(1)[1] + 30 * k],
+    taps: [mid(0), [bots[1][0], bots[1][1] - 20 * k], [tops[2][0], tops[2][1] + 40 * k]], expect: 3, exact: true });
+}
+
 export { scenes, colourPicture, plate, finish, PLATE_COLOURS, rnd, gauss };

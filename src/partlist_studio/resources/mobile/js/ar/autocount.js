@@ -551,9 +551,12 @@ function segmentAt(img, sample) {
   const size = Math.max(sc.maxX - sc.minX, sc.maxY - sc.minY) + 1;
   // thin bridges and specks away (dust, a scratch): an opening scaled to the piece
   // first a closing: a light piece on a darker floor is grainy at the cut-off - its bits are held together
-  const rc = Math.max(1, Math.min(6, Math.round(size * 0.025)));
+  // both scaled to the thickness of the piece, not its length: a long thin piece (a rod, a stirrer, a flat bar) is
+  // only a few pixels wide and an opening of its length would wipe it out
+  const thick = Math.max(2, sc.area / Math.max(1, Math.hypot(sc.maxX - sc.minX + 1, sc.maxY - sc.minY + 1)));
+  const rc = Math.max(1, Math.min(6, Math.round(size * 0.025), Math.floor(thick / 3)));
   mask = erodeDilate(erodeDilate(mask, w, h, rc, false), w, h, rc, true);
-  const ro = Math.max(1, Math.min(3, Math.round(size * 0.02)));
+  const ro = Math.max(1, Math.min(3, Math.round(size * 0.02), Math.floor(thick / 4)));
   mask = erodeDilate(erodeDilate(mask, w, h, ro, true), w, h, ro, false);
   ({ label, comps } = components(mask, w, h));
   // pieces lying close: their shadow fills the gap and joins them into one patch, but the gap is still a valley
@@ -595,12 +598,10 @@ function segmentAt(img, sample) {
       if (tb.area / m >= 1.6 && sc.area / m >= 0.85 && m >= sc.area / 4.5) unit = m; // plates pushed together
     }
   }
-  { // the tapped patch must not be far bigger than what is seen around the tap: a crate of pipe ends (or a stack)
-    // is one big patch here, while the look around the tap sees one pipe end; a tap beside a piece only makes the
-    // look smaller, so the bigger of the two looks (at the tap, at the piece) is used
-    const local = Math.max(measurePiece(img, sample.x, sample.y).r, measurePiece(img, sc.x, sc.y).r);
-    if (Math.sqrt(unit / Math.PI) > local * 2.6) return why(9, null); // one "piece" is a whole crate
-  }
+  // one "piece" that covers a quarter of the picture is a crate or a stack seen as one patch (the pipe ends in it
+  // touch): matching the tapped piece works better there
+  const pieces = blobs.reduce((k, b) => k + (b.area >= unit * 0.55 ? Math.max(1, Math.round(b.area / unit)) : 0), 0);
+  if (unit > n * 0.25 || (unit > n * 0.12 && pieces <= 2)) return why(9, null);
   // 6. every patch by its whole area; its dots on its parts
   const peaks = [];
   for (const bl of blobs) {

@@ -539,3 +539,17 @@ def test_part_tracking_step_by_step(demo):
     assert track["job_no"] == job.job_no and "photo" in track
     with pytest.raises(MobileError):
         s.part_track(job.job_no, 999)
+
+
+def test_count_sample_kept_on_the_pc(demo):
+    import base64
+    _state, s = demo
+    device, _t = _pair(s, "แอน", "store")
+    jpg = "data:image/jpeg;base64," + base64.b64encode(b"\xff\xd8\xff" + b"x" * 100).decode()
+    out = s.save_count_sample(device, jpg, {"tap": [10, 20], "found": 12, "real": 3, "secret": "dropped"})
+    folder = s.data_dir / "count_samples"
+    assert (folder / out["file"]).is_file()
+    info = json.loads((folder / out["file"].replace(".jpg", ".json")).read_text(encoding="utf-8"))
+    assert info["found"] == 12 and info["real"] == 3 and info["by"] == "แอน" and "secret" not in info
+    with pytest.raises(MobileError):
+        s.save_count_sample(device, "data:image/png;base64,iVBORw0KGgo=")

@@ -492,6 +492,19 @@ function TapCount({ shot, onClose }) {
     onClose();
     openCount(item, { value: total, method: result ? 'auto' : 'tap', location: item.location, visual: false });
   };
+  const sendSample = async () => { // the picture to the PC, to check the counting with a real photo
+    const real = window.prompt('จำนวนจริงในรูปนี้กี่ชิ้น? (ส่งรูปให้คอมเพื่อปรับปรุงการนับ)', String(total));
+    if (real === null) return;
+    try {
+      await api.post('countsample', { data: shot.canvas.toDataURL('image/jpeg', 0.85), info: {
+        tap: result ? [result.sample.x, result.sample.y] : null, found: result ? pick(result, sens).length : 0,
+        real: Number(real) || real, method: result ? result.method : 'tap', r: result ? result.r : 0,
+        item: item ? item.code : '', dots: auto.map((p) => [Math.round(p.x), Math.round(p.y)]) } });
+      toast('ส่งรูปให้คอมแล้ว – ขอบคุณ ใช้ปรับปรุงการนับอัตโนมัติ', 'ok');
+    } catch (e) {
+      toast(`ส่งไม่ได้: ${e.message}`, 'bad');
+    }
+  };
   const ratio = H / W;
   const hint = busy ? 'กำลังนับ…' : manual ? 'แตะบนชิ้นงานทีละชิ้น' : !result ? '① แตะชิ้นงาน 1 ชิ้น – ระบบนับชิ้นที่เหมือนกันให้'
     : '② ตรวจจุด: แตะจุดที่ผิด = เอาออก · แตะที่ว่าง = เพิ่ม';
@@ -516,7 +529,8 @@ function TapCount({ shot, onClose }) {
           onInput=${(e) => setSens(Number(e.target.value))} /><span>มากขึ้น</span></label>
         <div class="btn-row tight"><${Button} size="sm" kind="secondary" onClick=${() => resize(0.8)}>ชิ้นเล็กกว่านี้</${Button}>
           <${Button} size="sm" kind="secondary" onClick=${() => resize(1.25)}>ชิ้นใหญ่กว่านี้</${Button}>
-          <${Button} size="sm" kind="secondary" icon="target" onClick=${() => { setResult(null); setAdded([]); }}>ตัวอย่างใหม่</${Button}></div>` : null}
+          <${Button} size="sm" kind="secondary" icon="target" onClick=${() => { setResult(null); setAdded([]); }}>ตัวอย่างใหม่</${Button}></div>
+        <button class="link small" onClick=${sendSample}>นับผิด? ส่งรูปนี้ให้คอมตรวจ</button>` : null}
       <div class="btn-row">
         <${Button} kind="secondary" icon="hand" onClick=${() => { setManual(!manual); setResult(null); setAdded([]); }}>${manual ? 'นับอัตโนมัติ' : 'นับเอง'}</${Button}>
         <${Button} kind="ok" icon="check" disabled=${!total || busy} onClick=${use}>ใช้จำนวน ${total}</${Button}></div>

@@ -822,6 +822,9 @@ class MobilePage(QWidget):
             self.state.notify(f"⚠ แจ้งปัญหาจากมือถือ ({payload.by}): {payload.summary()}")
         elif kind in ("count", "pick"):
             self.state.notify(f"มือถือส่ง{KIND_NAMES[kind]}มา ({payload.by}) – ยืนยันที่หน้า มือถือ & AR")
+        elif kind == "count_sample" and payload is not None:
+            self.state.notify(f"มือถือส่งรูปนับอัตโนมัติมาตรวจ ({payload.get('by')}: ระบบนับ {payload.get('found')} · จริง "
+                              f"{payload.get('real')}) – เก็บที่ {self.hub.folder / 'count_samples' / payload.get('file', '')}")
         elif kind == "device" and payload is not None:
             self.state.notify(f"จับคู่ / แก้ไขเครื่อง {payload.name} แล้ว")
 

@@ -176,4 +176,43 @@ scenes[0].taps = [[220 + 0, 160], [220 + 3 * 60, 160 + 2 * 66]];
 scenes[2].taps = [[130 + 2 * 200 - 30, 140 - 30]];
 
 
+// ---- like a phone photo in the store: 3 pieces only, a busy floor, glare, the tap not quite on the middle --------
+function concrete(img, s) { // stains, grain, a crack: the floor is not plain
+  for (let k = 0; k < 14; k += 1) { // stains: soft darker patches about a third of a piece
+    const cx = rnd() * img.w; const cy = rnd() * img.h; const r = s * (0.1 + rnd() * 0.35); const f = 0.82 + rnd() * 0.12;
+    for (let y = Math.floor(cy - r); y <= cy + r; y += 1) for (let x = Math.floor(cx - r); x <= cx + r; x += 1) {
+      if (x < 0 || y < 0 || x >= img.w || y >= img.h) continue;
+      const t = Math.hypot(x - cx, y - cy) / r; if (t > 1) continue;
+      const a = 1 - (1 - f) * (1 - t * t); const i = (y * img.w + x) * 4;
+      for (let c = 0; c < 3; c += 1) img.rgba[i + c] *= a;
+    }
+  }
+  for (let i = 0; i < img.rgba.length; i += 4) { const v = 1 + (rnd() - 0.5) * 0.12; for (let c = 0; c < 3; c += 1) img.rgba[i + c] *= v; }
+  let x = rnd() * img.w; let y = 0; // a crack across
+  while (y < img.h) { const i = (Math.round(y) * img.w + Math.max(0, Math.min(img.w - 1, Math.round(x)))) * 4; for (let c = 0; c < 3; c += 1) img.rgba[i + c] *= 0.55; y += 1; x += (rnd() - 0.5) * 2; }
+}
+function glare(img, cx, cy, s) { // a shiny stripe on a piece (light on steel)
+  for (let y = Math.floor(cy - s * 0.3); y <= cy + s * 0.3; y += 1) for (let x = Math.floor(cx - s * 0.5); x <= cx + s * 0.5; x += 1) {
+    if (x < 0 || y < 0 || x >= img.w || y >= img.h) continue;
+    const d = Math.abs((x - cx) * 0.6 - (y - cy)) / (s * 0.08); if (d > 1) continue;
+    const a = 0.8 * (1 - d); const i = (y * img.w + x) * 4;
+    for (let c = 0; c < 3; c += 1) img.rgba[i + c] = img.rgba[i + c] * (1 - a) + 245 * a;
+  }
+}
+for (const [label, W, floorC, how] of [['พื้นปูนมีคราบ แตะตรงแสงสะท้อน', 1600, [178, 176, 170], 'glare'],
+  ['พื้นปูนมีคราบ แตะข้างชิ้น', 1600, [178, 176, 170], 'beside'], ['พื้นขาว รูปเล็ก แตะขอบชิ้น', 320, [222, 222, 218], 'edge'],
+  ['พื้นปูนเข้ม ชิ้นเหล็กดำ', 1200, [128, 126, 122], 'middle']]) {
+  const H = Math.round(W * 0.75); const raw = colourPicture(W, H, floorC, 0.3);
+  const s = W * 0.2; concrete(raw, s);
+  const pts = [[W * 0.25, H * 0.35], [W * 0.62, H * 0.3], [W * 0.45, H * 0.7]];
+  pts.forEach(([cx, cy], k) => {
+    plate(raw, cx, cy, s, (rnd() - 0.5) * 0.8, floorC[0] < 140 ? [40, 36, 34] : PLATE_COLOURS[k]);
+    if (how === 'glare' || k === 1) glare(raw, cx - s * 0.1, cy, s);
+  });
+  const img = finish(raw, 7);
+  const [tx, ty] = pts[0];
+  const tap = how === 'glare' ? [tx - s * 0.1, ty] : how === 'beside' ? [tx - s * 0.66, ty] : how === 'edge' ? [tx - s * 0.58, ty - s * 0.4] : [tx, ty];
+  scenes.push({ name: `3 ชิ้นบน${label}`, img, tap, taps: [pts[1], pts[2]], expect: 3, exact: true });
+}
+
 export { scenes, colourPicture, plate, finish, PLATE_COLOURS, rnd, gauss };

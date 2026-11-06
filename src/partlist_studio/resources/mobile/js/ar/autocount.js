@@ -300,11 +300,13 @@ function splitAtLevels(c, d, w, t) {
   if (c.area < 60) return null;
   const bw = c.maxX - c.minX + 1; const bh = c.maxY - c.minY + 1;
   const local = new Int32Array(bw * bh).fill(-2); // -2 not in the patch, -1 in it, k = part k
-  let top = 0;
+  const vals = [];
   for (const i of c.pix) {
     const x = i % w; const y = (i - x) / w; local[(y - c.minY) * bw + (x - c.minX)] = -1;
-    if (d[i] > top) top = d[i];
+    vals.push(d[i]);
   }
+  vals.sort((a, b) => a - b);
+  const top = vals[Math.floor(vals.length * 0.8)]; // the body of the pieces (not the odd bright speck of grain)
   const dl = (j) => d[(Math.floor(j / bw) + c.minY) * w + (j % bw) + c.minX];
   let best = null; let bestLevel = 0;
   for (const f of [0.15, 0.25, 0.35, 0.45, 0.55, 0.65, 0.75]) {
@@ -316,7 +318,9 @@ function splitAtLevels(c, d, w, t) {
     const big = Math.max(...parts.map((p) => p.area));
     const kept = parts.filter((p) => p.area >= big * 0.3);
     const sum = kept.reduce((a, p) => a + p.area, 0);
-    if (kept.length >= 2 && sum >= c.area * 0.4) { best = kept; bestLevel = level; break; } // the first level that splits
+    // a gap between pieces is a thin valley: the parts keep most of the patch (grain or a glare stripe that breaks a
+    // piece apart leaves far less)
+    if (kept.length >= 2 && sum >= c.area * 0.5) { best = kept; bestLevel = level; break; } // the first level that splits
   }
   if (!best) return null;
   const lab = Int32Array.from(local);
@@ -509,8 +513,12 @@ function segmentAt(img, sample) {
   const tLow = Math.max(0.08, Math.min(t * 0.75, fm + 5 * fsd));
   let mask = new Uint8Array(n);
   {
+    // ... but only a little way out from what clears t (a stain on the floor must not join two pieces)
+    const strong = new Uint8Array(n);
+    for (let i = 0; i < n; i += 1) strong[i] = d[i] > t ? 1 : 0;
+    const reach = erodeDilate(strong, w, h, Math.max(2, Math.round(Math.min(w, h) * 0.03)), false);
     const low = new Uint8Array(n);
-    for (let i = 0; i < n; i += 1) low[i] = d[i] > tLow ? 1 : 0;
+    for (let i = 0; i < n; i += 1) low[i] = d[i] > tLow && reach[i] ? 1 : 0;
     for (const c of components(low, w, h).comps) {
       let strong = 0;
       for (const i of c.pix) if (d[i] > t) strong += 1;
@@ -561,23 +569,37 @@ function segmentAt(img, sample) {
   if (sid < 0) return why(5, null);
   sc = comps[sid];
   if (sc.area > n * 0.6) return why(6, null); // the patch is most of the picture: a pile, not pieces apart
-  // 5. the area of one piece: the tapped part - unless a group of parts of the same size says the tapped one holds
-  // more than one piece (the tap fell on two plates that touch)
-  const sizable = comps.filter((c) => c.area >= sc.area * 0.3).map((c) => c.area).sort((a, b) => a - b);
-  let unit = sc.area;
-  let group = [];
-  for (const a of sizable) {
-    const alike = sizable.filter((b) => Math.abs(b / a - 1) < 0.12);
-    if (alike.length > group.length) group = alike;
+  // 5. the area of one piece. First the whole patches: when several are about the same size and the tapped one is
+  // a whole number of them, that is one piece (a glare stripe or grain that cuts a piece in two changes nothing).
+  // Only when the patches cannot tell (pieces pushed together into one or two patches) do their parts decide.
+  const tb = blobs[sc.blob];
+  let unit = tb.area;
+  const alikeOf = (list, tol) => {
+    let group = [];
+    for (const a of list) {
+      const g = list.filter((b) => Math.abs(b / a - 1) < tol);
+      if (g.length > group.length) group = g;
+    }
+    return group.sort((a, b) => a - b);
+  };
+  const blobAreas = blobs.filter((b) => b.area >= tb.area * 0.2).map((b) => b.area);
+  const bg = alikeOf(blobAreas, 0.15);
+  const whole = (m) => { const r = tb.area / m; return r >= 0.8 && Math.abs(r - Math.round(r)) < 0.25; };
+  if (bg.length >= 2 && whole(bg[Math.floor(bg.length / 2)])) {
+    unit = bg[Math.floor(bg.length / 2)];
+  } else {
+    const partAreas = comps.filter((c) => c.area >= sc.area * 0.12).map((c) => c.area); // the tap may be on 4-8 joined
+    const pg = alikeOf(partAreas, 0.12);
+    if (pg.length >= 2 && pg.length >= partAreas.length * 0.25) {
+      const m = pg[Math.floor(pg.length / 2)];
+      if (tb.area / m >= 1.6 && sc.area / m >= 0.85 && m >= sc.area / 4.5) unit = m; // plates pushed together
+    }
   }
-  if (group.length >= 2 && group.length >= sizable.length * 0.25) {
-    const m = group[Math.floor(group.length / 2)];
-    if (sc.area / m >= 0.85 && m >= sc.area / 4.5) unit = m;
-  }
-  { // the size of one piece must agree with the patch around the tap (a crate of pipe ends is one big patch here)
-    const local = measurePiece(img, sample.x, sample.y).r;
-    const ru = Math.sqrt(unit / Math.PI);
-    if (ru > local * 2.4 || ru < local / 2.4) return why(9, null);
+  { // the tapped patch must not be far bigger than what is seen around the tap: a crate of pipe ends (or a stack)
+    // is one big patch here, while the look around the tap sees one pipe end; a tap beside a piece only makes the
+    // look smaller, so the bigger of the two looks (at the tap, at the piece) is used
+    const local = Math.max(measurePiece(img, sample.x, sample.y).r, measurePiece(img, sc.x, sc.y).r);
+    if (Math.sqrt(unit / Math.PI) > local * 2.6) return why(9, null); // one "piece" is a whole crate
   }
   // 6. every patch by its whole area; its dots on its parts
   const peaks = [];

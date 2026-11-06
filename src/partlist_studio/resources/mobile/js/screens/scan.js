@@ -467,8 +467,11 @@ function TapCount({ shot, onClose }) {
       setSens(0.5);
       const n = pick(res, 0.5).length;
       feedback.found();
-      toast(n > 1 ? `นับได้ ${n} ชิ้น – ตรวจจุดสีเหลือง แตะจุดที่ผิดเพื่อเอาออก แตะที่ว่างเพื่อเพิ่ม`
-        : 'พบชิ้นเดียว – ลองแตะชิ้นตัวอย่างอื่น หรือเลื่อน “มากขึ้น”', n > 1 ? 'ok' : 'warn', 3800);
+      // many tiny dots: the grain or stains of the floor were taken for pieces - say so, do not pretend
+      const odd = n > 40 && res.r < Math.min(W, H) * 0.025;
+      toast(odd ? `นับได้ ${n} – มากผิดปกติ อาจนับลายพื้น/คราบ: แตะกลางชิ้นงานใหม่ หรือกด “ชิ้นใหญ่กว่านี้”`
+        : n > 1 ? `นับได้ ${n} ชิ้น – ตรวจจุดสีเหลือง แตะจุดที่ผิดเพื่อเอาออก แตะที่ว่างเพื่อเพิ่ม`
+          : 'พบชิ้นเดียว – ลองแตะชิ้นตัวอย่างอื่น หรือเลื่อน “มากขึ้น”', odd || n <= 1 ? 'warn' : 'ok', odd ? 6000 : 3800);
     } catch (e) {
       toast(`นับไม่ได้: ${e.message}`, 'bad');
     } finally {

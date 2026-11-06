@@ -86,7 +86,11 @@ async function waitFor(page, fn, ms = 12000) {
   check(await waitFor(page, () => !!document.querySelector('.sheet .count-grid')), 'AR count: count sheet with the system quantity');
   await shot(page, 'm8_ar_count');
   await page.keyboard.press('Escape');
-  await sleep(400);
+  if (!(await waitFor(page, () => !document.querySelector('.sheet-wrap'), 2000))) {
+    await page.mouse.click(5, 5); // the backdrop above the sheet: closes it as a person would
+    await waitFor(page, () => !document.querySelector('.sheet-wrap'), 3000);
+  }
+  await sleep(200);
   await go(page, 'pick/job/SO6910-015');
   await page.getByRole('button', { name: /เริ่มหยิบด้วย AR|หยิบต่อด้วย AR/ }).click();
   check(await waitFor(page, () => [...document.querySelectorAll('.arc.near')].length >= 2, 15000), 'AR pick: arrows from the labels to the slot');

@@ -358,6 +358,31 @@ def preview_express_numbers(ledger: Ledger, numbers: dict[str, str]) -> list[lis
     return rows
 
 
+def example_docs() -> list[StockDoc]:
+    """ตัวอย่างสำหรับฝึก: one document of each kind as the store keys them (never in the ledger, no stock changes)."""
+    from datetime import date
+
+    from .movements import DocLine
+
+    today = date.today().isoformat()
+    docs = [
+        StockDoc("PD", "ตัวอย่าง-PD", today, job="SO6700001", department="SET",
+                 remark="ช่างรอง โตโยต้า MR0DA8CB605903316", lines=[
+                     DocLine("01-B00-0015", "เหล็กแผ่นดำ 4มม. 5x10ฟุต(เฟรมบนยาว)1524x3050", 2, "แผ่น", "01", 3000),
+                     DocLine("RRS-T-022-L-84", "เสาหลัง(ซ้าย) 84", 1, "ต้น", "01")]),
+        StockDoc("OU", "ตัวอย่าง-OU", today, department="ST01", remark="ช่างท๊อปฟู",
+                 lines=[DocLine("ST69-0001", "กระดาษทรายแห้งกลมเบอร์80", 15, "แผ่น", "01")]),
+        StockDoc("RR", "ตัวอย่าง-RR", today, department="ST01", vendor="อ-092", ref="PO6900012",
+                 lines=[DocLine("STORE-67-0850", "สายถักหุ้มสายไฟ10mm.(สีดำ)", 10, "ม้วน", "ST05", 600)]),
+        StockDoc("AJ", "ตัวอย่าง-JU", today, department="ST01", remark="ตรวจนับด้วยมือถือ",
+                 lines=[DocLine("ST69-0001", "กระดาษทรายแห้งกลมเบอร์80", -3, "แผ่น", "01", 5,
+                                "นับได้ 22 (ระบบ 25)")]),
+    ]
+    for d in docs:
+        d.status = ST_POSTED
+    return docs
+
+
 def type_label(doc_type: str) -> str:
     """'AJ ปรับปรุงยอด (ตรวจนับ) → JU' - the type in this program and, when it differs, in Express."""
     base = f"{doc_type} {DOC_TYPES.get(doc_type, ('', 0))[0]}"

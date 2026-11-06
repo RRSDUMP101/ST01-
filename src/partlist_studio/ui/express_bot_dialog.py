@@ -94,9 +94,10 @@ class _Worker(QObject):
 
 
 class ExpressBotDialog(QDialog):
-    def __init__(self, state, docs, parent=None, output_factory=None):
+    def __init__(self, state, docs, parent=None, output_factory=None, practice=False):
         super().__init__(parent)
-        self.setWindowTitle("คีย์เข้า Express อัตโนมัติ")
+        self.practice = practice  # ตัวอย่างสำหรับฝึก: types into Notepad, nothing of the program changes
+        self.setWindowTitle("ฝึกคีย์เข้า Express (ตัวอย่าง)" if practice else "คีย์เข้า Express อัตโนมัติ")
         self.setObjectName("ExpressBotDialog")
         fit_to_screen(self, 1180, 820)
         self.state = state
@@ -106,12 +107,23 @@ class ExpressBotDialog(QDialog):
         self.output_factory = output_factory or self._windows_output
         self.worker = None
         lay = QVBoxLayout(self)
-        intro = QLabel("โปรแกรมพิมพ์เอกสารเข้าหน้าจอ Express ให้เหมือนคนคีย์ (ไม่ใช้ API ไม่เขียนไฟล์ข้อมูลของ Express) – "
-                       "Express ตรวจทุกช่อง ออกเลขที่ คิดต้นทุน และลงบัญชีเหมือนคีย์เอง · <b>เปิดหน้าจอเอกสารชนิดนั้นใน "
-                       "Express ไว้ก่อน</b> · ทุกใบหยุดก่อนบันทึก ({STOP}) ให้ตรวจแล้วกดบันทึกเอง แล้วกรอกเลขที่ Express · "
-                       "หยุดทันที: เลื่อนเมาส์ไปมุมซ้ายบนสุดของจอ หรือสลับไปหน้าต่างอื่น")
-        intro.setWordWrap(True)
-        lay.addWidget(intro)
+        if practice:
+            self.options.window = "Notepad"
+            banner = QLabel("<b>โหมดฝึก</b> – เอกสารตัวอย่าง 4 ใบ (PD, OU, RR, JU) พิมพ์ลง <b>Notepad</b> ให้ดูว่าโปรแกรมกดอะไรบ้าง · "
+                            "ไม่มีอะไรเปลี่ยนในโปรแกรมหรือใน Express · กด <b>เปิด Notepad</b> แล้ว <b>เริ่มคีย์</b>")
+            banner.setWordWrap(True)
+            banner.setStyleSheet("background:#FFF4CE;border:1px solid #E0B84C;border-radius:6px;padding:8px")
+            lay.addWidget(banner)
+        steps = QLabel(
+            "<b>① เปิดหน้าจอ</b> ใน Express (เช่น 4.สินค้า → PD) ค้างไว้ &nbsp;→&nbsp; "
+            "<b>② ติ๊กใบ</b> ที่จะคีย์ทางซ้าย (ชนิดเดียวกับหน้าจอที่เปิด) &nbsp;→&nbsp; "
+            "<b>③ กด เริ่มคีย์</b> – นับถอยหลัง 3 วิ ปล่อยเมาส์/แป้น โปรแกรมพิมพ์ให้ &nbsp;→&nbsp; "
+            "<b>④ ตรวจในหน้าจอ</b> แล้วกดบันทึกใน Express เอง → กด <b>บันทึกใน Express แล้ว</b> → ใส่เลขที่ที่ Express ออกให้"
+            "<br><span style='color:#6B7A90'>ครั้งแรก: ลองกับ Notepad ก่อน แล้วลองใบเดียวกับ Express – ถ้าเคอร์เซอร์ไปผิดช่อง "
+            "แก้ลำดับการกดทางขวา (ผู้ดูแล) · หยุดทันที: เมาส์มุมซ้ายบนสุด / Pause / Ctrl+Alt+Q · "
+            "โปรแกรมไม่เขียนไฟล์ข้อมูลของ Express – Express ตรวจทุกช่องเหมือนคนคีย์</span>")
+        steps.setWordWrap(True)
+        lay.addWidget(steps)
         split = QSplitter(Qt.Horizontal)
         left = QWidget()
         ll = QVBoxLayout(left)
@@ -215,6 +227,9 @@ class ExpressBotDialog(QDialog):
         self.log.setPlaceholderText("บันทึกการคีย์ของรอบนี้")
         lay.addWidget(self.log)
         row = QHBoxLayout()
+        self.notepad_btn = button("เปิด Notepad ลองก่อน", tooltip="เปิด Notepad แล้วตั้งให้พิมพ์ลง Notepad – ดูว่าโปรแกรมกดอะไร")
+        self.notepad_btn.clicked.connect(self.open_notepad)
+        row.addWidget(self.notepad_btn)
         self.ahk_btn = button("ส่งออก AutoHotkey…", tooltip="สคริปต์ AutoHotkey v2 ของการกดเดียวกัน (ดู/รันเองได้)")
         self.ahk_btn.clicked.connect(self.export_ahk)
         row.addWidget(self.ahk_btn)
@@ -242,6 +257,23 @@ class ExpressBotDialog(QDialog):
         if self.doc_list.count():
             self.doc_list.setCurrentRow(0)
         self._preview()
+
+    def open_notepad(self) -> None:
+        """A safe place to try the keys: Notepad, and the bot types into it."""
+        self.window_edit.setEnabled(True)
+        self.window_edit.setText("Notepad")
+        self.process_edit.setText("")
+        if sys.platform.startswith("win"):
+            import subprocess
+
+            try:
+                subprocess.Popen(["notepad.exe"])  # noqa: S603,S607 - Windows' own editor
+            except OSError as e:
+                self.status.setText(f"เปิด Notepad ไม่ได้: {e}")
+                return
+            self.status.setText("เปิด Notepad แล้ว – กด เริ่มคีย์ แล้วดูตัวอักษรที่โปรแกรมพิมพ์ลง Notepad")
+        else:
+            self.status.setText("ตั้งให้พิมพ์ลงหน้าต่าง Notepad แล้ว (เครื่องนี้ไม่ใช่ Windows – ใช้ส่งออก AutoHotkey ดูลำดับได้)")
 
     # ---- options ------------------------------------------------------------------------------------
     def _read_options(self) -> bot.BotOptions:
@@ -354,7 +386,7 @@ class ExpressBotDialog(QDialog):
         if warnings and QMessageBox.question(self, "ตรวจก่อนคีย์", "\n".join(warnings[:12]) + "\n\nคีย์ต่อไหม?") \
                 != QMessageBox.Yes:
             return
-        again = [d for d in docs if d.keyed_at or d.key_partial or d.express_no]
+        again = [d for d in docs if d.keyed_at or d.key_partial or d.express_no] if not self.practice else []
         if again:
             reason, ok = QInputDialog.getText(
                 self, "คีย์ซ้ำ", "ใบนี้คีย์เข้า Express ไปแล้ว: " + ", ".join(d.doc_no for d in again)
@@ -367,7 +399,8 @@ class ExpressBotDialog(QDialog):
         types = sorted({d.doc_type for d in docs})
         if len(types) > 1:
             self.status.setText("หลายชนิดเอกสาร: โปรแกรมหยุดทุกใบ – ระหว่างนั้นเปิดหน้าจอของใบถัดไปใน Express ได้")
-        save_options(self.state.settings, self.options)
+        if not self.practice:
+            save_options(self.state.settings, self.options)
         self._by_no = {d.doc_no: d for d in docs}
         self.worker = _Worker(actions, self.options, out)
         self.worker.progress.connect(self._progress)
@@ -379,9 +412,10 @@ class ExpressBotDialog(QDialog):
         self.run_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
         self._log(f"เริ่ม {len(docs)} ใบ: " + ", ".join(d.doc_no for d in docs) + f" → หน้าต่าง “{self.options.window}”")
-        self.state.log("bot.run_start", "bot_run", "", after={"docs": [d.doc_no for d in docs],
-                                                             "window": self.options.window,
-                                                             "process": self.options.process})
+        if not self.practice:
+            self.state.log("bot.run_start", "bot_run", "", after={"docs": [d.doc_no for d in docs],
+                                                                 "window": self.options.window,
+                                                                 "process": self.options.process})
         self._countdown, self._started = self.countdown_s, False
         self._tick()
 
@@ -428,6 +462,13 @@ class ExpressBotDialog(QDialog):
         self._log(f"หยุดรอบันทึก {label}")
         answer = self.ask_saved(label)
         now = datetime.now().isoformat(timespec="seconds")
+        if self.practice:  # an example: nothing is kept
+            if answer == "saved":
+                no, ok = QInputDialog.getText(self, "เลขที่ Express (ฝึก)", f"{label}: ตอนใช้จริง ใส่เลขที่ที่ Express ออกให้ "
+                                                                        "ตรงนี้ (เช่น PD0000526) – ตอนฝึกไม่เก็บ")
+                self._log(f"ฝึก: {doc_no} ได้เลขที่ {no.strip() or '-'} (ไม่เก็บ)")
+            self.worker.answer(answer != "stop")
+            return
         if doc is not None and answer == "saved":
             doc.keyed_at, doc.key_partial, doc.keyed_by = now, "", self.state.who()
             self.state.log("doc.keyed", "doc", doc.doc_no, source="bot")
@@ -471,6 +512,15 @@ class ExpressBotDialog(QDialog):
 
     def _finished(self, keyed: list, error: str, partial: str = "") -> None:
         if self.worker is None:
+            return
+        if self.practice:
+            self._log(f"ฝึกเสร็จ: พิมพ์ {len(keyed)} ใบ" + (f" · {error}" if error else "")
+                      + " – ใช้จริง: เปิดหน้าจอ Express แล้วกด คีย์เข้า Express อัตโนมัติ ในหน้า Express")
+            self.run_btn.setEnabled(True)
+            self.stop_btn.setEnabled(False)
+            self.bar.setVisible(False)
+            self.worker = None
+            self.status.setText(f"ฝึกเสร็จ – พิมพ์ {len(keyed)} ใบ" + (f" · {error}" if error else ""))
             return
         now = datetime.now().isoformat(timespec="seconds")
         half = self._by_no.get(partial) if partial else None

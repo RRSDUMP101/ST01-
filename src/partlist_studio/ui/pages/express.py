@@ -23,6 +23,7 @@ from ...core.stock import StockList, export_requirements
 from ...core.tabular import read_table, write_table
 from ...core.xref import XREF_HEADERS, CodeXref, XrefEntry, suggest_links
 from .. import theme
+from ..printing import open_document
 from ..state import AppState
 from ..widgets import Card, PageHeader, button, empty_hint, run_async
 from ..work_dialogs import NewCodeDialog
@@ -211,6 +212,25 @@ class ExpressPage(QWidget):
 
     def _outbox_card(self) -> Card:
         card = Card("ส่งเข้า Express – รายการที่ยังไม่ได้คีย์")
+        guide = QLabel(
+            "<b>วิธีใช้ (ทีละขั้น)</b><br>"
+            "<b>①</b> บันทึกใบเบิก/รับในหน้า <b>เบิก / รับ สต็อก</b> (หรือยืนยันงานจากมือถือ) → ใบนั้นขึ้นในตารางนี้ สถานะ <i>รอคีย์</i><br>"
+            "<b>②</b> เลือกวิธีเข้า Express: <b>ส่งออกไฟล์ส่ง Express…</b> (Excel ชีทละใบ แล้วคีย์เอง) หรือ "
+            "<b>คีย์เข้า Express อัตโนมัติ…</b> (โปรแกรมพิมพ์ลงหน้าจอ Express ให้ – หยุดก่อนบันทึกทุกใบ)<br>"
+            "<b>③</b> บันทึกใน Express แล้ว ใส่ <b>เลขที่ Express</b> ในคอลัมน์สุดท้าย (หรือ นำเข้าเลขที่จากไฟล์) → ใบนั้นออกจากรายการ<br>"
+            "<span style='color:%s'>ยังไม่เคยใช้? กด <b>ฝึกคีย์ (ตัวอย่าง)</b> – โปรแกรมพิมพ์ใบตัวอย่างลง Notepad ให้ดูก่อน · "
+            "<b>ไฟล์ตัวอย่าง</b> – ดูหน้าตาไฟล์ส่ง Express · ตัวอย่างไม่เปลี่ยนข้อมูลใด ๆ</span>" % theme.MUTED)
+        guide.setWordWrap(True)
+        guide.setStyleSheet("background:#F3F7FC;border:1px solid #D5E2F2;border-radius:6px;padding:8px")
+        card.body.addWidget(guide)
+        row = QHBoxLayout()
+        for text, slot, tip in (("ฝึกคีย์ (ตัวอย่าง)…", self.practice_bot, "เปิดหน้าคีย์อัตโนมัติกับใบตัวอย่าง 4 ใบ พิมพ์ลง Notepad"),
+                                ("ไฟล์ตัวอย่าง…", self.example_file, "ไฟล์ส่ง Express ของใบตัวอย่าง (PD, OU, RR, JU)")):
+            b = button(text, tooltip=tip)
+            b.clicked.connect(slot)
+            row.addWidget(b)
+        row.addStretch(1)
+        card.body.addLayout(row)
         t = QLabel("ใบที่ <b>บันทึกแล้ว</b> แต่ยังไม่มี <b>เลขที่ Express</b>: PD เบิกไปผลิต (รวมแผ่นเหล็กจากแผนตัดเลเซอร์) · "
                    "OU เบิกใช้ภายใน · RR รับสินค้าที่ซื้อ (ผู้จำหน่าย, อ้างอิง PO) · FR รับชิ้นงานที่ผลิตเสร็จ · "
                    "AJ ผลตรวจนับ (มือถือ, สต็อกเหล็ก) + รหัสใหม่ที่ยังไม่มีใน Express + จุดสั่งซื้อ Min/Max "
@@ -344,6 +364,21 @@ class ExpressPage(QWidget):
             self.state.log("doc.void_in_express_done", "doc", d.doc_no, after={"express_no": d.express_no})
         self.state.save_library()
         self.state.ledger_changed.emit()
+
+    def practice_bot(self) -> None:
+        from ..express_bot_dialog import ExpressBotDialog
+
+        ExpressBotDialog(self.state, express_out.example_docs(), self, practice=True).exec()
+
+    def example_file(self) -> None:
+        path = self.actions.save_path("ไฟล์ส่ง Express (ตัวอย่าง)", "ตัวอย่าง_ส่งเข้า_Express.xlsx", "Excel (*.xlsx)")
+        if not path:
+            return
+        docs = express_out.example_docs()
+        box = express_out.Outbox(docs, [], [])
+        express_out.write_outbox(box, path, self._outbox_options())
+        self.state.notify(f"บันทึก {Path(path).name} แล้ว – เปิดดูชีท รายการส่ง Express และชีทละใบ (ตัวอย่าง)")
+        open_document(path)
 
     def key_into_express(self) -> None:
         from ..express_bot_dialog import ExpressBotDialog

@@ -1473,3 +1473,58 @@ def test_sign_in_users_and_roles(window, app, monkeypatch):
     u.close()
     d.view_only()
     assert state.actor is access.VIEWER
+
+
+def test_express_practice_with_examples(window, app, monkeypatch, tmp_path):
+    """ฝึกคีย์ (ตัวอย่าง): example documents typed into Notepad - nothing of the program changes; the example file."""
+    import time
+
+    from partlist_studio.core import express_bot as bot
+    from partlist_studio.ui import express_bot_dialog as dlg_mod
+    from partlist_studio.ui.pages import express as express_page
+
+    state = window.state
+    before = (len(state.ledger.docs), len(state.ledger.movements))
+
+    class Fake(bot.Output):
+        typed = []
+
+        def activate(self, title):
+            Fake.title = title
+            return True
+
+        def text(self, text, paste=False):
+            self.typed.append(text)
+
+        def key(self, name, times=1):
+            self.typed.append("{" + name + "}")
+
+    monkeypatch.setattr(dlg_mod.QInputDialog, "getText", staticmethod(lambda *a, **k: ("PD0000526", True)))
+    monkeypatch.setattr(dlg_mod.QMessageBox, "question", staticmethod(lambda *a, **k: dlg_mod.QMessageBox.Yes))
+    from partlist_studio.core import express_out
+
+    d = dlg_mod.ExpressBotDialog(state, express_out.example_docs(), window, output_factory=Fake, practice=True)
+    assert d.window_edit.text() == "Notepad" and d.doc_list.count() == 4
+    d.ask_saved = lambda label: "saved"
+    d.countdown_s = 0
+    import re
+
+    for t in d.tpl_edits.values():  # no waits in the test
+        for e in t.values():
+            e.setPlainText(re.sub(r"\{WAIT \d+\}", "", e.toPlainText()))
+    d.delay.setValue(0)
+    d.start()
+    deadline = time.monotonic() + 30
+    while d.worker is not None and time.monotonic() < deadline:
+        app.processEvents()
+        time.sleep(0.01)
+    assert d.worker is None and Fake.title == "Notepad" and "SO6700001 ช่างรอง โตโยต้า MR0DA8CB605903316" in Fake.typed
+    assert (len(state.ledger.docs), len(state.ledger.movements)) == before and "ฝึกเสร็จ" in d.status.text()
+    d.close()
+    out = tmp_path / "example.xlsx"
+    monkeypatch.setattr(window.actions, "save_path", lambda *a, **k: str(out))
+    monkeypatch.setattr(express_page, "open_document", lambda p: None)
+    window.pages["express"].example_file()
+    import openpyxl
+
+    assert {"รายการส่ง Express", "ตัวอย่าง-PD", "ตัวอย่าง-JU"} <= set(openpyxl.load_workbook(out).sheetnames)

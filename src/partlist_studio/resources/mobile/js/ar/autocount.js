@@ -167,6 +167,62 @@ function integrals(img) {
   return { s1, s2, W1 };
 }
 
+// the colour of a place (a disc of radius rad, in the picture's pixels) without its lightness: [red - green,
+// blue - green] over the brightness - a bluish galvanised bolt and brown wood differ, a dim one and a lit one not -
+// and the lightness itself
+function hueAt(img, x, y, rad) {
+  const { rgba, w, h } = img;
+  if (!rgba) return null;
+  let r = 0; let gg = 0; let b = 0; let k = 0;
+  const st = Math.max(1, rad / 7);
+  for (let dy = -rad; dy <= rad; dy += st) {
+    for (let dx = -rad; dx <= rad; dx += st) {
+      if (dx * dx + dy * dy > rad * rad) continue;
+      const xx = Math.round(x + dx); const yy = Math.round(y + dy);
+      if (xx < 0 || yy < 0 || xx >= w || yy >= h) continue;
+      const i = (yy * w + xx) * 4; r += rgba[i]; gg += rgba[i + 1]; b += rgba[i + 2]; k += 1;
+    }
+  }
+  if (!k) return null;
+  const s = (r + gg + b) / (3 * k) + 8;
+  return [(r - gg) / k / s, (b - gg) / k / s, s - 8];
+}
+
+// Pieces of one item have its colour: a place that has the colour and the lightness of the floor and not the
+// colour of the tapped piece (brown wood beside bluish galvanised bolts) is not one. -> test(x, y), or null when the
+// tapped piece has the floor's colour (grey steel on grey concrete: nothing to tell by)
+function floorLikeTest(img, sx, sy, r0) {
+  const hue0 = hueAt(img, sx, sy, r0 * 0.4);
+  const hueF = hue0 ? floorHue(img) : null;
+  if (!hue0 || !hueF || Math.hypot(hue0[0] - hueF[0], hue0[1] - hueF[1]) <= 0.08) return null;
+  const o = r0 * 0.4;
+  return (x, y) => { // the part of the place most like the piece (a glare stripe or a shadow on one side)
+    let toPiece = Infinity; let toFloor = 0; let light = 0;
+    for (const [dx, dy] of [[0, 0], [o, 0], [-o, 0], [0, o], [0, -o]]) {
+      const hp = hueAt(img, x + dx, y + dy, r0 * 0.3);
+      if (!hp) continue;
+      const d = Math.hypot(hp[0] - hue0[0], hp[1] - hue0[1]);
+      if (d < toPiece) { toPiece = d; toFloor = Math.hypot(hp[0] - hueF[0], hp[1] - hueF[1]); light = hp[2]; }
+    }
+    // as light as the floor too: a dark grey plate on a light grey floor has its colour but not its lightness
+    return toPiece > 0.12 && toPiece < Infinity && toFloor < Math.min(0.05, toPiece * 0.5) && Math.abs(light - hueF[2]) < Math.max(12, hueF[2] * 0.2);
+  };
+}
+
+// the colour and lightness of the floor: the middle of those all over the picture (most of it is floor)
+function floorHue(img) {
+  const { w, h } = img;
+  const st = Math.max(4, Math.round(Math.min(w, h) / 24));
+  const a = []; const b = []; const l = [];
+  for (let y = st / 2; y < h; y += st) for (let x = st / 2; x < w; x += st) {
+    const v = hueAt(img, x, y, st / 2);
+    if (v) { a.push(v[0]); b.push(v[1]); l.push(v[2]); }
+  }
+  if (!a.length) return null;
+  const mid = (v) => v.sort((p, q) => p - q)[v.length >> 1];
+  return [mid(a), mid(b), mid(l)];
+}
+
 function scoreAt(img, I, tpl, cx, cy) { // NCC of the template centred at (cx, cy)
   const { g, w } = img; const { t, R, size, ss } = tpl;
   const x0 = cx - R; const y0 = cy - R;
@@ -439,18 +495,28 @@ export function segmentCount(img, sample) {
     const k = SEG_SIDE / side; const nw = Math.round(img.w * k); const nh = Math.round(img.h * k);
     const small = resize(img, nw, nh);
     if (img.rgba && img.rgba.length >= img.w * img.h * 4) small.rgba = shrinkRGBA(img.rgba, img.w, img.h, nw, nh);
-    const res = segmentAt(small, { x: sample.x * (nw / img.w), y: sample.y * (nh / img.h) });
+    const res = segmentEither(small, { x: sample.x * (nw / img.w), y: sample.y * (nh / img.h) });
     if (!res) return null;
     const bx = img.w / nw; const by = img.h / nh;
     return { ...res, r: res.r * bx, sample: { x: sample.x, y: sample.y },
       peaks: res.peaks.map((p) => ({ ...p, x: p.x * bx, y: p.y * by })) };
   }
-  return segmentAt(img, sample);
+  return segmentEither(img, sample);
+}
+
+// The pieces are the smaller class of the picture, darker or lighter than the floor. A big shadow or dim corners
+// can make the dark class the smaller one under light (galvanised) bolts on wood: the "pieces" found are then the
+// shadows, and the tapped piece is clearly on the floor's side. Then the other way is tried, and nothing (the
+// matching) when that does not work either.
+function segmentEither(img, sample) {
+  const first = segmentAt(img, sample);
+  if (!first || !first.wrongSide) return first;
+  return segmentAt(img, sample, true);
 }
 
 const why = (k, v) => { if (globalThis.__why) globalThis.__why(k); return v; };
 
-function segmentAt(img, sample) {
+function segmentAt(img, sample, flip = false) {
   const { g, w, h } = img;
   const n = w * h;
   // 1. the floor: Otsu of the whole picture, the class the tapped piece is not in
@@ -464,7 +530,8 @@ function segmentAt(img, sample) {
   tapV /= tn || 1;
   let below = 0; for (let i = 0; i < n; i += 1) if (g[i] <= cut0) below += 1;
   // the floor is the bigger part of the picture; the pieces are the other side (darker - or lighter - than the floor)
-  const dark = below * 2 < n ? true : below * 2 > n * 1.4 ? false : tapV <= cut0;
+  let dark = below * 2 < n ? true : below * 2 > n * 1.4 ? false : tapV <= cut0;
+  if (flip) dark = !dark;
   const floor0 = new Uint8Array(n); let floorN = 0;
   for (let i = 0; i < n; i += 1) if ((g[i] > cut0) === dark) { floor0[i] = 1; floorN += 1; }
   if (floorN < n * 0.3) return why(1, null); // little floor showing: packed pieces
@@ -475,9 +542,21 @@ function segmentAt(img, sample) {
   const chans = rgba ? [0, 1, 2].map((c) => { const ch = new Float32Array(n); for (let i = 0; i < n; i += 1) ch[i] = rgba[i * 4 + c]; return ch; }) : null;
   let floor = floor0; let d = new Float32Array(n); let t = 0.16;
   const step = Math.max(1, Math.round(Math.sqrt(n / 40000)));
+  let wrongSide = false; // the tap on something clearly the other way from the floor (lighter where pieces are dark)
   for (let pass = 0; pass < 5; pass += 1) {
     const surf = fitSurface(g, floor, w, h, step);
     if (!surf) return why(2, null);
+    { // around the tap, a little wider than a fingertip (the hole of a nut is dark on a light nut)
+      const b = Math.max(8, surfaceAt(surf, Math.round(sample.x), Math.round(sample.y), w, h));
+      const rr = Math.max(2, Math.round(Math.min(w, h) * 0.02));
+      let m = 0; let k = 0;
+      for (let dy = -rr; dy <= rr; dy += 1) for (let dx = -rr; dx <= rr; dx += 1) {
+        const x = Math.round(sample.x) + dx; const y = Math.round(sample.y) + dy;
+        if (dx * dx + dy * dy <= rr * rr && x >= 0 && y >= 0 && x < w && y < h) { m += g[y * w + x]; k += 1; }
+      }
+      m /= k || 1;
+      wrongSide = dark ? (m - b) / Math.max(255 - b, 8) > 0.08 : (b - m) / b > 0.08;
+    }
     const surfC = chans ? chans.map((ch) => fitSurface(ch, floor, w, h, step) || surf) : null;
     for (let y = 0; y < h; y += 1) {
       for (let x = 0; x < w; x += 1) {
@@ -630,7 +709,7 @@ function segmentAt(img, sample) {
   }
   if (!peaks.length) return why(8, null);
   peaks.sort((a, b) => b.score - a.score);
-  return { peaks, threshold: 0.55, r: Math.sqrt(unit / Math.PI), sample: { x: sample.x, y: sample.y }, method: 'segment' };
+  return { peaks, threshold: 0.55, r: Math.sqrt(unit / Math.PI), sample: { x: sample.x, y: sample.y }, method: 'segment', wrongSide: wrongSide && !flip };
 }
 
 // count: img gray picture, sample {x, y} in its pixels (r optional) -> {peaks [{x, y, score}], threshold, r}
@@ -703,6 +782,10 @@ export function countPieces(img, sample, opts = {}) {
   }
   // the sample is a piece even when the search did not put a peak right on it
   if (!kept.some((q) => (q.x - sx) ** 2 + (q.y - sy) ** 2 < (R * 0.8) ** 2)) kept.unshift({ x: sx, y: sy, score: 1, R });
+  // the matching sees only light and dark: the grain of wood or a shadow can look like the tapped piece
+  const floorLike = floorLikeTest(img, sample.x, sample.y, r0);
+  if (floorLike) for (const p of kept) if (floorLike(p.x / kx, p.y / ky)) p.score = Math.min(p.score, 0.25); // never counted
+  kept.sort((a, b) => b.score - a.score);
   const threshold = autoThreshold(kept.map((p) => p.score));
   return {
     peaks: kept.map((p) => ({ x: p.x / kx, y: p.y / ky, score: Math.round(p.score * 1000) / 1000 })),

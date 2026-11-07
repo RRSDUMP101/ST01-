@@ -125,3 +125,75 @@ def test_ahk_escapes_document_text():
     line = next(x for x in script.splitlines() if x.startswith("SendText") and "ช่าง" in x)
     assert line == 'SendText "ช่าง `"A`" ``x```;MsgBox `"pwn`""'
     assert 'if MsgBox("OU1: หน้าต่างด้านหน้าคือหน้าจอเอกสาร' in script
+
+
+def test_the_express_screen_from_the_window_title():
+    """Express writes the screen in its title (Express Accounting - PD - จ่ายวัตถุดิบเพื่อผลิต - [...]): a run stops before
+    typing when another screen is open; AJ of this program is JU in Express; no screen in the title = not checked."""
+    pd = "Express Accounting - PD - จ่ายวัตถุดิบเพื่อผลิต      - [PD - จ่ายวัตถุดิบเพื่อผลิต   ]"
+    assert bot.screen_of(pd) == "PD" and bot.screen_of("Express Accounting - JU - ปรับปรุงเพิ่ม/ลดสินค้า") == "JU"
+    assert bot.screen_of("Untitled - Notepad") == "" and bot.screen_of("Express Accounting") == ""
+    assert not bot.screen_problem("PD", pd) and not bot.screen_problem("AJ", "Express Accounting - JU - x")
+    assert not bot.screen_problem("PD", "Untitled - Notepad")
+    assert "เป็นหน้าจอ OU แต่ใบนี้เป็น PD" in bot.screen_problem("PD", "Express Accounting - OU - จ่ายสินค้าใช้ภายใน")
+
+    class Titled(Fake):
+        def __init__(self, title):
+            super().__init__()
+            self.shown = title
+
+        def title(self):
+            return self.shown
+
+    opts = bot.BotOptions(delay_ms=0)
+    out = Titled("Express Accounting - OU - จ่ายสินค้าใช้ภายใน")
+    with pytest.raises(bot.Stopped) as e:
+        bot.run([bot.actions_for(_doc(), opts)], opts, out, sleep=lambda s: None)
+    assert "หน้าจอ OU" in str(e.value) and out.typed == [] and not e.value.partial  # nothing typed
+    out = Titled(pd)
+    assert bot.run([bot.actions_for(_doc(), opts)], opts, out, sleep=lambda s: None) == ["PD6911-0001"]
+    opts.check_screen = False
+    assert bot.run([bot.actions_for(_doc(), opts)], opts, Titled("Express Accounting - OU - x"), sleep=lambda s: None)
+
+
+def test_codes_checked_before_a_run():
+    """Before a run: a แผนก that is not an Express code (Express opens its look-up list and every key after goes astray),
+    a คลัง not in Express, a line without a code or a quantity, a code with stray spaces, a remark too long."""
+    opts = bot.BotOptions(departments=["ST01", "08", "ACC", "SET"], warehouses=["01", "ST05"])
+    assert bot.doc_problems(_doc(), opts) == []
+    doc = _doc()
+    doc.department = "สโตร์ตั้ม"
+    doc.lines[1].warehouse = "02"
+    doc.lines.append(DocLine(" RRS-T-002 ", "หน้าเฟรมบน T", 0, "ชน"))
+    doc.lines.append(DocLine("", "ไม่มีรหัส", 1, "ชน"))
+    got = "\n".join(bot.doc_problems(doc, opts))
+    assert "แผนก “สโตร์ตั้ม” ไม่มีในรหัสแผนก" in got and "คลัง “02”" in got and "ช่องว่าง" in got
+    assert "จำนวน 0" in got and "ไม่มีรหัสสินค้า" in got
+    doc = _doc()
+    doc.department = "สโตร์ ตั้มแอน"
+    assert "ดูเหมือนชื่อ" in bot.doc_problems(doc, bot.BotOptions())[0]  # no list given: a name is still caught
+    doc.department, doc.remark = "SET", "ก" * 80
+    assert "หมายเหตุยาว" in bot.doc_problems(doc, bot.BotOptions())[0]
+
+
+def test_step_by_step_waits_before_every_field_and_key():
+    """ทดลองทีละขั้น: the run waits before every field / key (to see where the cursor is in Express); "doc" = the rest
+    of the document without stopping; False = stop, with the document half typed."""
+    opts = bot.BotOptions(delay_ms=0, step=True, confirm_first_only=True)
+    asked = []
+
+    def step(doc_no, where, what):
+        asked.append((where, what))
+        return "doc" if len(asked) == 3 else True
+
+    out = Fake()
+    assert bot.run([bot.actions_for(_doc(), opts)], opts, out, sleep=lambda s: None, step=step,
+                   confirm=lambda d, q: True) == ["PD6911-0001"]
+    assert asked[:3] == [("หัวเอกสาร", "กด F4"), ("หัวเอกสาร แผนก", "พิมพ์ “SET”"), ("หัวเอกสาร", "กด Enter")]
+    assert len(asked) == 3 and out.typed[:2] == ["{F4}", "SET"]
+    with pytest.raises(bot.Stopped) as e:
+        bot.run([bot.actions_for(_doc(), opts)], opts, Fake(), sleep=lambda s: None, step=lambda *a: len(asked) < 0,
+                confirm=lambda d, q: True)
+    assert "ทีละขั้น" in str(e.value)
+    assert bot.describe(bot.Action("key", "ENTER", 2)) == "กด Enter 2 ครั้ง"
+    assert bot.describe(bot.Action("wait", "400")) == "รอ 0.4 วินาที"

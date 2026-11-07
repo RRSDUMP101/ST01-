@@ -2,16 +2,18 @@
 
 from __future__ import annotations
 
+import contextlib
+import html as _html
 import json
 import sys
 import threading
 from datetime import datetime
 
-from PySide6.QtCore import QObject, Qt, QTimer, Signal
-from PySide6.QtGui import QGuiApplication
+from PySide6.QtCore import QEventLoop, QObject, Qt, QTimer, Signal
+from PySide6.QtGui import QCursor, QGuiApplication
 from PySide6.QtWidgets import (QCheckBox, QDialog, QFileDialog, QFormLayout, QHBoxLayout, QInputDialog, QLabel,
                                QLineEdit, QListWidget, QListWidgetItem, QMessageBox, QPlainTextEdit, QProgressBar,
-                               QSpinBox, QSplitter, QTabWidget, QVBoxLayout, QWidget)
+                               QPushButton, QSpinBox, QSplitter, QTabWidget, QVBoxLayout, QWidget)
 
 from ..core import express_bot as bot
 from ..core import express_out
@@ -38,6 +40,9 @@ def load_options(settings, warehouse: str = "01", department: str = "") -> bot.B
     opts.process = str(data.get("process", opts.process) or "")
     opts.confirm_first_only = bool(data.get("confirm_first_only", opts.confirm_first_only))
     opts.remark_ref = bool(data.get("remark_ref", opts.remark_ref))
+    opts.departments = [str(d) for d in data.get("departments", []) if str(d).strip()]
+    opts.warehouses = [str(w) for w in data.get("warehouses", []) if str(w).strip()]
+    opts.check_screen = bool(data.get("check_screen", opts.check_screen))
     for t, parts in (data.get("templates") or {}).items():
         if t in opts.templates and isinstance(parts, dict):
             opts.templates[t].update({k: v for k, v in parts.items() if k in (bot.HEAD, bot.LINE, bot.END)})
@@ -48,7 +53,9 @@ def save_options(settings, opts: bot.BotOptions) -> None:
     settings.set(SETTINGS_KEY, json.dumps({"window": opts.window, "delay_ms": opts.delay_ms,
                                            "paste_thai": opts.paste_thai, "process": opts.process,
                                            "confirm_first_only": opts.confirm_first_only,
-                                           "remark_ref": opts.remark_ref, "templates": opts.templates},
+                                           "remark_ref": opts.remark_ref, "departments": opts.departments,
+                                           "warehouses": opts.warehouses, "check_screen": opts.check_screen,
+                                           "templates": opts.templates},
                                           ensure_ascii=False))
 
 
@@ -56,6 +63,7 @@ class _Worker(QObject):
     progress = Signal(int, int, str)
     stop_reached = Signal(str)
     confirm_asked = Signal(str, str)
+    step_asked = Signal(str, str, str)  # ทดลองทีละขั้น: document, where, what comes next
     finished = Signal(list, str, str)  # keyed, error, the document left half-typed
 
     def __init__(self, actions, options, out):
@@ -65,7 +73,7 @@ class _Worker(QObject):
         self._event = threading.Event()
         self._go_on = True
 
-    def answer(self, go_on: bool) -> None:
+    def answer(self, go_on) -> None:  # True / False, or "doc" (ทดลองทีละขั้น: the rest of this document)
         self._go_on = go_on
         self._event.set()
 
@@ -81,16 +89,106 @@ class _Worker(QObject):
         self._event.wait()
         return self._go_on and not self.cancel
 
+    def _step(self, doc_no: str, where: str, what: str):
+        self._event.clear()
+        self.step_asked.emit(doc_no, where, what)
+        self._event.wait()
+        return False if self.cancel else self._go_on
+
     def run(self) -> None:
         keyed, error, partial = [], "", ""
         try:
             keyed = bot.run(self.actions, self.options, self.out, lambda d, t, label: self.progress.emit(d, t, label),
-                            self._wait_stop, lambda: self.cancel, confirm=self._confirm)
+                            self._wait_stop, lambda: self.cancel, confirm=self._confirm, step=self._step)
         except bot.Stopped as e:
             error, keyed, partial = str(e), e.keyed, e.partial
         except Exception as e:  # noqa: BLE001 - shown in the dialog
             error = f"{type(e).__name__}: {e}"
         self.finished.emit(keyed, error, partial)
+
+
+PROMPT_TONES = {"go": ("#1F4E79", "#FFFFFF"), "check": ("#B7791F", "#FFFFFF"), "bad": ("#B42318", "#FFFFFF")}
+
+
+class OnTopPrompt(QDialog):
+    """A question shown OVER Express (always on top), big and plain, while the bot waits: ยืนยันก่อนคีย์ (in front
+    and with the keyboard: Enter = yes), ตรวจและบันทึก / ทีละขั้น (at a side, without taking the keyboard from
+    Express, so the person can look at - and save in - Express first)."""
+
+    def __init__(self, title: str, body: str, buttons, tone: str = "go", focus: bool = True, place: str = "top",
+                 bring_front=None, width: int = 560):
+        super().__init__(None, Qt.Dialog | Qt.WindowStaysOnTopHint | Qt.CustomizeWindowHint | Qt.WindowTitleHint)
+        self.setObjectName("OnTopPrompt")
+        self.setWindowTitle(f"RRS – {title}")
+        self.answer = buttons[-1][0]  # closing it = the last button (stop)
+        self.focus, self.place, self.bring_front = focus, place, bring_front
+        if not focus:
+            self.setAttribute(Qt.WA_ShowWithoutActivating, True)
+        self.setFixedWidth(width)
+        bg, fg = PROMPT_TONES.get(tone, PROMPT_TONES["go"])
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 12)
+        head = QLabel(title)
+        head.setStyleSheet(f"background:{bg};color:{fg};font-size:15pt;font-weight:700;padding:10px 16px")
+        lay.addWidget(head)
+        text = QLabel(body)
+        text.setObjectName("PromptBody")
+        text.setWordWrap(True)
+        text.setTextFormat(Qt.RichText)
+        text.setStyleSheet("font-size:11pt;padding:6px 16px")
+        lay.addWidget(text)
+        row = QHBoxLayout()
+        row.setContentsMargins(16, 4, 16, 0)
+        row.addStretch(1)
+        self.buttons = {}
+        for key, label, kind in buttons:
+            b = QPushButton(label)
+            b.setMinimumHeight(40)
+            if kind:
+                b.setProperty("kind", kind)
+            b.clicked.connect(lambda _=False, k=key: self._pick(k))
+            row.addWidget(b)
+            self.buttons[key] = b
+        lay.addLayout(row)
+        first = self.buttons[buttons[0][0]]
+        first.setDefault(True)
+        first.setAutoDefault(True)
+
+    def _pick(self, key: str) -> None:
+        self.answer = key
+        self.done(0)
+
+    def reject(self) -> None:  # Esc / closing: the last button
+        self.done(0)
+
+    def _place(self) -> None:
+        screen = QGuiApplication.screenAt(QCursor.pos()) or QGuiApplication.primaryScreen()
+        g = screen.availableGeometry()
+        self.adjustSize()
+        if self.place == "corner":
+            self.move(g.right() - self.width() - 24, g.bottom() - self.height() - 48)
+        else:
+            self.move(g.center().x() - self.width() // 2, g.top() + int(g.height() * 0.12))
+
+    def ask(self) -> str:
+        self._place()
+        if self.focus:
+            QTimer.singleShot(0, self._to_front)
+            self.exec()
+        else:  # shown beside Express: the keyboard stays there
+            loop = QEventLoop()
+            self.finished.connect(loop.quit)
+            self.show()
+            self.raise_()
+            loop.exec()
+        return self.answer
+
+    def _to_front(self) -> None:
+        self.raise_()
+        self.activateWindow()
+        if self.bring_front is not None:
+            with contextlib.suppress(Exception):  # on top anyway, just without the keyboard
+                self.bring_front(int(self.winId()))
 
 
 class ExpressBotDialog(QDialog):
@@ -167,6 +265,25 @@ class ExpressBotDialog(QDialog):
         self.remark_ref.setChecked(self.options.remark_ref)
         self.remark_ref.toggled.connect(lambda *_: self._preview())
         form.addRow("", self.remark_ref)
+        self.depts_edit = QLineEdit(", ".join(self.options.departments))
+        self.depts_edit.setPlaceholderText("เช่น ST01, 08, ACC, SEL1, SET (ว่าง = ไม่ตรวจ)")
+        self.depts_edit.setToolTip("รหัสในช่อง สำหรับแผนก ของ Express (หน้าค้นหาแผนก) – ใบที่แผนกไม่ใช่รหัสเหล่านี้จะเตือนก่อนคีย์ "
+                                   "เพราะ Express จะเปิดหน้าค้นหาแผนกแล้วการกดต่อจากนั้นผิดช่อง")
+        self.depts_edit.textChanged.connect(lambda *_: self._preview())
+        form.addRow("รหัสแผนกใน Express", self.depts_edit)
+        self.stores_edit = QLineEdit(", ".join(self.options.warehouses))
+        self.stores_edit.setPlaceholderText("เช่น 01 (ว่าง = ไม่ตรวจ)")
+        self.stores_edit.textChanged.connect(lambda *_: self._preview())
+        form.addRow("รหัสคลังใน Express", self.stores_edit)
+        self.check_screen = QCheckBox("ตรวจชื่อหน้าต่าง Express ว่าเป็นหน้าจอชนิดเดียวกับใบ (PD / OU / JU …)")
+        self.check_screen.setToolTip("Express เขียนหน้าจอไว้ในแถบบนสุด เช่น Express Accounting - PD - จ่ายวัตถุดิบเพื่อผลิต – "
+                                     "ถ้าเปิดหน้าจออื่นค้างไว้ โปรแกรมหยุดก่อนพิมพ์")
+        self.check_screen.setChecked(self.options.check_screen)
+        form.addRow("", self.check_screen)
+        self.step_box = QCheckBox("ทดลองทีละขั้น – หยุดก่อนทุกช่อง ดูว่าเคอร์เซอร์ใน Express อยู่ช่องที่ถูกต้อง")
+        self.step_box.setToolTip("ใช้ตอนตั้งลำดับการกดครั้งแรกกับ Express จริง: หน้าต่างเล็กมุมจอบอกว่าจะพิมพ์อะไรต่อ "
+                                 "ถ้าเคอร์เซอร์อยู่ผิดช่อง กด หยุด แล้วแก้ลำดับการกดทางขวา")
+        form.addRow("", self.step_box)
         ll.addLayout(form)
         split.addWidget(left)
 
@@ -284,6 +401,13 @@ class ExpressBotDialog(QDialog):
         o.paste_thai = self.paste.isChecked()
         o.confirm_first_only = self.confirm_first.isChecked()
         o.remark_ref = self.remark_ref.isChecked()
+        def split_codes(text: str) -> list[str]:
+            return [c.strip() for c in text.replace("\n", ",").replace(" ", ",").split(",") if c.strip()]
+
+        o.departments = split_codes(self.depts_edit.text())
+        o.warehouses = split_codes(self.stores_edit.text())
+        o.check_screen = self.check_screen.isChecked()
+        o.step = self.step_box.isChecked()
         for t, edits in self.tpl_edits.items():
             o.templates[t] = {sec: e.toPlainText().strip() for sec, e in edits.items()}
         return o
@@ -322,7 +446,9 @@ class ExpressBotDialog(QDialog):
         except bot.TemplateError as e:
             self.preview.setPlainText(f"แก้แบบการกดก่อน:\n{e}")
             return
-        text = [f"⚠ {w}" for w in bot.template_warnings(doc.doc_type, self._read_options().templates[doc.doc_type])]
+        opts = self._read_options()
+        text = [f"⚠ {w}" for w in bot.template_warnings(doc.doc_type, opts.templates[doc.doc_type])]
+        text += [f"⚠ {p}" for p in bot.doc_problems(doc, opts)]
         text += [f"⚠ {p}" for p in bot.check_text([actions])]
         for a in actions:
             if a.kind == "doc":
@@ -378,6 +504,7 @@ class ExpressBotDialog(QDialog):
             return
         warnings = [w for t in sorted({d.doc_type for d in docs})
                     for w in bot.template_warnings(t, self.options.templates[t])]
+        warnings += [p for d in docs for p in bot.doc_problems(d, self.options)]
         warnings += bot.check_text(actions)
         cp = bot.windows_codepage()
         if cp is not None and cp != 874 and not self.options.paste_thai:
@@ -406,6 +533,7 @@ class ExpressBotDialog(QDialog):
         self.worker.progress.connect(self._progress)
         self.worker.stop_reached.connect(self._stop_reached)
         self.worker.confirm_asked.connect(self._confirm_asked)
+        self.worker.step_asked.connect(self._step_asked)
         self.worker.finished.connect(self._finished)
         self.bar.setVisible(True)
         self.bar.setRange(0, sum(len(a) for a in actions))
@@ -493,22 +621,84 @@ class ExpressBotDialog(QDialog):
         self.state.save_library()
         self.worker.answer(answer != "stop")
 
+    def _bring_front(self):
+        out = getattr(self.worker, "out", None)
+        return getattr(out, "bring_front", None)
+
     def ask_saved(self, label: str) -> str:
-        """At {STOP}: 'saved' (the person saved it in Express), 'skip' (not saved, go on) or 'stop'."""
-        box = QMessageBox(self)
-        box.setWindowTitle("ตรวจและบันทึกใน Express")
-        box.setText(f"{label}: คีย์ครบแล้ว\nตรวจในหน้าจอ Express แล้วกดบันทึกใน Express เอง")
-        saved = box.addButton("บันทึกใน Express แล้ว", QMessageBox.AcceptRole)
-        skip = box.addButton("ไม่บันทึก – ข้ามใบนี้", QMessageBox.RejectRole)
-        box.addButton("หยุด", QMessageBox.DestructiveRole)
-        box.setDefaultButton(saved)
-        box.exec()
-        return "saved" if box.clickedButton() is saved else "skip" if box.clickedButton() is skip else "stop"
+        """At {STOP}: 'saved' (the person saved it in Express), 'skip' (not saved, go on) or 'stop' - asked in a box
+        over Express at the corner of the screen, which leaves the keyboard in Express to check and save there."""
+        doc = self._by_no.get(label.split(" ")[0]) if getattr(self, "_by_no", None) else None
+        n = len(doc.lines) if doc is not None else 0
+        body = (f"<b>{_html.escape(label)}</b> – คีย์ครบ{f' {n} รายการ' if n else ''}แล้ว (ยังไม่บันทึก)<br><br>"
+                "① ตรวจในหน้าจอ Express: รหัส จำนวน คลัง ครบทุกบรรทัด<br>"
+                "② กด <b>บันทึก</b> ใน Express เอง (ปุ่มรูปแผ่นดิสก์)<br>"
+                "③ แล้วกดปุ่มด้านล่าง – Express ออกเลขที่ให้ (เช่น PD0000526) ใส่ในช่องที่ถามต่อ")
+        prompt = OnTopPrompt("ตรวจแล้วบันทึกใน Express", body,
+                             [("saved", "✓ บันทึกใน Express แล้ว", "primary"), ("skip", "ไม่บันทึก – ข้ามใบนี้", ""),
+                              ("stop", "หยุด", "")], tone="check", focus=False, place="corner")
+        return prompt.ask()
+
+    def confirm_text(self, doc_no: str, question: str) -> tuple[str, str]:
+        """(tone, html) of ยืนยันก่อนคีย์ for a document: the window typed into and its screen, what is typed."""
+        doc = self._by_no.get(doc_no) if getattr(self, "_by_no", None) else None
+        out = getattr(self.worker, "out", None)
+        title = (out.title() if out is not None else "") or getattr(out, "target", "") or self.options.window
+        want = bot.express_type(doc.doc_type) if doc is not None else ""
+        shown = bot.screen_of(title)
+        hint = bot.SCREEN_HINTS.get(doc.doc_type, want) if doc is not None else ""
+        if self.practice:
+            screen, tone = "โหมดฝึก: พิมพ์ลง <b>Notepad</b> (ใช้จริงต้องเป็นหน้าจอ " + _html.escape(hint) + ")", "go"
+        elif shown and shown == want:
+            screen, tone = f"<span style='color:#15803D'>✓ เป็นหน้าจอ <b>{_html.escape(want)}</b> ถูกต้อง</span>", "go"
+        else:
+            screen, tone = (f"<span style='color:#B42318'>⚠ ดูชื่อหน้าต่างไม่ออกว่าเป็นหน้าจอไหน – ตรวจด้วยตาว่าเป็น "
+                            f"<b>{_html.escape(hint)}</b></span>"), "check"
+        lines = ""
+        if doc is not None:
+            vals = bot.doc_values(doc, self.options)
+            whs = sorted({bot.line_values(doc, i, self.options)["warehouse"] for i in range(len(doc.lines))})
+            lines = (f"แผนก <b>{_html.escape(vals['department'] or '-')}</b> · วันที่ <b>{vals['date']}</b> · "
+                     f"{len(doc.lines)} รายการ · คลัง <b>{_html.escape(', '.join(whs) or '-')}</b><br>"
+                     f"หมายเหตุ: {_html.escape(vals['remark'] or '-')}")
+        body = (f"<b style='font-size:13pt'>{_html.escape(doc_no)}"
+                f"{f' · {_html.escape(want)} {_html.escape(doc.type_name)}' if doc is not None else ''}</b><br><br>"
+                f"<b>① หน้าต่างที่จะพิมพ์:</b> {_html.escape(title)}<br>{screen}<br><br>"
+                "<b>② หน้าจอนี้ว่าง</b> – ไม่มีใบที่พิมพ์ค้างไว้ยังไม่บันทึก (มี: บันทึกหรือยกเลิกใน Express ก่อน) · "
+                "โปรแกรมจะเปิดใบใหม่เอง<br><br>"
+                f"<b>③ จะพิมพ์:</b> {lines}<br><span style='color:#6B7A90'>{_html.escape(question)}</span>")
+        return tone, body
+
+    def ask_confirm(self, doc_no: str, question: str) -> bool:
+        """{CONFIRM}: asked in a box in front of Express (on top, with the keyboard: Enter = yes)."""
+        tone, body = self.confirm_text(doc_no, question)
+        prompt = OnTopPrompt("ตรวจหน้าจอ Express ก่อนคีย์", body,
+                             [("yes", "✓ ถูกต้อง – เริ่มคีย์ใบนี้", "primary"), ("no", "✗ ไม่ใช่ – หยุด", "")],
+                             tone=tone, focus=True, place="top", bring_front=self._bring_front(), width=640)
+        return prompt.ask() == "yes"
+
+    def ask_step(self, doc_no: str, where: str, what: str):
+        """ทดลองทีละขั้น: True (this step), "doc" (the rest of this document), False (stop) - a small box at the
+        corner over Express, the keyboard left in Express (the cursor shows where the next key goes)."""
+        body = (f"<b>{_html.escape(doc_no)}</b> · {_html.escape(where)}<br>"
+                f"ต่อไป: <b style='font-size:13pt'>{_html.escape(what)}</b><br>"
+                "<span style='color:#6B7A90'>ดูใน Express ว่าเคอร์เซอร์อยู่ช่องนี้ – ผิดช่อง: กด หยุด แล้วแก้ลำดับการกด</span>")
+        prompt = OnTopPrompt("ทดลองทีละขั้น", body,
+                             [("one", "ทำขั้นนี้ ▶", "primary"), ("doc", "ทำต่อจนจบใบ ▶▶", ""), ("stop", "หยุด", "")],
+                             tone="check", focus=False, place="corner", width=460)
+        answer = prompt.ask()
+        return True if answer == "one" else "doc" if answer == "doc" else False
 
     def _confirm_asked(self, doc_no: str, question: str) -> None:
-        ok = QMessageBox.question(self, "ยืนยันก่อนคีย์ต่อ", f"{doc_no}: {question}") == QMessageBox.Yes
+        ok = self.ask_confirm(doc_no, question)
         self._log(f"ยืนยัน {doc_no}: {'ใช่' if ok else 'ไม่ – หยุด'}")
         self.worker.answer(ok)
+
+    def _step_asked(self, doc_no: str, where: str, what: str) -> None:
+        answer = self.ask_step(doc_no, where, what)
+        if answer is False:
+            self._log(f"ทีละขั้น: หยุดที่ {doc_no} {where} ({what})")
+        self.worker.answer(answer)
 
     def _finished(self, keyed: list, error: str, partial: str = "") -> None:
         if self.worker is None:

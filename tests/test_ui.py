@@ -1444,10 +1444,10 @@ def test_express_bot_dialog_types_and_asks_the_number(window, app, monkeypatch):
 
     monkeypatch.setattr(dlg_mod.QInputDialog, "getText", staticmethod(lambda *a, **k: ("OU6900001", True)))
     asked = []
-    monkeypatch.setattr(dlg_mod.QMessageBox, "question",
-                        staticmethod(lambda *a, **k: asked.append(a[2]) or dlg_mod.QMessageBox.Yes))
+    monkeypatch.setattr(dlg_mod.QMessageBox, "question", staticmethod(lambda *a, **k: dlg_mod.QMessageBox.Yes))
     d = dlg_mod.ExpressBotDialog(state, [doc], window, output_factory=Fake)
     d.ask_saved = lambda label: "saved"
+    d.ask_confirm = lambda doc_no, q: asked.append((q, d.confirm_text(doc_no, q))) or True
     d.countdown_s = 0
     d.delay.setValue(0)
     for e in d.tpl_edits["OU"].values():  # no waits in the test
@@ -1462,7 +1462,25 @@ def test_express_bot_dialog_types_and_asks_the_number(window, app, monkeypatch):
     assert d.worker is None
     assert Fake.typed[:4] == ["{F4}", "ST01", "{ENTER}", "ช่างท๊อปฟู"] and "ST69-0001" in Fake.typed and "15" in Fake.typed
     assert doc.express_no == "OU6900001" and doc.keyed_at and not doc.key_partial
-    assert any("หน้าจอเอกสารชนิดนี้" in q for q in asked)  # the {CONFIRM} before the new-document key
+    assert any("หน้าจอเอกสารชนิดนี้" in q for q, _t in asked)  # the {CONFIRM} before the new-document key
+    tone, body = asked[0][1]  # the box over Express: which window, which screen, what is typed
+    assert "ST01" in body and "1 รายการ" in body and "OU - จ่ายสินค้าใช้ภายใน" in body and tone == "check"
+    # the title of the window says the screen: right one = green, another one = the run stops before typing
+    Fake.title = lambda self: "Express Accounting - OU - จ่ายสินค้าใช้ภายใน"
+    d.worker = type("W", (), {"out": Fake()})()
+    tone, body = d.confirm_text(doc.doc_no, "?")
+    assert tone == "go" and "ถูกต้อง" in body
+    d.worker = None
+    # the boxes are on top of every window (over Express), the one at {STOP} leaves the keyboard to Express
+    box = dlg_mod.OnTopPrompt("t", "b", [("saved", "a", "primary"), ("stop", "c", "")], focus=False, place="corner")
+    assert box.windowFlags() & dlg_mod.Qt.WindowStaysOnTopHint and box.testAttribute(dlg_mod.Qt.WA_ShowWithoutActivating)
+    dlg_mod.QTimer.singleShot(50, lambda: box.buttons["saved"].click())
+    assert box.ask() == "saved"
+    box = dlg_mod.OnTopPrompt("t", "b", [("yes", "a", "primary"), ("no", "c", "")])
+    dlg_mod.QTimer.singleShot(50, box.reject)
+    assert box.ask() == "no"  # closed = the last button
+    d.depts_edit.setText("ST01, 08 ACC")
+    assert d._read_options().departments == ["ST01", "08", "ACC"]
     assert "ได้เลขที่" in d.log.toPlainText()
     assert "OU" in json.loads(state.settings.get(dlg_mod.SETTINGS_KEY))["templates"]
     d.close()
@@ -1515,7 +1533,7 @@ def test_express_practice_with_examples(window, app, monkeypatch, tmp_path):
         typed = []
 
         def activate(self, title):
-            Fake.title = title
+            Fake.window = title
             return True
 
         def text(self, text, paste=False):
@@ -1531,6 +1549,10 @@ def test_express_practice_with_examples(window, app, monkeypatch, tmp_path):
     d = dlg_mod.ExpressBotDialog(state, express_out.example_docs(), window, output_factory=Fake, practice=True)
     assert d.window_edit.text() == "Notepad" and d.doc_list.count() == 4
     d.ask_saved = lambda label: "saved"
+    d.ask_confirm = lambda doc_no, q: "โหมดฝึก" in d.confirm_text(doc_no, q)[1]
+    steps = []
+    d.ask_step = lambda doc_no, where, what: steps.append(what) or "doc"
+    d.step_box.setChecked(True)
     d.countdown_s = 0
     import re
 
@@ -1543,8 +1565,9 @@ def test_express_practice_with_examples(window, app, monkeypatch, tmp_path):
     while d.worker is not None and time.monotonic() < deadline:
         app.processEvents()
         time.sleep(0.01)
-    assert d.worker is None and Fake.title == "Notepad" and "SO6700001 ช่างรอง โตโยต้า MR0DA8CB605903316" in Fake.typed
+    assert d.worker is None and Fake.window == "Notepad" and "SO6700001 ช่างรอง โตโยต้า MR0DA8CB605903316" in Fake.typed
     assert (len(state.ledger.docs), len(state.ledger.movements)) == before and "ฝึกเสร็จ" in d.status.text()
+    assert steps[0] == "กด F4" and len(steps) == 4  # ทีละขั้น: asked once per document ("doc" = the rest of it)
     d.close()
     out = tmp_path / "example.xlsx"
     monkeypatch.setattr(window.actions, "save_path", lambda *a, **k: str(out))

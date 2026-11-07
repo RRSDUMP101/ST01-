@@ -93,6 +93,10 @@ class BotOptions:
     process: str = ""  # part of the program file name of Express (e.g. "express"), "" = any program
     confirm_first_only: bool = True  # {CONFIRM} only on the first document of each type in a run
     remark_ref: bool = False  # add our document number to หมายเหตุ (to find the document in Express later)
+    departments: list[str] = field(default_factory=list)  # the codes of สำหรับแผนก in Express (ST01, 08, ACC …)
+    warehouses: list[str] = field(default_factory=list)  # the codes of คลัง in Express ("" list = not checked)
+    check_screen: bool = True  # stop when the title of the window says another screen (OU open, a PD to key)
+    step: bool = False  # ทดลองทีละขั้น: wait for a person before every field / key (to fit a template to Express)
 
 
 class TemplateError(ValueError):
@@ -118,6 +122,76 @@ def line_values(doc: StockDoc, i: int, options: BotOptions) -> dict[str, str]:
     return {"no": str(i + 1), "code": ln.code, "name": ln.name,
             "warehouse": warehouse_of(ln.warehouse, Options(warehouse=options.warehouse)),
             "qty": _num(float(ln.qty)), "unit": ln.unit, "unit_cost": _num(float(ln.unit_cost)), "remark": ln.remark}
+
+
+# ---- the Express screen: what the title of its window says (Express Accounting - PD - จ่ายวัตถุดิบเพื่อผลิต - […]) ----
+SCREEN_CODES = ("PD", "OU", "RR", "FR", "JU", "PO", "SO", "QT", "IV", "OE", "RE", "TR", "AJ")
+_SCREEN_RE = re.compile(r"(?<![A-Za-z0-9])(" + "|".join(SCREEN_CODES) + r")\s+-\s")
+
+
+def express_type(doc_type: str) -> str:
+    """The document type as Express names its screen (AJ of this program is JU in Express)."""
+    from .express_out import EXPRESS_TYPES
+
+    return EXPRESS_TYPES.get(doc_type, doc_type)
+
+
+def screen_of(title: str) -> str:
+    """The screen a window title shows ('PD'), '' when it shows none (the main window, Notepad …)."""
+    m = _SCREEN_RE.search(title or "")
+    return m.group(1) if m else ""
+
+
+def screen_problem(doc_type: str, title: str) -> str:
+    """'' when the window is the screen of this document type or says no screen; else what is wrong."""
+    shown, want = screen_of(title), express_type(doc_type)
+    if not shown or shown == want:
+        return ""
+    return (f"หน้าต่าง Express ที่เปิดอยู่เป็นหน้าจอ {shown} แต่ใบนี้เป็น {want} – เปิด {SCREEN_HINTS.get(doc_type, want)} "
+            "ใน Express แล้วเริ่มใหม่ (ไม่ได้พิมพ์อะไรลงใบนี้)")
+
+
+def doc_problems(doc: StockDoc, options: BotOptions) -> list[str]:
+    """What makes Express open a look-up list or refuse a field - checked before a run: a แผนก or คลัง that is not
+    an Express code, a line without a code or a quantity, a remark longer than the field."""
+    from .express_out import REMARK_WIDTH, express_remark
+
+    out = []
+    dept = (doc.department or options.department or "").strip()
+    known = {d.strip().upper() for d in options.departments if d.strip()}
+    if dept and known and dept.upper() not in known:
+        out.append(f"{doc.doc_no}: แผนก “{dept}” ไม่มีในรหัสแผนกของ Express ({', '.join(sorted(known)[:8])}…) – "
+                   "Express จะเปิดหน้าค้นหาแผนก แล้วคีย์ผิดช่อง: แก้แผนกในใบ หรือเพิ่มรหัสในตั้งค่า")
+    elif dept and (" " in dept or len(dept) > 10):
+        out.append(f"{doc.doc_no}: แผนก “{dept}” ดูเหมือนชื่อ ไม่ใช่รหัสแผนกของ Express (เช่น ST01) – "
+                   "ช่อง สำหรับแผนก ต้องเป็นรหัส")
+    stores = {w.strip().upper() for w in options.warehouses if w.strip()}
+    for i, ln in enumerate(doc.lines, 1):
+        wh = line_values(doc, i - 1, options)["warehouse"]
+        if not ln.code.strip():
+            out.append(f"{doc.doc_no} บรรทัด {i}: ไม่มีรหัสสินค้า")
+        elif ln.code != ln.code.strip() or "  " in ln.code:
+            out.append(f"{doc.doc_no} บรรทัด {i}: รหัส “{ln.code}” มีช่องว่างหน้า/หลัง/ซ้อน – ต้องตรงกับรหัสใน Express ทุกตัว")
+        if not float(ln.qty or 0):
+            out.append(f"{doc.doc_no} บรรทัด {i} ({ln.code}): จำนวน 0")
+        if stores and wh.upper() not in stores:
+            out.append(f"{doc.doc_no} บรรทัด {i} ({ln.code}): คลัง “{wh}” ไม่มีในรหัสคลังของ Express")
+    remark = express_remark(doc, options.remark_ref)
+    if len(remark) > REMARK_WIDTH:
+        out.append(f"{doc.doc_no}: หมายเหตุยาว {len(remark)} ตัว (Express รับประมาณ {REMARK_WIDTH}) – ท้ายข้อความอาจหาย")
+    return out
+
+
+def describe(a: Action) -> str:
+    """One step of a run in words, for ทดลองทีละขั้น: 'พิมพ์ “01”', 'กด Enter 2 ครั้ง', 'รอ 0.4 วินาที'."""
+    if a.kind == "text":
+        return f"พิมพ์ “{a.value}”"
+    if a.kind == "key":
+        name = a.value.title() if len(a.value) > 3 and "+" not in a.value else a.value
+        return f"กด {name}" + (f" {a.times} ครั้ง" if a.times > 1 else "")
+    if a.kind == "wait":
+        return f"รอ {int(a.value) / 1000:g} วินาที"
+    return a.kind
 
 
 def parse(template: str, fields: dict[str, str]) -> list[tuple[str, str, int]]:
@@ -316,11 +390,17 @@ class Stopped(Exception):
 
 
 class Output:
+    target = ""
+
     def activate(self, title: str) -> bool:
         raise NotImplementedError
 
     def still_there(self, title: str) -> bool:
         return True
+
+    def title(self) -> str:
+        """The title of the window typed into, now (Express puts the screen in it: … - PD - จ่ายวัตถุดิบเพื่อผลิต)."""
+        return ""
 
     def text(self, text: str, paste: bool = False) -> None:
         raise NotImplementedError
@@ -333,9 +413,11 @@ class Output:
 
 
 def run(docs_actions: list[list[Action]], options: BotOptions, out: Output, progress=None, wait_stop=None,
-        should_stop=lambda: False, sleep=time.sleep, confirm=None) -> list[str]:
+        should_stop=lambda: False, sleep=time.sleep, confirm=None, step=None) -> list[str]:
     """Type the documents; progress(done, total, label); wait_stop(doc_no) is called at {STOP} and returns False to end
-    the run; confirm(doc_no, question) at {CONFIRM} (False = end, nothing more typed into that document).
+    the run; confirm(doc_no, question) at {CONFIRM} (False = end, nothing more typed into that document);
+    step(doc_no, label, what) before every field / key when options.step (False = end; "doc" = no more steps in
+    this document). A window whose title shows another Express screen stops the run before the document.
     Returns the document numbers keyed (up to their {STOP} / end); a stop raises Stopped with the same list and the
     document left half-typed."""
     keyed: list[str] = []
@@ -365,12 +447,24 @@ def run(docs_actions: list[list[Action]], options: BotOptions, out: Output, prog
     for actions in docs_actions:
         state["current"], state["typed"] = "", False
         doc_type = ""
+        stepping = options.step and step is not None
         for a in actions:
             check()
             if a.kind in ("text", "key") and not out.still_there(options.window):
                 raise stop(f"หน้าต่าง {options.window} ไม่ได้อยู่ด้านหน้า – หยุดเพื่อไม่ให้พิมพ์ผิดที่")
+            if a.kind in ("text", "key") and stepping:
+                answer = step(state["current"], a.label, describe(a))
+                if not answer:
+                    raise stop(f"{state['current']}: หยุดระหว่างทดลองทีละขั้น ({a.label})")
+                if answer == "doc":
+                    stepping = False
+                if not out.activate(options.window):
+                    raise stop(f"ไม่พบหน้าต่าง {options.window}")
             if a.kind == "doc":
                 state["current"], doc_type = a.value, a.doc_type
+                problem = screen_problem(doc_type, out.title()) if options.check_screen else ""
+                if problem:
+                    raise stop(f"{a.value}: {problem}")
             elif a.kind == "text":
                 out.text(a.value, options.paste_thai and not a.value.isascii())
                 state["typed"] = True
@@ -542,6 +636,28 @@ class WindowsKeyboard(Output):
     def still_there(self, title: str) -> bool:
         fg = self.user32.GetForegroundWindow()
         return bool(fg) and (fg == self.hwnd or self.user32.GetAncestor(fg, 3) == self.hwnd)
+
+    def title(self) -> str:
+        if not self.hwnd:
+            return ""
+        n = self.user32.GetWindowTextLengthW(self.hwnd)
+        buf = self.ctypes.create_unicode_buffer(n + 1)
+        self.user32.GetWindowTextW(self.hwnd, buf, n + 1)
+        return buf.value
+
+    def bring_front(self, hwnd: int) -> None:
+        """Put a window of this program (the question asked over Express) in front, with the keyboard: Windows
+        lets a program in the back do it only this way."""
+        hwnd = self.wintypes.HWND(hwnd)
+        self._send([self._vk(0x87, True)])
+        if not self.user32.SetForegroundWindow(hwnd):
+            fg = self.user32.GetForegroundWindow()
+            mine = self.kernel32.GetCurrentThreadId()
+            theirs = self.user32.GetWindowThreadProcessId(fg, None) if fg else 0
+            if theirs and theirs != mine:
+                self.user32.AttachThreadInput(mine, theirs, True)
+                self.user32.SetForegroundWindow(hwnd)
+                self.user32.AttachThreadInput(mine, theirs, False)
 
     def abort_requested(self) -> bool:
         pt = self.wintypes.POINT()

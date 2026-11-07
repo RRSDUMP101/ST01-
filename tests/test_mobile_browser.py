@@ -83,5 +83,12 @@ def test_auto_count_in_a_browser(tmp_path):
         run = subprocess.run([node, str(ROOT / "tools" / "autocount_e2e.js"), "--info", str(info), "--video", str(video)],
                              capture_output=True, text=True, timeout=300, cwd=ROOT, check=False)
         assert run.returncode == 0, run.stdout[-3000:] + run.stderr[-2000:]
+        # a picture taken upright on a short phone screen: the ring of the tapped piece is drawn under the finger
+        # (the buttons below used to squeeze the frame and not the picture, and the ring was drawn 20 px away)
+        video = write(tmp_path / "pipes-portrait.mjpeg", "portrait", "pipes")
+        run = subprocess.run([node, str(ROOT / "tools" / "autocount_e2e.js"), "--info", str(info), "--video", str(video),
+                              "--width", "390", "--height", "664", "--layout"],
+                             capture_output=True, text=True, timeout=300, cwd=ROOT, check=False)
+        assert run.returncode == 0, run.stdout[-3000:] + run.stderr[-2000:]
     finally:
         server.stop()

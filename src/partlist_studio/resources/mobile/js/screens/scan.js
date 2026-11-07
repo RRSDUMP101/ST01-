@@ -453,6 +453,25 @@ function TapCount({ shot, onClose }) {
   const auto = peaks.filter((p) => !removed.has(p.i))
     .sort((a, b) => (Math.round(a.y / row) - Math.round(b.y / row)) || (a.x - b.x));
   const total = auto.length + added.length;
+  // the picture is fitted into the space between the top and the buttons by size in px, and the dots, the ring and
+  // the taps all use that one box: sized by CSS alone, the box and the picture came apart when the buttons below
+  // grew (a portrait photo on a short screen) and the ring was drawn away from the finger
+  const stage = useRef(null);
+  const [fit, setFit] = useState(null);
+  useEffect(() => {
+    const el = stage.current;
+    if (!el) return undefined;
+    const measure = () => {
+      const r = el.getBoundingClientRect();
+      const k = Math.min(r.width / W, r.height / H);
+      if (k > 0) setFit((old) => (old && old.w === Math.floor(W * k) && old.h === Math.floor(H * k) ? old : { w: Math.floor(W * k), h: Math.floor(H * k) }));
+    };
+    measure();
+    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(measure) : null;
+    if (ro) ro.observe(el);
+    window.addEventListener('resize', measure);
+    return () => { if (ro) ro.disconnect(); window.removeEventListener('resize', measure); };
+  }, []);
   const at = (e) => {
     const r = img.current.getBoundingClientRect();
     return [(e.clientX - r.left) / r.width, (e.clientY - r.top) / r.height];
@@ -513,8 +532,9 @@ function TapCount({ shot, onClose }) {
       <div class="tc-count"><b>${total}</b><span>ชิ้น</span></div>
       <button class="ar-btn" aria-label="ย้อน" onClick=${() => (added.length ? setAdded((a) => a.slice(0, -1)) : setResult(null))}><${Icon} name="back" /></button></div>
     <p class="tc-hint">${hint}</p>
-    <div class="tc-stage"><div class=${`tc-img ${busy ? 'busy' : ''}`} onClick=${tap}>
-      <img ref=${img} src=${src} alt="ภาพที่หยุดไว้" draggable="false" />
+    <div class="tc-stage" ref=${stage}><div ref=${img} class=${`tc-img ${busy ? 'busy' : ''} ${fit ? 'fit' : ''}`} onClick=${tap}
+      style=${fit ? `width:${fit.w}px;height:${fit.h}px` : ''}>
+      <img src=${src} alt="ภาพที่หยุดไว้" draggable="false" />
       ${result && result.sample ? html`<span class="tc-sample" style=${`left:${(result.sample.x / W) * 100}%;top:${(result.sample.y / H) * 100}%;width:${(result.r / W) * 200}%;height:${(result.r / W) * 200 / ratio}%`}></span>` : null}
       ${auto.map((p, n) => html`<button class=${`tc-dot auto ${p.unsure ? 'unsure' : ''}`} style=${`left:${(p.x / W) * 100}%;top:${(p.y / H) * 100}%`}
         onClick=${(e) => { e.stopPropagation(); feedback.tick(); setRemoved((s) => new Set([...s, p.i])); }}>${n + 1}</button>`)}
@@ -525,12 +545,13 @@ function TapCount({ shot, onClose }) {
     <div class="tc-bottom">
       ${items.length > 1 ? html`<div class="chips-row tight">${items.map((it) => html`<button class=${`chip tap ${item && item.key === it.key ? 'active' : ''}`}
         onClick=${() => setItem(it)}>${it.code}</button>`)}</div>` : html`<p>${item ? html`นับ <b>${item.code}</b> ${item.name || ''}` : ''}</p>`}
-      ${result ? html`<label class="tc-slider"><span>น้อยลง</span><input type="range" min="0" max="1" step="0.05" value=${sens}
+      ${manual ? null : html`<div class=${`tc-tools ${result ? '' : 'off'}`} aria-hidden=${result ? 'false' : 'true'}>
+        <label class="tc-slider"><span>น้อยลง</span><input type="range" min="0" max="1" step="0.05" value=${sens} disabled=${!result}
           onInput=${(e) => setSens(Number(e.target.value))} /><span>มากขึ้น</span></label>
-        <div class="btn-row tight"><${Button} size="sm" kind="secondary" onClick=${() => resize(0.8)}>ชิ้นเล็กกว่านี้</${Button}>
-          <${Button} size="sm" kind="secondary" onClick=${() => resize(1.25)}>ชิ้นใหญ่กว่านี้</${Button}>
-          <${Button} size="sm" kind="secondary" icon="target" onClick=${() => { setResult(null); setAdded([]); }}>ตัวอย่างใหม่</${Button}></div>
-        <button class="link small" onClick=${sendSample}>นับผิด? ส่งรูปนี้ให้คอมตรวจ</button>` : null}
+        <div class="btn-row tight"><${Button} size="sm" kind="secondary" disabled=${!result} onClick=${() => resize(0.8)}>ชิ้นเล็กกว่านี้</${Button}>
+          <${Button} size="sm" kind="secondary" disabled=${!result} onClick=${() => resize(1.25)}>ชิ้นใหญ่กว่านี้</${Button}>
+          <${Button} size="sm" kind="secondary" icon="target" disabled=${!result} onClick=${() => { setResult(null); setAdded([]); }}>ตัวอย่างใหม่</${Button}></div>
+        <button class="link small" disabled=${!result} onClick=${sendSample}>นับผิด? ส่งรูปนี้ให้คอมตรวจ</button></div>`}
       <div class="btn-row">
         <${Button} kind="secondary" icon="hand" onClick=${() => { setManual(!manual); setResult(null); setAdded([]); }}>${manual ? 'นับอัตโนมัติ' : 'นับเอง'}</${Button}>
         <${Button} kind="ok" icon="check" disabled=${!total || busy} onClick=${use}>ใช้จำนวน ${total}</${Button}></div>

@@ -101,7 +101,10 @@ def write(out: str | Path, kind: str = "portrait", variant: str = "", frames: in
         with out.open("wb") as fh:
             for i in range(frames):
                 buf = io.BytesIO()
-                pipes_scene(int(3 * math.sin(i / frames * 2 * math.pi))).save(buf, "JPEG", quality=88)
+                img = pipes_scene(int(3 * math.sin(i / frames * 2 * math.pi)))
+                if kind == "portrait":  # a phone held upright: the same crate turned (counter-clockwise), 720 x 1280
+                    img = img.rotate(90, expand=True)
+                img.save(buf, "JPEG", quality=88)
                 fh.write(buf.getvalue())
         return out
     if variant == "noleft":

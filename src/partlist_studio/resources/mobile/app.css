@@ -405,6 +405,13 @@ textarea.input { resize: vertical; }
 .role-ic { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 11px; background: var(--muted-bg); color: var(--navy); margin-bottom: 4px; }
 .role.on { border-color: var(--navy); background: color-mix(in srgb, var(--navy) 8%, var(--card)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--navy) 18%, transparent); }
 .role.on .role-ic { background: var(--navy); color: #fff; }
+.role-given { display: flex; align-items: center; gap: 12px; padding: 12px; border-radius: 16px; border: 1.5px solid var(--navy); margin: 8px 0 6px;
+  background: color-mix(in srgb, var(--navy) 8%, var(--card)); }
+.role-given .role-ic { margin: 0; background: var(--navy); color: #fff; }
+.role-given span:last-child { display: grid; gap: 2px; } .role-given small { color: var(--sub); font-size: 12px; }
+.invite-note { display: flex; align-items: center; gap: 8px; margin: 4px 0 10px; padding: 10px 12px; border-radius: 12px; font-size: 14px;
+  background: color-mix(in srgb, #16A34A 12%, var(--card)); color: var(--ink); }
+.invite-note svg { flex: none; color: #16A34A; }
 
 /* ---- AR camera -------------------------------------------------------------------------------------------------------- */
 .ar-screen { position: fixed; inset: 0; z-index: 40; background: #000; color: #fff; overflow: hidden; touch-action: manipulation; user-select: none; -webkit-user-select: none; }

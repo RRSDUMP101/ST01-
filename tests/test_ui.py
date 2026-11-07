@@ -1298,6 +1298,31 @@ def test_mobile_page_online_link_from_outside(window, app, monkeypatch):
         time.sleep(0.02)
     assert hub.short_url == "https://is.gd/RRSabc" and hub.service.online_short == hub.short_url
     assert page._link() == "https://is.gd/RRSabc" and "is.gd/RRSabc" in page.online_status.text()
+    # เชิญเครื่องใหม่: one link for one phone, shortened, in a message to paste in LINE
+    from PySide6.QtGui import QGuiApplication
+
+    from partlist_studio.ui.invite_dialog import InviteDialog
+
+    assert page.invite_btn.isEnabled()
+    monkeypatch.setattr(page_mod.tunnels, "shorten", lambda url: "https://is.gd/INV1" if "?pair=" in url else "")
+    dlg = InviteDialog(window.state, hub, page)
+    dlg.role.setCurrentIndex(dlg.role.findData("store"))
+    dlg.name.setText("แอน 2")
+    dlg.make()
+    code = dlg.code
+    assert hub.service.invite(code)["role"] == "store" and dlg.link == f"https://pc-office.tailnet-abc.ts.net/?pair={code}"
+    for _ in range(100):
+        app.processEvents()
+        if "is.gd/INV1" in dlg.message.toPlainText():
+            break
+        time.sleep(0.02)
+    text = dlg.message.toPlainText()
+    assert "https://is.gd/INV1" in text and "สโตร์" in text and "(แอน 2)" in text and "1 เครื่อง" in text
+    dlg.copy()
+    assert QGuiApplication.clipboard().text() == text
+    dlg.cancel_invite()
+    assert hub.service.invite(code) is None and not dlg.result.isVisibleTo(dlg)
+    dlg.done(0)
     hub.set_options(online_mode=tunnels.OWN)
     page.toggle_online()  # off again: the phones stop seeing the link
     app.processEvents()

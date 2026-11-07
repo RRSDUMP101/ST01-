@@ -259,8 +259,9 @@ class MobilePage(QWidget):
         self.online_url.editingFinished.connect(self._online_fields)
         self.online_url_row = QLabel("ลิงก์")
         form.addRow(self.online_url_row, self.online_url)
-        self.remote_pair = QCheckBox("ให้จับคู่เครื่องใหม่จากนอกโรงงานได้ (ด้วยรหัสจับคู่)")
-        self.remote_pair.setToolTip("ปิด (แนะนำ) = เครื่องใหม่ต้องจับคู่ใน Wi-Fi โรงงานก่อน แล้วกด ใช้นอกโรงงาน ในแอป")
+        self.remote_pair = QCheckBox("ให้รหัสจับคู่บนจอใช้จากนอกโรงงานได้ด้วย")
+        self.remote_pair.setToolTip("ปิด (แนะนำ) = เครื่องใหม่นอกโรงงานใช้ปุ่ม เชิญเครื่องใหม่ (ลิงก์ละ 1 เครื่อง) "
+                                    "หรือจับคู่ใน Wi-Fi โรงงานก่อน แล้วกด ใช้นอกโรงงาน ในแอป")
         self.remote_pair.setChecked(bool(self.hub.option("remote_pair")))
         self.remote_pair.toggled.connect(self._remote_pair_toggled)
         form.addRow("", self.remote_pair)
@@ -279,6 +280,10 @@ class MobilePage(QWidget):
         self.online_btn = button("เปิดออนไลน์", "primary", "เปิด / ปิดลิงก์ออนไลน์ของแอปมือถือ")
         self.online_btn.clicked.connect(self.toggle_online)
         row.addWidget(self.online_btn)
+        self.invite_btn = button("เชิญเครื่องใหม่ (นอกโรงงาน)…", "primary",
+                                 "ลิงก์เดียวส่งทาง LINE: แตะ → ใส่ชื่อ → ใช้งานได้ ใช้ได้ 1 เครื่อง บทบาทกำหนดจากคอม")
+        self.invite_btn.clicked.connect(self.invite)
+        row.addWidget(self.invite_btn)
         self.online_copy = button("คัดลอกลิงก์ออนไลน์", tooltip="ลิงก์ของแอป (ไม่มีรหัสจับคู่)")
         self.online_copy.clicked.connect(self.copy_online)
         row.addWidget(self.online_copy)
@@ -355,6 +360,16 @@ class MobilePage(QWidget):
             self.toggle_online()
         self.refresh()
 
+    def invite(self) -> None:
+        if not self._allowed(Perm.DEVICE_ADMIN):
+            return
+        if not self.hub.online:
+            self.actions.error("ยังไม่ได้เปิดออนไลน์", "กด เปิดออนไลน์ ก่อน แล้วค่อยเชิญเครื่องใหม่จากนอกโรงงาน")
+            return
+        from ..invite_dialog import InviteDialog
+
+        InviteDialog(self.state, self.hub, self).exec()
+
     def copy_online(self) -> None:
         if self.hub.online:
             QGuiApplication.clipboard().setText(self.hub.share_url())
@@ -373,11 +388,12 @@ class MobilePage(QWidget):
         self.online_btn.style().unpolish(self.online_btn)
         self.online_btn.style().polish(self.online_btn)
         self.online_copy.setEnabled(self.hub.online)
+        self.invite_btn.setEnabled(self.hub.online)
         for w in (self.online_mode, self.online_token, self.online_url):
             w.setEnabled(not on)
         if self.hub.online:
-            pair = ("จับคู่เครื่องใหม่จากนอกโรงงานได้ด้วยรหัสจับคู่" if self.hub.option("remote_pair") else
-                    "เครื่องใหม่ต้องจับคู่ใน Wi-Fi โรงงานก่อน แล้วกด <b>ใช้นอกโรงงาน</b> ในหน้าตั้งค่าของแอป")
+            pair = ("เครื่องใหม่นอกโรงงาน: กด <b>เชิญเครื่องใหม่</b> แล้วส่งข้อความทาง LINE (ลิงก์ละ 1 เครื่อง) · "
+                    "เครื่องที่จับคู่ในโรงงานแล้ว กด <b>ใช้นอกโรงงาน</b> ในหน้าตั้งค่าของแอป")
             quick = (" · ลิงก์ชั่วคราวเปลี่ยนทุกครั้งที่เปิดใหม่ – มือถือรับลิงก์ใหม่เองเมื่อเปิดแอปใน Wi-Fi โรงงาน"
                      if self.hub.option("online_mode") == tunnels.QUICK else "")
             short = self.hub.short_url

@@ -56,6 +56,7 @@ class MobileHub(QObject):
     download_progress = Signal(int, int)  # cloudflared being downloaded: bytes, total
     _downloaded = Signal()  # from the download thread: open the tunnel on the main thread
     _shortened = Signal(str, str)  # (long link, short link) from the thread that asked is.gd
+    invite_shortened = Signal(str, str)  # (invitation link, its short link - "" when none) for the invitation dialog
 
     def __init__(self, state: AppState):
         super().__init__()
@@ -209,6 +210,20 @@ class MobileHub(QObject):
         """The short-link option changed: shorten the link again (or drop the short one)."""
         self._short_for = ""
         self._online_now()
+
+    def invite_link(self, code: str) -> str:
+        """The link of an invitation (one phone, from anywhere): the app online with the code."""
+        return f"{self.online_url()}/?pair={code}" if self.online and code else ""
+
+    def shorten_invite(self, code: str) -> bool:
+        """Ask for a short link of an invitation (a thread; invite_shortened gives it). False: not shortened (the
+        option is off, or the link is the company's own and short already)."""
+        link = self.invite_link(code)
+        if not link or not self.option("online_short") or self.option("online_mode") != tunnels.QUICK:
+            return False
+        threading.Thread(target=lambda: self.invite_shortened.emit(link, tunnels.shorten(link)), daemon=True,
+                         name="shorten-invite").start()
+        return True
 
     def share_url(self) -> str:
         """The link to send: the short one when there is one."""

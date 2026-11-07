@@ -286,6 +286,7 @@ class MobileService:
         self.pair_code = ""
         self.pair_role = ""
         self.pair_expires: datetime | None = None
+        self.invites: dict[str, dict] = {}  # code -> {role, name, expires}: one phone each, from anywhere
         self._cond = threading.Condition()
         self._version = 1
         self._kinds: list[tuple[int, str]] = []
@@ -357,6 +358,60 @@ class MobileService:
         self.pair_expires = None
         self.pair_role = ""
 
+    # an invitation: a code for ONE phone, the role (and the name) given on the PC, usable from outside the factory
+    # (the link is sent by LINE) whatever the option of pairing from outside; used once, then gone
+    INVITE_MINUTES = (30, 120, 24 * 60)
+
+    def new_invite(self, role: str, name: str = "", minutes: float = 30) -> str:
+        if role not in ROLES:
+            raise MobileError("เลือกบทบาทของเครื่องที่เชิญ")
+        self._drop_old_invites()
+        alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+        code = "".join(secrets.choice(alphabet) for _ in range(8))
+        self.invites[code] = {"role": role, "name": " ".join((name or "").split())[:40],
+                              "expires": datetime.now() + timedelta(minutes=max(1.0, min(float(minutes), 24 * 60)))}
+        return code
+
+    def invite_message(self, code: str, link: str) -> str:
+        """The message to send by LINE with an invitation: the link, what to do, until when, for one phone."""
+        inv = self.invites.get(code)
+        if inv is None or not link:
+            return ""
+        who = f" ({inv['name']})" if inv["name"] else ""
+        when = inv["expires"]
+        until = when.strftime("%H:%M น.") if when.date() == datetime.now().date() else when.strftime("%d/%m %H:%M น.")
+        return (f"เชิญใช้แอป RRS บนมือถือ{who} – บทบาท {ROLES[inv['role']]}\n"
+                f"1. แตะลิงก์ {link}\n"
+                f"2. ใส่ชื่อ แล้วกด เริ่มใช้งาน\n"
+                f"ใช้ได้ 1 เครื่อง ถึง {until} · รหัส {code[:4]} {code[4:]}")
+
+    def cancel_invite(self, code: str) -> None:
+        self.invites.pop(code, None)
+
+    def _drop_old_invites(self) -> None:
+        now = datetime.now()
+        for code in [c for c, v in self.invites.items() if v["expires"] <= now]:
+            del self.invites[code]
+
+    def invite(self, code: str) -> dict | None:
+        self._drop_old_invites()
+        code = (code or "").strip().upper().replace("-", "").replace(" ", "")
+        return next((v for c, v in self.invites.items() if secrets.compare_digest(c, code)), None) if code else None
+
+    def code_info(self, code: str) -> dict:
+        """What the pairing screen shows for a code before pairing: the role given on the PC (then the phone does
+        not choose), the name suggested; nothing for a wrong code."""
+        inv = self.invite(code)
+        if inv is not None:
+            return {"ok": True, "invite": True, "role": inv["role"], "role_name": ROLES[inv["role"]], "name": inv["name"],
+                    "until": inv["expires"].strftime("%H:%M")}
+        code = (code or "").strip().upper().replace("-", "").replace(" ", "")
+        if code and self.pairing_open and secrets.compare_digest(code, self.pair_code):
+            role = getattr(self, "pair_role", "")
+            return {"ok": True, "invite": False, "role": role, "role_name": ROLES.get(role, ""), "name": "",
+                    "until": self.pair_expires.strftime("%H:%M")}
+        return {"ok": False}
+
     @property
     def pairing_open(self) -> bool:
         return bool(self.pair_code) and self.pair_expires is not None and datetime.now() < self.pair_expires
@@ -364,21 +419,24 @@ class MobileService:
     def pair(self, code: str, name: str, role: str = "station", station: str = "", ip: str = "",
              agent: str = "") -> tuple[Device, str]:
         code = (code or "").strip().upper().replace("-", "").replace(" ", "")
-        if not self.pairing_open or not secrets.compare_digest(code, self.pair_code):
+        inv = self.invite(code)
+        if inv is None and (not self.pairing_open or not secrets.compare_digest(code, self.pair_code)):
             raise MobileError("รหัสจับคู่ไม่ถูกต้องหรือหมดเวลา – สร้างรหัสใหม่ที่หน้า มือถือ & AR บนคอม", 403)
-        name = " ".join((name or "").split())[:40]
+        name = " ".join((name or (inv or {}).get("name", "")).split())[:40]
         if not name:
             raise MobileError("ใส่ชื่อผู้ใช้ก่อน")
         if name.lower() in ("คอม", "pc", "ระบบ", "system"):
             raise MobileError("ชื่อนี้ใช้ไม่ได้ – ใส่ชื่อคน")
-        given = getattr(self, "pair_role", "")
+        given = inv["role"] if inv is not None else getattr(self, "pair_role", "")
         role = given or (role if role in ROLES and role != "planner" else "station")
         station = station if station in STEPS else ""
         token = secrets.token_urlsafe(32)
         device = Device(id=secrets.token_hex(6), name=name, role=role, token_hash=_hash(token), station=station,
                         last_seen=_now(), last_ip=ip, agent=(agent or "")[:160])
         self.data.devices.append(device)
-        if self.data.option("remote_pair") or given:
+        if inv is not None:
+            self.cancel_invite(code)  # an invitation is for one phone
+        elif self.data.option("remote_pair") or given:
             self.close_pairing()  # one phone per code when it can be used from outside or carries a role
         self.save()
         self._event("device", device)

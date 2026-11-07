@@ -401,13 +401,18 @@ class _Handler(_Base):
         if name == "ping":
             self.send_json(200, {"ok": True, "app": "RRS Part List Studio"}, {"Access-Control-Allow-Origin": "*"})
             return
+        if name == "paircode" and method == "GET":  # the pairing screen: what this code gives (before pairing)
+            if not self.hub.allow_pair_try(self.client_ip, self.remote):
+                raise MobileError("ลองจับคู่หลายครั้งเกินไป รอ 10 นาที", 429)
+            self.send_json(200, call(s.code_info, q.get("code", "")))
+            return
         if name == "pair" and method == "POST":
-            if self.remote and not s.data.option("remote_pair"):
-                raise MobileError("จับคู่เครื่องใหม่ได้เฉพาะใน Wi-Fi ของโรงงาน – จับคู่ในโรงงานก่อน แล้วกด "
-                                  "ใช้นอกโรงงาน ในหน้าตั้งค่าของแอป (หรือให้คอมเปิด จับคู่จากนอกโรงงาน)", 403)
             if not self.hub.allow_pair_try(self.client_ip, self.remote):
                 raise MobileError("ลองจับคู่หลายครั้งเกินไป รอ 10 นาที", 429)
             body = self.read_json()
+            if self.remote and not s.data.option("remote_pair") and call(s.invite, body.get("code", "")) is None:
+                raise MobileError("จับคู่เครื่องใหม่จากนอกโรงงานต้องใช้ลิงก์เชิญจากคอม (หน้า มือถือ & AR → เชิญเครื่องใหม่) "
+                                  "หรือจับคู่ใน Wi-Fi โรงงานก่อน แล้วกด ใช้นอกโรงงาน ในหน้าตั้งค่าของแอป", 403)
             device, token = call(s.pair, body.get("code", ""), body.get("name", ""), body.get("role", "station"),
                                  body.get("station", ""), self.where, self.headers.get("User-Agent", ""))
             self.send_json(200, {"token": token, "device": device.to_json(), "hello": call(s.hello, device)})

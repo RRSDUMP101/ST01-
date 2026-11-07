@@ -403,6 +403,37 @@ def test_requests_through_a_tunnel_are_from_outside(server):
     assert not all(server.allow_pair_try(f"192.0.2.{n}", True) for n in range(30))
 
 
+def test_an_invitation_pairs_one_phone_from_outside(server):
+    """เชิญเครื่องใหม่: one link sent by LINE - from outside the factory, without the option of pairing from outside;
+    the role and the name set on the PC (the phone cannot ask for another role); once only; cancelled or late: no."""
+    s = server.service
+    outside = {"Cf-Connecting-Ip": "203.0.113.8"}
+    assert not s.data.options.get("remote_pair")
+    code = s.new_invite("store", "แอน 2", minutes=30)
+    status, _h, raw = _call(server, "GET", f"/api/paircode?code={code[:4]}-{code[4:].lower()}", headers=outside)
+    info = json.loads(raw)
+    assert status == 200 and info["ok"] and info["invite"] and info["role"] == "store" and info["name"] == "แอน 2"
+    assert json.loads(_call(server, "GET", "/api/paircode?code=WRONG000", headers=outside)[2]) == {"ok": False}
+    status, _h, raw = _call(server, "POST", "/api/pair", {"code": code, "name": "", "role": "planner"}, headers=outside)
+    assert status == 200
+    dev = s.data.devices[-1]
+    assert dev.role == "store" and dev.name == "แอน 2" and dev.last_ip == "203.0.113.8 (ออนไลน์)"
+    status, _h, raw = _call(server, "POST", "/api/pair", {"code": code, "name": "อีกเครื่อง"}, headers=outside)
+    assert status == 403 and "ลิงก์เชิญ" in json.loads(raw)["error"]  # used: gone
+    gone = s.new_invite("viewer")
+    s.cancel_invite(gone)
+    assert s.invite(gone) is None and s.code_info(gone) == {"ok": False}
+    late = s.new_invite("viewer")
+    s.invites[late]["expires"] = datetime.now() - timedelta(seconds=1)
+    assert s.invite(late) is None and late not in s.invites
+    with pytest.raises(MobileError):
+        s.new_invite("boss")
+    code = s.new_invite("viewer", minutes=120)
+    text = s.invite_message(code, "https://is.gd/AbC123")
+    assert "https://is.gd/AbC123" in text and "ดูอย่างเดียว" in text and "1 เครื่อง" in text and code[:4] in text
+    assert s.invite_message("NOPE", "https://x") == ""
+
+
 # ---- รูปประกอบจริง ---------------------------------------------------------------------------------------------------
 def test_real_photo_from_the_standard_part_list_only_when_it_is_this_part(demo, tmp_path):
     """The picture of the standard Part List shows on รูปประกอบจริง only for the part it is of: same code, same side,

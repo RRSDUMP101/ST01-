@@ -181,7 +181,9 @@ class OnTopPrompt(QDialog):
             self.show()
             self.raise_()
             loop.exec()
-        return self.answer
+        answer = self.answer
+        self.deleteLater()  # a window without a parent: gone with its question (not left to the end of the program)
+        return answer
 
     def _to_front(self) -> None:
         self.raise_()

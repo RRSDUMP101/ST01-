@@ -117,7 +117,11 @@ class OnTopPrompt(QDialog):
 
     def __init__(self, title: str, body: str, buttons, tone: str = "go", focus: bool = True, place: str = "top",
                  bring_front=None, width: int = 560):
-        super().__init__(None, Qt.Dialog | Qt.WindowStaysOnTopHint | Qt.CustomizeWindowHint | Qt.WindowTitleHint)
+        super().__init__(None, Qt.Dialog | Qt.WindowStaysOnTopHint | Qt.CustomizeWindowHint | Qt.WindowTitleHint
+                         | Qt.WindowCloseButtonHint)
+        # modal itself: the keying dialog is modal (exec), and a window apart from it that is not modal too would be
+        # blocked by it - seen on top but deaf to clicks; above it, this one takes the clicks
+        self.setWindowModality(Qt.ApplicationModal)
         self.setObjectName("OnTopPrompt")
         self.setWindowTitle(f"RRS – {title}")
         self.answer = buttons[-1][0]  # closing it = the last button (stop)
@@ -158,8 +162,13 @@ class OnTopPrompt(QDialog):
         self.answer = key
         self.done(0)
 
-    def reject(self) -> None:  # Esc / closing: the last button
+    def reject(self) -> None:  # Esc / the close button (×) of its title bar: the last button
         self.done(0)
+
+    def closeEvent(self, event) -> None:  # noqa: N802 - Qt
+        event.accept()
+        if self.isVisible():
+            self.done(0)
 
     def _place(self) -> None:
         screen = QGuiApplication.screenAt(QCursor.pos()) or QGuiApplication.primaryScreen()
@@ -635,10 +644,11 @@ class ExpressBotDialog(QDialog):
         body = (f"<b>{_html.escape(label)}</b> – คีย์ครบ{f' {n} รายการ' if n else ''}แล้ว (ยังไม่บันทึก)<br><br>"
                 "① ตรวจในหน้าจอ Express: รหัส จำนวน คลัง ครบทุกบรรทัด<br>"
                 "② กด <b>บันทึก</b> ใน Express เอง (ปุ่มรูปแผ่นดิสก์)<br>"
-                "③ แล้วกดปุ่มด้านล่าง – Express ออกเลขที่ให้ (เช่น PD0000526) ใส่ในช่องที่ถามต่อ")
+                "③ แล้วกดปุ่มด้านล่าง – Express ออกเลขที่ให้ (เช่น PD0000526) ใส่ในช่องที่ถามต่อ<br>"
+                "<span style='color:#6B7A90'>ปิด (×) = หยุดคีย์ · ลากแถบบนสุดย้ายหน้าต่างนี้ได้ถ้าบังหน้าจอ</span>")
         prompt = OnTopPrompt("ตรวจแล้วบันทึกใน Express", body,
                              [("saved", "✓ บันทึกใน Express แล้ว", "primary"), ("skip", "ไม่บันทึก – ข้ามใบนี้", ""),
-                              ("stop", "หยุด", "")], tone="check", focus=False, place="corner")
+                              ("stop", "หยุดคีย์", "")], tone="check", focus=False, place="corner")
         return prompt.ask()
 
     def confirm_text(self, doc_no: str, question: str) -> tuple[str, str]:

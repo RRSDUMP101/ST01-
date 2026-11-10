@@ -1479,6 +1479,22 @@ def test_express_bot_dialog_types_and_asks_the_number(window, app, monkeypatch):
     box = dlg_mod.OnTopPrompt("t", "b", [("yes", "a", "primary"), ("no", "c", "")])
     dlg_mod.QTimer.singleShot(50, box.reject)
     assert box.ask() == "no"  # closed = the last button
+    # the keying dialog is modal (exec): a box apart from it was blocked by it - on top but deaf to clicks, with no
+    # way to close it. The box is modal itself (above the dialog, it takes the clicks) and has a close button (×)
+    from PySide6.QtGui import QGuiApplication
+
+    d.setWindowModality(dlg_mod.Qt.ApplicationModal)
+    d.show()
+    box = dlg_mod.OnTopPrompt("t", "b", [("saved", "a", "primary"), ("stop", "c", "")], focus=False, place="corner")
+    seen = {}
+
+    def look():
+        seen["modal"] = QGuiApplication.modalWindow() is box.windowHandle()
+        seen["close"] = bool(box.windowFlags() & dlg_mod.Qt.WindowCloseButtonHint)
+        box.close()  # the × of its title bar
+
+    dlg_mod.QTimer.singleShot(50, look)
+    assert box.ask() == "stop" and seen == {"modal": True, "close": True}
     d.depts_edit.setText("ST01, 08 ACC")
     assert d._read_options().departments == ["ST01", "08", "ACC"]
     assert "ได้เลขที่" in d.log.toPlainText()

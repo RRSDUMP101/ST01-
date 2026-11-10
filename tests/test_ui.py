@@ -1460,9 +1460,9 @@ def test_express_bot_dialog_types_and_asks_the_number(window, app, monkeypatch):
         app.processEvents()
         time.sleep(0.01)
     assert d.worker is None
-    # เลขที่เอกสาร first (Enter keeps Express's number), then วันที่, หมายเหตุ, แผนก
-    assert Fake.typed[:2] == ["{F4}", "{ENTER}"] and Fake.typed[4:6] == ["ช่างท๊อปฟู", "{ENTER}"]
-    assert Fake.typed[6] == "ST01" and "ST69-0001" in Fake.typed and "15" in Fake.typed
+    # เลขที่เอกสาร first (Enter keeps Express's number), วันที่, สำหรับแผนก left empty, หมายเหตุ = job + แผนก
+    assert Fake.typed[:2] == ["{F4}", "{ENTER}"] and Fake.typed[3:6] == ["{ENTER}", "{ENTER}", "ST01"]
+    assert "ช่างท๊อปฟู" not in Fake.typed and "ST69-0001" in Fake.typed and "15" in Fake.typed
     assert doc.express_no == "OU6900001" and doc.keyed_at and not doc.key_partial
     assert any("หน้าจอเอกสารชนิดนี้" in q for q, _t in asked)  # the {CONFIRM} before the new-document key
     tone, body = asked[0][1]  # the box over Express: which window, which screen, what is typed
@@ -1583,7 +1583,7 @@ def test_express_practice_with_examples(window, app, monkeypatch, tmp_path):
     while d.worker is not None and time.monotonic() < deadline:
         app.processEvents()
         time.sleep(0.01)
-    assert d.worker is None and Fake.window == "Notepad" and "SO6700001 ช่างรอง โตโยต้า MR0DA8CB605903316" in Fake.typed
+    assert d.worker is None and Fake.window == "Notepad" and "SO6700001 SET" in Fake.typed
     assert (len(state.ledger.docs), len(state.ledger.movements)) == before and "ฝึกเสร็จ" in d.status.text()
     assert steps[0] == "กด F4" and len(steps) == 4  # ทีละขั้น: asked once per document ("doc" = the rest of it)
     d.close()

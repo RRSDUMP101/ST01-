@@ -46,10 +46,11 @@ MODIFIERS = ("CTRL", "ALT", "SHIFT")
 # <F8>: รหัส, รายละเอียด (filled by Express), คลัง, จำนวน, หน่วย (filled), ราคาต่อหน่วย (Express costs the stock)).
 _NEW_DOC = ("{CONFIRM หน้าต่างด้านหน้าคือหน้าจอเอกสารชนิดนี้ใน Express ของบริษัทที่ถูกต้อง และยังไม่มีใบค้างอยู่?}"
             "{F4}{WAIT 1200}")
-# After {F4} (a new document) Express puts the cursor in เลขที่เอกสาร with its running number (PD…, OUST01…): seen
-# on the store's tries, where the first field typed landed there ("PDตัดเลเซอร์", "OUST01"). So {ENTER} first keeps
-# Express's number; then วันที่, หมายเหตุ, สำหรับแผนก as the cursor went on those tries - check once with ทดลองทีละขั้น.
-_ISSUE = {HEAD: _NEW_DOC + "{ENTER}{WAIT 300}[วันที่]{ENTER}{WAIT 300}[หมายเหตุ]{ENTER}{WAIT 300}[แผนก]{ENTER}"
+# After {F4} (a new document) Express puts the cursor in เลขที่เอกสาร with its running number (PD**NEW**, OUST01…),
+# then วันที่, สำหรับแผนก, หมายเหตุ - seen on the store's tries ("PDตัดเลเซอร์", then "JOB-" in สำหรับแผนก with its
+# look-up list open). {ENTER} keeps Express's number; สำหรับแผนก is left empty (the store's choice: {ENTER} only);
+# หมายเหตุ carries the job and the แผนก of this program ("JOB-001 ตัดเลเซอร์").
+_ISSUE = {HEAD: _NEW_DOC + "{ENTER}{WAIT 300}[วันที่]{ENTER}{WAIT 300}{ENTER}{WAIT 300}[หมายเหตุ]{ENTER}"
                            "{WAIT 500}{F8}{WAIT 600}",
           LINE: "[รหัส]{ENTER}{WAIT 400}{ENTER}[คลัง]{ENTER}[จำนวน]{ENTER}{ENTER}{ENTER}{WAIT 200}",
           END: "{STOP}"}
@@ -58,7 +59,7 @@ DEFAULT_TEMPLATES: dict[str, dict[str, str]] = {
     "OU": dict(_ISSUE),
     "FR": dict(_ISSUE),
     "AJ": dict(_ISSUE),
-    "RR": {HEAD: _NEW_DOC + "{ENTER}{WAIT 300}[ผู้จำหน่าย]{ENTER}{WAIT 500}[อ้างอิง]{ENTER}[แผนก]{ENTER}{ENTER}"
+    "RR": {HEAD: _NEW_DOC + "{ENTER}{WAIT 300}[ผู้จำหน่าย]{ENTER}{WAIT 500}[อ้างอิง]{ENTER}{ENTER}{ENTER}"
                  "[วันที่]{ENTER}{F8}{WAIT 600}",
            LINE: "[รหัส]{ENTER}{WAIT 400}{ENTER}[คลัง]{ENTER}[จำนวน]{ENTER}{ENTER}[ราคาต่อหน่วย]{ENTER}{ENTER}"
                  "{ENTER}{WAIT 200}",
@@ -70,7 +71,11 @@ OLD_DEFAULTS = {
            _NEW_DOC + "[ผู้จำหน่าย]{ENTER}{WAIT 500}[อ้างอิง]{ENTER}[แผนก]{ENTER}{ENTER}[วันที่]{ENTER}{F8}{WAIT 600}",
            "{F4}{WAIT 1200}[แผนก]{ENTER}{WAIT 300}[หมายเหตุ]{ENTER}{ENTER}[วันที่]{ENTER}{F8}{WAIT 600}",
            ("{F4}{WAIT 1200}[ผู้จำหน่าย]{ENTER}{WAIT 500}[อ้างอิง]{ENTER}[แผนก]{ENTER}{ENTER}[วันที่]{ENTER}"
-            "{F8}{WAIT 600}")},
+            "{F8}{WAIT 600}"),
+           _NEW_DOC + "{ENTER}{WAIT 300}[วันที่]{ENTER}{WAIT 300}[หมายเหตุ]{ENTER}{WAIT 300}[แผนก]{ENTER}{WAIT 500}"
+           "{F8}{WAIT 600}",
+           _NEW_DOC + "{ENTER}{WAIT 300}[ผู้จำหน่าย]{ENTER}{WAIT 500}[อ้างอิง]{ENTER}[แผนก]{ENTER}{ENTER}[วันที่]{ENTER}"
+           "{F8}{WAIT 600}"},
 }
 
 
@@ -129,10 +134,22 @@ def _num(v: float) -> str:
     return f"{v:.6f}".rstrip("0").rstrip(".") if isinstance(v, float) else str(v)
 
 
-def doc_values(doc: StockDoc, options: BotOptions) -> dict[str, str]:
-    from .express_out import express_remark
+def key_remark(doc: StockDoc, options: BotOptions) -> str:
+    """หมายเหตุ typed into Express: the job, then the แผนก of this program ("JOB-001 ตัดเลเซอร์") - the store's way,
+    สำหรับแผนก of Express being left empty; the document's own remark when it has neither. With remark_ref, our
+    document number at the end (#PD6911-0001)."""
+    from .express_out import REMARK_WIDTH
 
-    return {"department": doc.department or options.department, "remark": express_remark(doc, options.remark_ref),
+    parts = [p for p in (doc.job.strip(), (doc.department or options.department or "").strip()) if p]
+    text = " ".join(dict.fromkeys(parts)) or (doc.remark or "").strip()
+    if options.remark_ref and doc.doc_no:
+        ref = f"#{doc.doc_no}"
+        text = f"{text[:REMARK_WIDTH - len(ref) - 1].rstrip()} {ref}".strip()
+    return text
+
+
+def doc_values(doc: StockDoc, options: BotOptions) -> dict[str, str]:
+    return {"department": doc.department or options.department, "remark": key_remark(doc, options),
             "date": thai_date(doc.date), "job": doc.job, "vendor": doc.vendor, "ref": doc.ref, "doc_no": doc.doc_no}
 
 
@@ -183,10 +200,11 @@ def screen_problem(doc_type: str, title: str) -> str:
 def doc_problems(doc: StockDoc, options: BotOptions) -> list[str]:
     """What makes Express open a look-up list or refuse a field - checked before a run: a แผนก or คลัง that is not
     an Express code, a line without a code or a quantity, a remark longer than the field."""
-    from .express_out import REMARK_WIDTH, express_remark
+    from .express_out import REMARK_WIDTH
 
     out = []
-    dept = (doc.department or options.department or "").strip()
+    head = (options.templates.get(doc.doc_type) or DEFAULT_TEMPLATES.get(doc.doc_type) or {}).get(HEAD, "")
+    dept = (doc.department or options.department or "").strip() if "[แผนก]" in head else ""
     known = {d.strip().upper() for d in options.departments if d.strip()}
     if dept and known and dept.upper() not in known:
         out.append(f"{doc.doc_no}: แผนก “{dept}” ไม่มีในรหัสแผนกของ Express ({', '.join(sorted(known)[:8])}…) – "
@@ -212,7 +230,7 @@ def doc_problems(doc: StockDoc, options: BotOptions) -> list[str]:
                        "ถ้าไม่มีใน Express ด้วย Express จะเปิดหน้าค้นหาสินค้า (โปรแกรมจะหยุด) · ตรวจว่าเปิดบริษัทถูกต้อง")
         if stores and wh.upper() not in stores:
             out.append(f"{doc.doc_no} บรรทัด {i} ({ln.code}): คลัง “{wh}” ไม่มีในรหัสคลังของ Express")
-    remark = express_remark(doc, options.remark_ref)
+    remark = key_remark(doc, options)
     if len(remark) > REMARK_WIDTH:
         out.append(f"{doc.doc_no}: หมายเหตุยาว {len(remark)} ตัว (Express รับประมาณ {REMARK_WIDTH}) – ท้ายข้อความอาจหาย")
     return out

@@ -680,7 +680,9 @@ class ExpressBotDialog(QDialog):
         if doc is not None:
             vals = bot.doc_values(doc, self.options)
             whs = sorted({bot.line_values(doc, i, self.options)["warehouse"] for i in range(len(doc.lines))})
-            lines = (f"แผนก <b>{_html.escape(vals['department'] or '-')}</b> · วันที่ <b>{vals['date']}</b> · "
+            typed = "[แผนก]" in self.options.templates.get(doc.doc_type, {}).get(bot.HEAD, "")
+            dept = f"<b>{_html.escape(vals['department'] or '-')}</b>" if typed else "ข้าม (ว่างไว้)"
+            lines = (f"สำหรับแผนก {dept} · วันที่ <b>{vals['date']}</b> · "
                      f"{len(doc.lines)} รายการ · คลัง <b>{_html.escape(', '.join(whs) or '-')}</b><br>"
                      f"หมายเหตุ: {_html.escape(vals['remark'] or '-')}")
         body = (f"<b style='font-size:13pt'>{_html.escape(doc_no)}"

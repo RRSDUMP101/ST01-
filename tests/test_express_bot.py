@@ -39,11 +39,17 @@ def test_template_to_actions():
     opts = bot.BotOptions(delay_ms=0)
     acts = bot.actions_for(_doc(), opts)
     texts = [a.value for a in acts if a.kind == "text"]
-    # after {F4} Express's cursor is in เลขที่เอกสาร: Enter keeps its number, then วันที่, หมายเหตุ, แผนก
-    assert texts == ["08/07/69", "SO6700001 ช่างรองโตโยต้าระยอง", "SET", "9900001", "01", "6",
+    # after {F4} Express's cursor is in เลขที่เอกสาร: Enter keeps its number, then วันที่, สำหรับแผนก left empty
+    # (Enter only), หมายเหตุ = the job and the แผนก of this program
+    assert texts == ["08/07/69", "SO6700001 SET", "9900001", "01", "6",
                      "STORE-67-0253", "ST05", "1.5"]  # คลัง as on each line, PD price left to Express
     keys = [a.value for a in acts if a.kind in ("key", "text")]
-    assert keys[:3] == ["F4", "ENTER", "08/07/69"]
+    assert keys[:6] == ["F4", "ENTER", "08/07/69", "ENTER", "ENTER", "SO6700001 SET"]
+    doc = _doc()
+    doc.job, doc.department = "", ""
+    assert bot.key_remark(doc, opts) == "ช่างรองโตโยต้าระยอง"  # neither: the document's own remark
+    doc.job, doc.department = "JOB-001", "ตัดเลเซอร์"
+    assert bot.key_remark(doc, bot.BotOptions(remark_ref=True)) == "JOB-001 ตัดเลเซอร์ #PD6911-0001"
     assert acts[0].kind == "doc" and acts[-1].kind == "stop"
     assert all(not bot.check_template(t, p) for t, p in bot.DEFAULT_TEMPLATES.items())
     rr = StockDoc("RR", "RR1", "2026-03-18", vendor="อ-092", ref="PO6900012",
@@ -57,7 +63,7 @@ def test_autohotkey_script():
     script = bot.to_ahk([bot.actions_for(_doc(), opts)], opts)
     assert script.startswith("#Requires AutoHotkey v2.0")
     assert 'WinActivate "Express"' in script and 'Send "{F4}"' in script and 'SendText "แผ่นยางรองขาเครน"' not in script
-    assert 'SendText "SO6700001 ช่างรองโตโยต้าระยอง"' in script and "MsgBox" in script and "^!q::ExitApp" in script
+    assert 'SendText "SO6700001 SET"' in script and "MsgBox" in script and "^!q::ExitApp" in script
     assert bot._ahk_key("CTRL+S", 1) == "^{s}"
     assert bot._ahk_key("TAB", 3) == "{Tab 3}"
 
@@ -79,7 +85,12 @@ def test_run_types_stops_and_guards():
     opts.paste_thai = True
     out = Fake()
     bot.run(acts[:1], opts, out, wait_stop=lambda no: True, sleep=lambda s: None)
-    assert "paste SO6700001 ช่างรองโตโยต้าระยอง" in out.typed and "9900001" in out.typed
+    assert "SO6700001 SET" in out.typed and "9900001" in out.typed  # ASCII: typed, not pasted
+    thai = _doc()
+    thai.department = "ตัดเลเซอร์"
+    out = Fake()
+    bot.run([bot.actions_for(thai, opts)], opts, out, wait_stop=lambda no: True, sleep=lambda s: None)
+    assert "paste SO6700001 ตัดเลเซอร์" in out.typed  # Thai: through the clipboard
 
 
 def test_confirm_partial_and_text_checks():
@@ -164,6 +175,11 @@ def test_codes_checked_before_a_run():
     a คลัง not in Express, a line without a code or a quantity, a code with stray spaces, a remark too long."""
     opts = bot.BotOptions(departments=["ST01", "08", "ACC", "SET"], warehouses=["01", "ST05"])
     assert bot.doc_problems(_doc(), opts) == []
+    odd = _doc()
+    odd.department = "สโตร์ตั้ม"
+    assert not any("แผนก" in p for p in bot.doc_problems(odd, opts))  # สำหรับแผนก is not typed (left empty)
+    for t in opts.templates.values():  # a template that types [แผนก]: its code is checked
+        t[bot.HEAD] = "{F4}{WAIT 900}{ENTER}[วันที่]{ENTER}[แผนก]{ENTER}[หมายเหตุ]{ENTER}{F8}{WAIT 500}"
     doc = _doc()
     doc.department = "สโตร์ตั้ม"
     doc.lines[1].warehouse = "02"
@@ -174,8 +190,9 @@ def test_codes_checked_before_a_run():
     assert "จำนวน 0" in got and "ไม่มีรหัสสินค้า" in got
     doc = _doc()
     doc.department = "สโตร์ ตั้มแอน"
-    assert "ดูเหมือนชื่อ" in bot.doc_problems(doc, bot.BotOptions())[0]  # no list given: a name is still caught
-    doc.department, doc.remark = "SET", "ก" * 80
+    typed = bot.BotOptions(templates=opts.templates)
+    assert "ดูเหมือนชื่อ" in bot.doc_problems(doc, typed)[0]  # no list given: a name is still caught
+    doc.department, doc.job = "SET", "ก" * 80
     assert "หมายเหตุยาว" in bot.doc_problems(doc, bot.BotOptions())[0]
 
 
@@ -223,10 +240,10 @@ def test_express_popups_stop_the_run_and_negative_quantities():
     doc = _doc()
     doc.lines[0].qty = -3
     texts = [a.value for a in bot.actions_for(doc, opts) if a.kind == "text"]
-    assert texts[4:6] == ["01", "0"]  # code 9900001, คลัง 01, จำนวน 0
+    assert texts[3:5] == ["01", "0"]  # code 9900001, คลัง 01, จำนวน 0
     assert any("ติดลบ → คีย์เป็น 0" in p for p in bot.doc_problems(doc, opts))
     opts.zero_negative = False
-    assert [a.value for a in bot.actions_for(doc, opts) if a.kind == "text"][5] == "-3"
+    assert [a.value for a in bot.actions_for(doc, opts) if a.kind == "text"][4] == "-3"
     known = bot.BotOptions(known_codes=frozenset({"9900001"}))
     assert any("STORE-67-0253" in p and "ไม่มีในรายการสินค้า" in p for p in bot.doc_problems(_doc(), known))
 

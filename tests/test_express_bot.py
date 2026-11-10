@@ -39,8 +39,11 @@ def test_template_to_actions():
     opts = bot.BotOptions(delay_ms=0)
     acts = bot.actions_for(_doc(), opts)
     texts = [a.value for a in acts if a.kind == "text"]
-    assert texts == ["SET", "SO6700001 ช่างรองโตโยต้าระยอง", "08/07/69", "9900001", "01", "6",
+    # after {F4} Express's cursor is in เลขที่เอกสาร: Enter keeps its number, then วันที่, หมายเหตุ, แผนก
+    assert texts == ["08/07/69", "SO6700001 ช่างรองโตโยต้าระยอง", "SET", "9900001", "01", "6",
                      "STORE-67-0253", "ST05", "1.5"]  # คลัง as on each line, PD price left to Express
+    keys = [a.value for a in acts if a.kind in ("key", "text")]
+    assert keys[:3] == ["F4", "ENTER", "08/07/69"]
     assert acts[0].kind == "doc" and acts[-1].kind == "stop"
     assert all(not bot.check_template(t, p) for t, p in bot.DEFAULT_TEMPLATES.items())
     rr = StockDoc("RR", "RR1", "2026-03-18", vendor="อ-092", ref="PO6900012",
@@ -189,11 +192,47 @@ def test_step_by_step_waits_before_every_field_and_key():
     out = Fake()
     assert bot.run([bot.actions_for(_doc(), opts)], opts, out, sleep=lambda s: None, step=step,
                    confirm=lambda d, q: True) == ["PD6911-0001"]
-    assert asked[:3] == [("หัวเอกสาร", "กด F4"), ("หัวเอกสาร แผนก", "พิมพ์ “SET”"), ("หัวเอกสาร", "กด Enter")]
-    assert len(asked) == 3 and out.typed[:2] == ["{F4}", "SET"]
+    assert asked[:3] == [("หัวเอกสาร", "กด F4"), ("หัวเอกสาร", "กด Enter"), ("หัวเอกสาร วันที่", "พิมพ์ “08/07/69”")]
+    assert len(asked) == 3 and out.typed[:3] == ["{F4}", "{ENTER}", "08/07/69"]
     with pytest.raises(bot.Stopped) as e:
         bot.run([bot.actions_for(_doc(), opts)], opts, Fake(), sleep=lambda s: None, step=lambda *a: len(asked) < 0,
                 confirm=lambda d, q: True)
     assert "ทีละขั้น" in str(e.value)
     assert bot.describe(bot.Action("key", "ENTER", 2)) == "กด Enter 2 ครั้ง"
     assert bot.describe(bot.Action("wait", "400")) == "รอ 0.4 วินาที"
+
+
+def test_express_popups_stop_the_run_and_negative_quantities():
+    """The store's try: a code Express does not have opened its look-up list and the next Enter took its first item
+    (10000 on every line); a negative quantity brings a message. A window of Express in front of its screen stops
+    the run before typing into it; a quantity below 0 is keyed as 0 (said before the run)."""
+
+    class Popping(Fake):
+        def __init__(self, after):
+            super().__init__()
+            self.after = after
+
+        def popup(self):
+            return "ค้นหาสินค้า" if len(self.typed) >= self.after else None
+
+    opts = bot.BotOptions(delay_ms=0)
+    out = Popping(after=7)
+    with pytest.raises(bot.Stopped) as e:
+        bot.run([bot.actions_for(_doc(), opts)], opts, out, sleep=lambda s: None)
+    assert "ค้นหาสินค้า" in str(e.value) and len(out.typed) == 7 and e.value.partial == "PD6911-0001"
+    doc = _doc()
+    doc.lines[0].qty = -3
+    texts = [a.value for a in bot.actions_for(doc, opts) if a.kind == "text"]
+    assert texts[4:6] == ["01", "0"]  # code 9900001, คลัง 01, จำนวน 0
+    assert any("ติดลบ → คีย์เป็น 0" in p for p in bot.doc_problems(doc, opts))
+    opts.zero_negative = False
+    assert [a.value for a in bot.actions_for(doc, opts) if a.kind == "text"][5] == "-3"
+    known = bot.BotOptions(known_codes=frozenset({"9900001"}))
+    assert any("STORE-67-0253" in p and "ไม่มีในรายการสินค้า" in p for p in bot.doc_problems(_doc(), known))
+
+
+def test_templates_saved_from_an_old_default_take_the_new_one():
+    old_head = next(iter(t for t in bot.OLD_DEFAULTS[bot.HEAD] if "[แผนก]{ENTER}{WAIT 300}[หมายเหตุ]" in t))
+    assert bot.current_template("PD", bot.HEAD, old_head) == bot.DEFAULT_TEMPLATES["PD"][bot.HEAD]
+    mine = "{F4}{WAIT 900}{TAB}[วันที่]"
+    assert bot.current_template("PD", bot.HEAD, mine) == mine  # changed by hand: kept

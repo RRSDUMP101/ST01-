@@ -46,7 +46,11 @@ MODIFIERS = ("CTRL", "ALT", "SHIFT")
 # <F8>: รหัส, รายละเอียด (filled by Express), คลัง, จำนวน, หน่วย (filled), ราคาต่อหน่วย (Express costs the stock)).
 _NEW_DOC = ("{CONFIRM หน้าต่างด้านหน้าคือหน้าจอเอกสารชนิดนี้ใน Express ของบริษัทที่ถูกต้อง และยังไม่มีใบค้างอยู่?}"
             "{F4}{WAIT 1200}")
-_ISSUE = {HEAD: _NEW_DOC + "[แผนก]{ENTER}{WAIT 300}[หมายเหตุ]{ENTER}{ENTER}[วันที่]{ENTER}{F8}{WAIT 600}",
+# After {F4} (a new document) Express puts the cursor in เลขที่เอกสาร with its running number (PD…, OUST01…): seen
+# on the store's tries, where the first field typed landed there ("PDตัดเลเซอร์", "OUST01"). So {ENTER} first keeps
+# Express's number; then วันที่, หมายเหตุ, สำหรับแผนก as the cursor went on those tries - check once with ทดลองทีละขั้น.
+_ISSUE = {HEAD: _NEW_DOC + "{ENTER}{WAIT 300}[วันที่]{ENTER}{WAIT 300}[หมายเหตุ]{ENTER}{WAIT 300}[แผนก]{ENTER}"
+                           "{WAIT 500}{F8}{WAIT 600}",
           LINE: "[รหัส]{ENTER}{WAIT 400}{ENTER}[คลัง]{ENTER}[จำนวน]{ENTER}{ENTER}{ENTER}{WAIT 200}",
           END: "{STOP}"}
 DEFAULT_TEMPLATES: dict[str, dict[str, str]] = {
@@ -54,12 +58,27 @@ DEFAULT_TEMPLATES: dict[str, dict[str, str]] = {
     "OU": dict(_ISSUE),
     "FR": dict(_ISSUE),
     "AJ": dict(_ISSUE),
-    "RR": {HEAD: _NEW_DOC + "[ผู้จำหน่าย]{ENTER}{WAIT 500}[อ้างอิง]{ENTER}[แผนก]{ENTER}{ENTER}[วันที่]{ENTER}"
-                 "{F8}{WAIT 600}",
+    "RR": {HEAD: _NEW_DOC + "{ENTER}{WAIT 300}[ผู้จำหน่าย]{ENTER}{WAIT 500}[อ้างอิง]{ENTER}[แผนก]{ENTER}{ENTER}"
+                 "[วันที่]{ENTER}{F8}{WAIT 600}",
            LINE: "[รหัส]{ENTER}{WAIT 400}{ENTER}[คลัง]{ENTER}[จำนวน]{ENTER}{ENTER}[ราคาต่อหน่วย]{ENTER}{ENTER}"
                  "{ENTER}{WAIT 200}",
            END: "{STOP}"},
 }
+# the defaults shipped before: a template saved unchanged from one of them is replaced by the default of now
+OLD_DEFAULTS = {
+    HEAD: {_NEW_DOC + "[แผนก]{ENTER}{WAIT 300}[หมายเหตุ]{ENTER}{ENTER}[วันที่]{ENTER}{F8}{WAIT 600}",
+           _NEW_DOC + "[ผู้จำหน่าย]{ENTER}{WAIT 500}[อ้างอิง]{ENTER}[แผนก]{ENTER}{ENTER}[วันที่]{ENTER}{F8}{WAIT 600}",
+           "{F4}{WAIT 1200}[แผนก]{ENTER}{WAIT 300}[หมายเหตุ]{ENTER}{ENTER}[วันที่]{ENTER}{F8}{WAIT 600}",
+           ("{F4}{WAIT 1200}[ผู้จำหน่าย]{ENTER}{WAIT 500}[อ้างอิง]{ENTER}[แผนก]{ENTER}{ENTER}[วันที่]{ENTER}"
+            "{F8}{WAIT 600}")},
+}
+
+
+def current_template(doc_type: str, section: str, saved: str) -> str:
+    """A saved template, or today's default when it was saved unchanged from an old default."""
+    if saved.strip() in OLD_DEFAULTS.get(section, set()) and doc_type in DEFAULT_TEMPLATES:
+        return DEFAULT_TEMPLATES[doc_type][section]
+    return saved
 SCREEN_HINTS = {"PD": "4.สินค้า → PD - จ่ายวัตถุดิบเพื่อผลิต", "OU": "4.สินค้า → OU - จ่ายสินค้าใช้ภายใน",
                 "RR": "1.ซื้อ → RR - รับสินค้า", "FR": "4.สินค้า → FR - รับสินค้าสำเร็จรูปจากการผลิต",
                 "AJ": "4.สินค้า → JU - ปรับปรุงเพิ่ม/ลดสินค้า (จำนวน = ส่วนต่าง +/−)"}
@@ -97,6 +116,9 @@ class BotOptions:
     warehouses: list[str] = field(default_factory=list)  # the codes of คลัง in Express ("" list = not checked)
     check_screen: bool = True  # stop when the title of the window says another screen (OU open, a PD to key)
     step: bool = False  # ทดลองทีละขั้น: wait for a person before every field / key (to fit a template to Express)
+    zero_negative: bool = True  # a quantity below 0 is keyed as 0 (Express refuses it with a message, the run breaks)
+    known_codes: frozenset = frozenset()  # the item codes of Express known here ("" = not checked)
+    settle_ms: int = 150  # after Enter / a function key: time for Express to open a look-up list or a message
 
 
 class TemplateError(ValueError):
@@ -121,7 +143,14 @@ def line_values(doc: StockDoc, i: int, options: BotOptions) -> dict[str, str]:
     ln = doc.lines[i]
     return {"no": str(i + 1), "code": ln.code, "name": ln.name,
             "warehouse": warehouse_of(ln.warehouse, Options(warehouse=options.warehouse)),
-            "qty": _num(float(ln.qty)), "unit": ln.unit, "unit_cost": _num(float(ln.unit_cost)), "remark": ln.remark}
+            "qty": _num(key_qty(ln.qty, options)), "unit": ln.unit, "unit_cost": _num(float(ln.unit_cost)),
+            "remark": ln.remark}
+
+
+def key_qty(qty, options: BotOptions) -> float:
+    """The quantity typed into Express: a negative one as 0 (Express refuses it, with a message that stops the run)."""
+    q = float(qty or 0)
+    return 0.0 if q < 0 and options.zero_negative else q
 
 
 # ---- the Express screen: what the title of its window says (Express Accounting - PD - จ่ายวัตถุดิบเพื่อผลิต - […]) ----
@@ -172,8 +201,15 @@ def doc_problems(doc: StockDoc, options: BotOptions) -> list[str]:
             out.append(f"{doc.doc_no} บรรทัด {i}: ไม่มีรหัสสินค้า")
         elif ln.code != ln.code.strip() or "  " in ln.code:
             out.append(f"{doc.doc_no} บรรทัด {i}: รหัส “{ln.code}” มีช่องว่างหน้า/หลัง/ซ้อน – ต้องตรงกับรหัสใน Express ทุกตัว")
-        if not float(ln.qty or 0):
+        q = float(ln.qty or 0)
+        if q < 0 and options.zero_negative:
+            out.append(f"{doc.doc_no} บรรทัด {i} ({ln.code}): จำนวน {_num(q)} ติดลบ → คีย์เป็น 0 "
+                       "(Express ไม่รับจำนวนติดลบ – ขึ้นข้อความเตือนแล้วการคีย์หยุด)")
+        elif not q:
             out.append(f"{doc.doc_no} บรรทัด {i} ({ln.code}): จำนวน 0")
+        if options.known_codes and ln.code.strip() and ln.code.strip().upper() not in options.known_codes:
+            out.append(f"{doc.doc_no} บรรทัด {i}: รหัส “{ln.code}” ไม่มีในรายการสินค้าของ Express ที่นำเข้าไว้ – "
+                       "ถ้าไม่มีใน Express ด้วย Express จะเปิดหน้าค้นหาสินค้า (โปรแกรมจะหยุด) · ตรวจว่าเปิดบริษัทถูกต้อง")
         if stores and wh.upper() not in stores:
             out.append(f"{doc.doc_no} บรรทัด {i} ({ln.code}): คลัง “{wh}” ไม่มีในรหัสคลังของ Express")
     remark = express_remark(doc, options.remark_ref)
@@ -402,6 +438,11 @@ class Output:
         """The title of the window typed into, now (Express puts the screen in it: … - PD - จ่ายวัตถุดิบเพื่อผลิต)."""
         return ""
 
+    def popup(self) -> str | None:
+        """A window of Express in front of its screen - a look-up list (รหัสไม่พบ → ค้นหาสินค้า / แผนก) or a message
+        (จำนวนติดลบ …): its title ("" when it has none), None when there is none. Typing on would go into it."""
+        return None
+
     def text(self, text: str, paste: bool = False) -> None:
         raise NotImplementedError
 
@@ -439,6 +480,13 @@ def run(docs_actions: list[list[Action]], options: BotOptions, out: Output, prog
             sleep(step)
             left -= step
 
+    def popup_check(where: str) -> None:
+        shown = out.popup()
+        if shown is not None:
+            raise stop(f"{state['current']}: Express เปิดหน้าต่าง “{shown or 'ไม่มีชื่อ'}” ก่อน{where} – หน้าค้นหา "
+                       "(รหัสสินค้า / แผนก ไม่มีใน Express) หรือข้อความเตือน: หยุดก่อนพิมพ์ต่อลงไปในนั้น · ดูข้อความใน Express "
+                       "แล้วปิด/ยกเลิกใบนั้นใน Express แก้ใบในโปรแกรม แล้วคีย์ใหม่")
+
     if not out.activate(options.window):
         raise Stopped(f"ไม่พบหน้าต่างที่ชื่อมี “{options.window}” – เปิด Express (หน้าจอเอกสาร) ไว้ก่อน")
     total = sum(len(a) for a in docs_actions)
@@ -450,6 +498,8 @@ def run(docs_actions: list[list[Action]], options: BotOptions, out: Output, prog
         stepping = options.step and step is not None
         for a in actions:
             check()
+            if a.kind in ("text", "key"):
+                popup_check(a.label)
             if a.kind in ("text", "key") and not out.still_there(options.window):
                 raise stop(f"หน้าต่าง {options.window} ไม่ได้อยู่ด้านหน้า – หยุดเพื่อไม่ให้พิมพ์ผิดที่")
             if a.kind in ("text", "key") and stepping:
@@ -489,6 +539,8 @@ def run(docs_actions: list[list[Action]], options: BotOptions, out: Output, prog
                     raise stop(f"ไม่พบหน้าต่าง {options.window}")
             if a.kind in ("text", "key"):
                 pause(options.delay_ms)
+            if a.kind == "key" and a.value.split("+")[-1] in ("ENTER", "TAB", "F2", "F4", "F8", "F10"):
+                pause(options.settle_ms)  # Express may open a list or a message now: seen before the next key
             done += 1
             if progress:
                 progress(done, total, a.label)
@@ -636,6 +688,15 @@ class WindowsKeyboard(Output):
     def still_there(self, title: str) -> bool:
         fg = self.user32.GetForegroundWindow()
         return bool(fg) and (fg == self.hwnd or self.user32.GetAncestor(fg, 3) == self.hwnd)
+
+    def popup(self) -> str | None:
+        fg = self.user32.GetForegroundWindow()
+        if not fg or not self.hwnd or fg == self.hwnd or self.user32.GetAncestor(fg, 3) != self.hwnd:
+            return None  # Express's own window in front (or not Express at all: still_there says so)
+        n = self.user32.GetWindowTextLengthW(fg)
+        buf = self.ctypes.create_unicode_buffer(n + 1)
+        self.user32.GetWindowTextW(fg, buf, n + 1)
+        return buf.value
 
     def title(self) -> str:
         if not self.hwnd:

@@ -1460,7 +1460,9 @@ def test_express_bot_dialog_types_and_asks_the_number(window, app, monkeypatch):
         app.processEvents()
         time.sleep(0.01)
     assert d.worker is None
-    assert Fake.typed[:4] == ["{F4}", "ST01", "{ENTER}", "ช่างท๊อปฟู"] and "ST69-0001" in Fake.typed and "15" in Fake.typed
+    # เลขที่เอกสาร first (Enter keeps Express's number), then วันที่, หมายเหตุ, แผนก
+    assert Fake.typed[:2] == ["{F4}", "{ENTER}"] and Fake.typed[4:6] == ["ช่างท๊อปฟู", "{ENTER}"]
+    assert Fake.typed[6] == "ST01" and "ST69-0001" in Fake.typed and "15" in Fake.typed
     assert doc.express_no == "OU6900001" and doc.keyed_at and not doc.key_partial
     assert any("หน้าจอเอกสารชนิดนี้" in q for q, _t in asked)  # the {CONFIRM} before the new-document key
     tone, body = asked[0][1]  # the box over Express: which window, which screen, what is typed

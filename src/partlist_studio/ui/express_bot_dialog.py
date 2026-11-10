@@ -43,9 +43,11 @@ def load_options(settings, warehouse: str = "01", department: str = "") -> bot.B
     opts.departments = [str(d) for d in data.get("departments", []) if str(d).strip()]
     opts.warehouses = [str(w) for w in data.get("warehouses", []) if str(w).strip()]
     opts.check_screen = bool(data.get("check_screen", opts.check_screen))
+    opts.zero_negative = bool(data.get("zero_negative", opts.zero_negative))
     for t, parts in (data.get("templates") or {}).items():
         if t in opts.templates and isinstance(parts, dict):
-            opts.templates[t].update({k: v for k, v in parts.items() if k in (bot.HEAD, bot.LINE, bot.END)})
+            opts.templates[t].update({k: bot.current_template(t, k, v) for k, v in parts.items()
+                                      if k in (bot.HEAD, bot.LINE, bot.END)})
     return opts
 
 
@@ -55,6 +57,7 @@ def save_options(settings, opts: bot.BotOptions) -> None:
                                            "confirm_first_only": opts.confirm_first_only,
                                            "remark_ref": opts.remark_ref, "departments": opts.departments,
                                            "warehouses": opts.warehouses, "check_screen": opts.check_screen,
+                                           "zero_negative": opts.zero_negative,
                                            "templates": opts.templates},
                                           ensure_ascii=False))
 
@@ -213,6 +216,8 @@ class ExpressBotDialog(QDialog):
         self.docs = docs
         s = state.settings
         self.options = load_options(s, s.get("express/warehouse", "01"), s.get("express/department", ""))
+        stock = getattr(state, "stock", None)  # the item list imported (Express): codes it does not have are said
+        self.options.known_codes = frozenset(i.code.strip().upper() for i in getattr(stock, "items", []) if i.code.strip())
         self.output_factory = output_factory or self._windows_output
         self.worker = None
         lay = QVBoxLayout(self)
@@ -291,6 +296,10 @@ class ExpressBotDialog(QDialog):
                                      "ถ้าเปิดหน้าจออื่นค้างไว้ โปรแกรมหยุดก่อนพิมพ์")
         self.check_screen.setChecked(self.options.check_screen)
         form.addRow("", self.check_screen)
+        self.zero_neg = QCheckBox("จำนวนติดลบ คีย์เป็น 0 (Express ไม่รับจำนวนติดลบ – ขึ้นข้อความแล้วการคีย์หยุด)")
+        self.zero_neg.setChecked(self.options.zero_negative)
+        self.zero_neg.toggled.connect(lambda *_: self._preview())
+        form.addRow("", self.zero_neg)
         self.step_box = QCheckBox("ทดลองทีละขั้น – หยุดก่อนทุกช่อง ดูว่าเคอร์เซอร์ใน Express อยู่ช่องที่ถูกต้อง")
         self.step_box.setToolTip("ใช้ตอนตั้งลำดับการกดครั้งแรกกับ Express จริง: หน้าต่างเล็กมุมจอบอกว่าจะพิมพ์อะไรต่อ "
                                  "ถ้าเคอร์เซอร์อยู่ผิดช่อง กด หยุด แล้วแก้ลำดับการกดทางขวา")
@@ -419,6 +428,7 @@ class ExpressBotDialog(QDialog):
         o.warehouses = split_codes(self.stores_edit.text())
         o.check_screen = self.check_screen.isChecked()
         o.step = self.step_box.isChecked()
+        o.zero_negative = self.zero_neg.isChecked()
         for t, edits in self.tpl_edits.items():
             o.templates[t] = {sec: e.toPlainText().strip() for sec, e in edits.items()}
         return o

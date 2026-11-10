@@ -253,3 +253,49 @@ def test_templates_saved_from_an_old_default_take_the_new_one():
     assert bot.current_template("PD", bot.HEAD, old_head) == bot.DEFAULT_TEMPLATES["PD"][bot.HEAD]
     mine = "{F4}{WAIT 900}{TAB}[วันที่]"
     assert bot.current_template("PD", bot.HEAD, mine) == mine  # changed by hand: kept
+
+
+def test_the_unit_window_of_express_is_answered_with_enter():
+    """The store's try: after the quantity Express asks ป้อนหน่วยนับที่รับ/จ่าย (an item with more than one unit), the
+    unit it puts there being the item's own: Enter until it closes, then the keying goes on. Not closing after a
+    few Enter, or another window: stop."""
+
+    class Units(Fake):
+        def __init__(self, opens_at, closes_after=2):
+            super().__init__()
+            self.opens_at, self.closes_after, self.open, self.enters = opens_at, closes_after, False, 0
+
+        def key(self, name, times=1):
+            was_open = self.open
+            super().key(name, times)
+            if was_open and name == "ENTER":
+                self.enters += 1
+                if self.enters >= self.closes_after:
+                    self.open = False
+            self._maybe_open()
+
+        def text(self, text, paste=False):
+            super().text(text, paste)
+            self._maybe_open()
+
+        def _maybe_open(self):
+            if len(self.typed) == self.opens_at and not self.enters:
+                self.open = True
+
+        def popup(self):
+            return "ป้อนหน่วยนับที่รับ/จ่าย" if self.open else None
+
+    opts = bot.BotOptions(delay_ms=0)
+    acts = [bot.actions_for(_doc(), opts)]
+    plain = Fake()
+    bot.run(acts, opts, plain, sleep=lambda s: None)
+    out = Units(opens_at=12)  # an Enter on line 1 opens it
+    assert bot.run(acts, opts, out, sleep=lambda s: None) == ["PD6911-0001"]
+    assert out.enters == 2 and len(out.typed) == len(plain.typed) + 2  # two Enter more, nothing else changed
+    stuck = Units(opens_at=12, closes_after=99)
+    with pytest.raises(bot.Stopped, match="ป้อนหน่วยนับ"):
+        bot.run(acts, opts, stuck, sleep=lambda s: None)
+    assert stuck.enters == 5
+    opts.popup_enter = []  # not answered: stop at once
+    with pytest.raises(bot.Stopped, match="ป้อนหน่วยนับ"):
+        bot.run(acts, opts, Units(opens_at=12), sleep=lambda s: None)

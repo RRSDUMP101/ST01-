@@ -44,6 +44,8 @@ def load_options(settings, warehouse: str = "01", department: str = "") -> bot.B
     opts.warehouses = [str(w) for w in data.get("warehouses", []) if str(w).strip()]
     opts.check_screen = bool(data.get("check_screen", opts.check_screen))
     opts.zero_negative = bool(data.get("zero_negative", opts.zero_negative))
+    if isinstance(data.get("popup_enter"), list):
+        opts.popup_enter = [str(p) for p in data["popup_enter"] if str(p).strip()]
     for t, parts in (data.get("templates") or {}).items():
         if t in opts.templates and isinstance(parts, dict):
             opts.templates[t].update({k: bot.current_template(t, k, v) for k, v in parts.items()
@@ -57,7 +59,7 @@ def save_options(settings, opts: bot.BotOptions) -> None:
                                            "confirm_first_only": opts.confirm_first_only,
                                            "remark_ref": opts.remark_ref, "departments": opts.departments,
                                            "warehouses": opts.warehouses, "check_screen": opts.check_screen,
-                                           "zero_negative": opts.zero_negative,
+                                           "zero_negative": opts.zero_negative, "popup_enter": opts.popup_enter,
                                            "templates": opts.templates},
                                           ensure_ascii=False))
 
@@ -300,6 +302,12 @@ class ExpressBotDialog(QDialog):
         self.zero_neg.setChecked(self.options.zero_negative)
         self.zero_neg.toggled.connect(lambda *_: self._preview())
         form.addRow("", self.zero_neg)
+        self.popup_edit = QLineEdit(", ".join(self.options.popup_enter))
+        self.popup_edit.setPlaceholderText("ป้อนหน่วยนับ (ว่าง = หยุดทุกหน้าต่าง)")
+        self.popup_edit.setToolTip("ชื่อหน้าต่างของ Express (บางส่วน) ที่โปรแกรมกด Enter ยืนยันให้แล้วคีย์ต่อ คั่นด้วย , – เช่น "
+                                   "ป้อนหน่วยนับที่รับ/จ่าย: ใช้หน่วยที่ Express เสนอ (หน่วยของสินค้า ตัวคูณ 1.0) · "
+                                   "หน้าต่างอื่น (ค้นหาสินค้า/แผนก, ข้อความเตือน) หยุดคีย์ทุกครั้ง")
+        form.addRow("หน้าต่าง Express ที่กด Enter ให้", self.popup_edit)
         self.step_box = QCheckBox("ทดลองทีละขั้น – หยุดก่อนทุกช่อง ดูว่าเคอร์เซอร์ใน Express อยู่ช่องที่ถูกต้อง")
         self.step_box.setToolTip("ใช้ตอนตั้งลำดับการกดครั้งแรกกับ Express จริง: หน้าต่างเล็กมุมจอบอกว่าจะพิมพ์อะไรต่อ "
                                  "ถ้าเคอร์เซอร์อยู่ผิดช่อง กด หยุด แล้วแก้ลำดับการกดทางขวา")
@@ -389,7 +397,7 @@ class ExpressBotDialog(QDialog):
             self.run_btn.setEnabled(False)
             self.status.setText("คีย์อัตโนมัติใช้ได้บน Windows ที่ติดตั้ง Express – เครื่องนี้ส่งออก AutoHotkey หรือดูลำดับได้")
         if not state.can(Perm.EXPRESS_CONFIG):
-            for w in (self.window_edit, self.process_edit, self.delay):
+            for w in (self.window_edit, self.process_edit, self.delay, self.popup_edit):
                 w.setEnabled(False)
         if self.doc_list.count():
             self.doc_list.setCurrentRow(0)
@@ -429,6 +437,7 @@ class ExpressBotDialog(QDialog):
         o.check_screen = self.check_screen.isChecked()
         o.step = self.step_box.isChecked()
         o.zero_negative = self.zero_neg.isChecked()
+        o.popup_enter = [p.strip() for p in self.popup_edit.text().split(",") if p.strip()]
         for t, edits in self.tpl_edits.items():
             o.templates[t] = {sec: e.toPlainText().strip() for sec, e in edits.items()}
         return o

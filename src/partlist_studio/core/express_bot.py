@@ -105,6 +105,9 @@ class Action:
     doc_type: str = ""  # on the doc action
 
 
+POPUP_ENTER = ("ป้อนหน่วยนับ",)
+
+
 @dataclass
 class BotOptions:
     window: str = "Express"  # part of the title of the window to type into ("Notepad" / "Untitled" for a test run)
@@ -124,6 +127,10 @@ class BotOptions:
     zero_negative: bool = True  # a quantity below 0 is keyed as 0 (Express refuses it with a message, the run breaks)
     known_codes: frozenset = frozenset()  # the item codes of Express known here ("" = not checked)
     settle_ms: int = 150  # after Enter / a function key: time for Express to open a look-up list or a message
+    # windows of Express answered with Enter, by a part of their title: ป้อนหน่วยนับที่รับ/จ่าย comes up on a line
+    # whose item has more than one unit - the unit Express puts there is the item's own (ตัวคูณ 1.0), so Enter
+    # until it closes keeps it, and the keying goes on. Any other window stops the run.
+    popup_enter: list[str] = field(default_factory=lambda: list(POPUP_ENTER))
 
 
 class TemplateError(ValueError):
@@ -500,6 +507,15 @@ def run(docs_actions: list[list[Action]], options: BotOptions, out: Output, prog
 
     def popup_check(where: str) -> None:
         shown = out.popup()
+        if shown is not None and any(p and p in shown for p in options.popup_enter):
+            for _ in range(5):  # the fields of the window, then its ตกลง: Enter until it is gone
+                out.key("ENTER")
+                pause(max(options.settle_ms, 250))
+                shown = out.popup()
+                if shown is None:
+                    break
+            if progress and shown is None:
+                progress(done, total, f"{where} – ตอบหน้าต่าง Express ด้วย Enter (ใช้หน่วยที่ Express เสนอ)")
         if shown is not None:
             raise stop(f"{state['current']}: Express เปิดหน้าต่าง “{shown or 'ไม่มีชื่อ'}” ก่อน{where} – หน้าค้นหา "
                        "(รหัสสินค้า / แผนก ไม่มีใน Express) หรือข้อความเตือน: หยุดก่อนพิมพ์ต่อลงไปในนั้น · ดูข้อความใน Express "
@@ -516,8 +532,8 @@ def run(docs_actions: list[list[Action]], options: BotOptions, out: Output, prog
         stepping = options.step and step is not None
         for a in actions:
             check()
-            if a.kind in ("text", "key"):
-                popup_check(a.label)
+            if a.kind in ("text", "key", "stop"):
+                popup_check(a.label or "หยุดตรวจ")
             if a.kind in ("text", "key") and not out.still_there(options.window):
                 raise stop(f"หน้าต่าง {options.window} ไม่ได้อยู่ด้านหน้า – หยุดเพื่อไม่ให้พิมพ์ผิดที่")
             if a.kind in ("text", "key") and stepping:

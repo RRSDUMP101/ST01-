@@ -289,16 +289,16 @@ def test_the_unit_window_of_express_is_answered_with_enter():
     acts = [bot.actions_for(_doc(), opts)]
     plain = Fake()
     bot.run(acts, opts, plain, sleep=lambda s: None)
-    out = Units(opens_at=12)  # an Enter on line 1 opens it
+    out = Units(opens_at=16)  # the Enter after จำนวน of line 1 opens it
     assert bot.run(acts, opts, out, sleep=lambda s: None) == ["PD6911-0001"]
     assert out.enters == 2 and len(out.typed) == len(plain.typed) + 2  # two Enter more, nothing else changed
-    stuck = Units(opens_at=12, closes_after=99)
+    stuck = Units(opens_at=16, closes_after=99)
     with pytest.raises(bot.Stopped, match="ป้อนหน่วยนับ"):
         bot.run(acts, opts, stuck, sleep=lambda s: None)
     assert stuck.enters == 5
     opts.popup_enter = []  # not answered: stop at once
     with pytest.raises(bot.Stopped, match="ป้อนหน่วยนับ"):
-        bot.run(acts, opts, Units(opens_at=12), sleep=lambda s: None)
+        bot.run(acts, opts, Units(opens_at=16), sleep=lambda s: None)
 
 
 def test_the_item_look_up_of_express_takes_the_code_typed_when_express_has_it():
@@ -347,9 +347,12 @@ def test_a_line_as_the_express_grid_moves():
     opts = bot.BotOptions(delay_ms=0)
     acts = bot.actions_for(_doc(), opts)
     first = next(i for i, a in enumerate(acts) if a.kind == "text" and a.value == "9900001")
-    line = [(a.kind, a.value) for a in acts[first:] if a.kind in ("text", "key")][:6]
-    assert line == [("text", "9900001"), ("key", "ENTER"), ("text", "01"), ("key", "ENTER"), ("text", "6"),
-                    ("key", "ENTER")]
+    line = [(a.kind, a.value, a.times) for a in acts[first:] if a.kind in ("text", "key")][:8]
+    # คลัง already holds Express's 01 and typing adds to it ("0101"): emptied first
+    assert line == [("text", "9900001", 1), ("key", "ENTER", 1), ("key", "END", 1), ("key", "BACKSPACE", 12),
+                    ("text", "01", 1), ("key", "ENTER", 1), ("text", "6", 1), ("key", "ENTER", 1)]
+    shipped = "[รหัส]{ENTER}{WAIT 400}[คลัง]{ENTER}[จำนวน]{ENTER}{WAIT 400}"
+    assert bot.current_template("PD", bot.LINE, shipped) == bot.DEFAULT_TEMPLATES["PD"][bot.LINE]
     old = "[รหัส]{ENTER}{WAIT 400}{ENTER}[คลัง]{ENTER}[จำนวน]{ENTER}{ENTER}{ENTER}{WAIT 200}"
     assert bot.current_template("PD", bot.LINE, old) == bot.DEFAULT_TEMPLATES["PD"][bot.LINE]
 

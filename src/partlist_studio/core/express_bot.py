@@ -53,9 +53,10 @@ _NEW_DOC = ("{CONFIRM หน้าต่างด้านหน้าคือ�
 _ISSUE = {HEAD: _NEW_DOC + "{ENTER}{WAIT 300}[วันที่]{ENTER}{WAIT 300}{ENTER}{WAIT 300}[หมายเหตุ]{ENTER}"
                            "{WAIT 500}{F8}{WAIT 600}",
           # a line: after รหัส + Enter Express fills รายละเอียด and puts the cursor in คลัง (it skips รายละเอียด);
-          # after จำนวน + Enter it asks ป้อนหน่วยนับ (answered with Enter) and goes to รหัส of the next line - seen
-          # on the store's try, where one Enter too many put "01" in จำนวน and จำนวน in the next line's รหัส
-          LINE: "[รหัส]{ENTER}{WAIT 400}[คลัง]{ENTER}[จำนวน]{ENTER}{WAIT 400}",
+          # คลัง already holds the item's warehouse (01) and typing adds to it ("0101", then the look-up list of
+          # warehouses): {END}{BACKSPACE 12} empties it first. After จำนวน + Enter Express asks ป้อนหน่วยนับ
+          # (answered with Enter) and goes to รหัส of the next line - all seen on the store's tries
+          LINE: "[รหัส]{ENTER}{WAIT 400}{END}{BACKSPACE 12}[คลัง]{ENTER}[จำนวน]{ENTER}{WAIT 400}",
           END: "{STOP}"}
 DEFAULT_TEMPLATES: dict[str, dict[str, str]] = {
     "PD": dict(_ISSUE),
@@ -64,12 +65,15 @@ DEFAULT_TEMPLATES: dict[str, dict[str, str]] = {
     "AJ": dict(_ISSUE),
     "RR": {HEAD: _NEW_DOC + "{ENTER}{WAIT 300}[ผู้จำหน่าย]{ENTER}{WAIT 500}[อ้างอิง]{ENTER}{ENTER}{ENTER}"
                  "[วันที่]{ENTER}{F8}{WAIT 600}",
-           LINE: "[รหัส]{ENTER}{WAIT 400}[คลัง]{ENTER}[จำนวน]{ENTER}{WAIT 400}[ราคาต่อหน่วย]{ENTER}{WAIT 300}",
+           LINE: "[รหัส]{ENTER}{WAIT 400}{END}{BACKSPACE 12}[คลัง]{ENTER}[จำนวน]{ENTER}{WAIT 400}"
+                 "[ราคาต่อหน่วย]{ENTER}{WAIT 300}",
            END: "{STOP}"},
 }
 # the defaults shipped before: a template saved unchanged from one of them is replaced by the default of now
 OLD_DEFAULTS = {
-    LINE: {"[รหัส]{ENTER}{WAIT 400}{ENTER}[คลัง]{ENTER}[จำนวน]{ENTER}{ENTER}{ENTER}{WAIT 200}",
+    LINE: {"[รหัส]{ENTER}{WAIT 400}[คลัง]{ENTER}[จำนวน]{ENTER}{WAIT 400}",
+           "[รหัส]{ENTER}{WAIT 400}[คลัง]{ENTER}[จำนวน]{ENTER}{WAIT 400}[ราคาต่อหน่วย]{ENTER}{WAIT 300}",
+           "[รหัส]{ENTER}{WAIT 400}{ENTER}[คลัง]{ENTER}[จำนวน]{ENTER}{ENTER}{ENTER}{WAIT 200}",
            "[รหัส]{ENTER}{WAIT 400}{ENTER}[คลัง]{ENTER}[จำนวน]{ENTER}{ENTER}[ราคาต่อหน่วย]{ENTER}{ENTER}{ENTER}{WAIT 200}"},
     HEAD: {_NEW_DOC + "[แผนก]{ENTER}{WAIT 300}[หมายเหตุ]{ENTER}{ENTER}[วันที่]{ENTER}{F8}{WAIT 600}",
            _NEW_DOC + "[ผู้จำหน่าย]{ENTER}{WAIT 500}[อ้างอิง]{ENTER}[แผนก]{ENTER}{ENTER}[วันที่]{ENTER}{F8}{WAIT 600}",

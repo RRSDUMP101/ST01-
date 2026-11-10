@@ -338,3 +338,24 @@ def test_the_item_look_up_of_express_takes_the_code_typed_when_express_has_it():
     opts = bot.BotOptions(delay_ms=0, known_codes=known, pick_code=False)
     with pytest.raises(bot.Stopped, match="Express เปิดหน้าต่าง"):
         bot.run([bot.actions_for(_doc(), opts)], opts, LookUp(), sleep=lambda s: None)
+
+
+def test_a_line_as_the_express_grid_moves():
+    """The store's try: after รหัส + Enter the grid of Express puts the cursor in คลัง (รายละเอียด filled, skipped);
+    after จำนวน + Enter comes ป้อนหน่วยนับ then รหัส of the next line. One Enter too many had put "01" in จำนวน and
+    จำนวน in the next line's รหัส - so a line is รหัส Enter คลัง Enter จำนวน Enter; an old saved line takes it."""
+    opts = bot.BotOptions(delay_ms=0)
+    acts = bot.actions_for(_doc(), opts)
+    first = next(i for i, a in enumerate(acts) if a.kind == "text" and a.value == "9900001")
+    line = [(a.kind, a.value) for a in acts[first:] if a.kind in ("text", "key")][:6]
+    assert line == [("text", "9900001"), ("key", "ENTER"), ("text", "01"), ("key", "ENTER"), ("text", "6"),
+                    ("key", "ENTER")]
+    old = "[รหัส]{ENTER}{WAIT 400}{ENTER}[คลัง]{ENTER}[จำนวน]{ENTER}{ENTER}{ENTER}{WAIT 200}"
+    assert bot.current_template("PD", bot.LINE, old) == bot.DEFAULT_TEMPLATES["PD"][bot.LINE]
+
+    class Shifted(Fake):  # the quantity typed into the next line's รหัส: Express opens its look-up list
+        def popup(self):
+            return "" if len(self.typed) > 1 and self.typed[-2] == "6" else None
+
+    with pytest.raises(bot.Stopped, match="หลังพิมพ์ “6”.*ลำดับการกดไม่ตรง"):
+        bot.run([acts], opts, Shifted(), sleep=lambda s: None)

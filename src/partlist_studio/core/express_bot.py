@@ -52,7 +52,10 @@ _NEW_DOC = ("{CONFIRM หน้าต่างด้านหน้าคือ�
 # หมายเหตุ carries the job and the แผนก of this program ("JOB-001 ตัดเลเซอร์").
 _ISSUE = {HEAD: _NEW_DOC + "{ENTER}{WAIT 300}[วันที่]{ENTER}{WAIT 300}{ENTER}{WAIT 300}[หมายเหตุ]{ENTER}"
                            "{WAIT 500}{F8}{WAIT 600}",
-          LINE: "[รหัส]{ENTER}{WAIT 400}{ENTER}[คลัง]{ENTER}[จำนวน]{ENTER}{ENTER}{ENTER}{WAIT 200}",
+          # a line: after รหัส + Enter Express fills รายละเอียด and puts the cursor in คลัง (it skips รายละเอียด);
+          # after จำนวน + Enter it asks ป้อนหน่วยนับ (answered with Enter) and goes to รหัส of the next line - seen
+          # on the store's try, where one Enter too many put "01" in จำนวน and จำนวน in the next line's รหัส
+          LINE: "[รหัส]{ENTER}{WAIT 400}[คลัง]{ENTER}[จำนวน]{ENTER}{WAIT 400}",
           END: "{STOP}"}
 DEFAULT_TEMPLATES: dict[str, dict[str, str]] = {
     "PD": dict(_ISSUE),
@@ -61,12 +64,13 @@ DEFAULT_TEMPLATES: dict[str, dict[str, str]] = {
     "AJ": dict(_ISSUE),
     "RR": {HEAD: _NEW_DOC + "{ENTER}{WAIT 300}[ผู้จำหน่าย]{ENTER}{WAIT 500}[อ้างอิง]{ENTER}{ENTER}{ENTER}"
                  "[วันที่]{ENTER}{F8}{WAIT 600}",
-           LINE: "[รหัส]{ENTER}{WAIT 400}{ENTER}[คลัง]{ENTER}[จำนวน]{ENTER}{ENTER}[ราคาต่อหน่วย]{ENTER}{ENTER}"
-                 "{ENTER}{WAIT 200}",
+           LINE: "[รหัส]{ENTER}{WAIT 400}[คลัง]{ENTER}[จำนวน]{ENTER}{WAIT 400}[ราคาต่อหน่วย]{ENTER}{WAIT 300}",
            END: "{STOP}"},
 }
 # the defaults shipped before: a template saved unchanged from one of them is replaced by the default of now
 OLD_DEFAULTS = {
+    LINE: {"[รหัส]{ENTER}{WAIT 400}{ENTER}[คลัง]{ENTER}[จำนวน]{ENTER}{ENTER}{ENTER}{WAIT 200}",
+           "[รหัส]{ENTER}{WAIT 400}{ENTER}[คลัง]{ENTER}[จำนวน]{ENTER}{ENTER}[ราคาต่อหน่วย]{ENTER}{ENTER}{ENTER}{WAIT 200}"},
     HEAD: {_NEW_DOC + "[แผนก]{ENTER}{WAIT 300}[หมายเหตุ]{ENTER}{ENTER}[วันที่]{ENTER}{F8}{WAIT 600}",
            _NEW_DOC + "[ผู้จำหน่าย]{ENTER}{WAIT 500}[อ้างอิง]{ENTER}[แผนก]{ENTER}{ENTER}[วันที่]{ENTER}{F8}{WAIT 600}",
            "{F4}{WAIT 1200}[แผนก]{ENTER}{WAIT 300}[หมายเหตุ]{ENTER}{ENTER}[วันที่]{ENTER}{F8}{WAIT 600}",
@@ -533,6 +537,11 @@ def run(docs_actions: list[list[Action]], options: BotOptions, out: Output, prog
                     break
             if progress and shown is None:
                 progress(done, total, f"{where} – ตอบหน้าต่าง Express ด้วย Enter (ใช้หน่วยที่ Express เสนอ)")
+        if shown is not None and state["last_label"] and not code:
+            raise stop(f"{state['current']}: Express เปิดหน้าต่าง “{shown or 'ไม่มีชื่อ'}” หลังพิมพ์ "
+                       f"“{state['last_text']}” ({state['last_label']}) – ค่านี้ไปลงช่องที่ไม่ใช่ของมัน (เช่น รหัสของบรรทัดถัดไป): "
+                       "ลำดับการกดไม่ตรงกับหน้าจอ Express · ลองใบเดียวด้วย ทดลองทีละขั้น แล้วแก้ลำดับการกด · "
+                       "ใน Express: ยกเลิก/ปิดใบนั้นโดยไม่บันทึก")
         if shown is not None:
             raise stop(f"{state['current']}: Express เปิดหน้าต่าง “{shown or 'ไม่มีชื่อ'}” ก่อน{where} – หน้าค้นหา "
                        "(รหัสสินค้า / แผนก ไม่มีใน Express) หรือข้อความเตือน: หยุดก่อนพิมพ์ต่อลงไปในนั้น · ดูข้อความใน Express "

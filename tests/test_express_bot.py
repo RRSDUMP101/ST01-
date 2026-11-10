@@ -299,3 +299,42 @@ def test_the_unit_window_of_express_is_answered_with_enter():
     opts.popup_enter = []  # not answered: stop at once
     with pytest.raises(bot.Stopped, match="ป้อนหน่วยนับ"):
         bot.run(acts, opts, Units(opens_at=12), sleep=lambda s: None)
+
+
+def test_the_item_look_up_of_express_takes_the_code_typed_when_express_has_it():
+    """The store's try: RRS-A-001-250 typed, Express opened its look-up list of items with that row chosen. Enter
+    takes it - only for a code of the item list of Express held here; another code (or no list held): stop, as
+    Enter would take the nearest row."""
+
+    class LookUp(Fake):
+        def __init__(self):
+            super().__init__()
+            self.open = False
+
+        def text(self, text, paste=False):
+            super().text(text, paste)
+            if text == "9900001":
+                self.open = True  # after the code (the next key) the list comes up
+
+        def key(self, name, times=1):
+            was = self.open
+            super().key(name, times)
+            if was and name == "ENTER" and self.typed[-2] != "9900001":
+                self.open = False  # an Enter inside the list takes the row
+
+        def popup(self):
+            return "" if self.open and self.typed[-1] != "9900001" else None
+
+    known = frozenset({"9900001", "STORE-67-0253"})
+    opts = bot.BotOptions(delay_ms=0, known_codes=known)
+    out = LookUp()
+    assert bot.run([bot.actions_for(_doc(), opts)], opts, out, sleep=lambda s: None) == ["PD6911-0001"]
+    plain = Fake()
+    bot.run([bot.actions_for(_doc(), opts)], opts, plain, sleep=lambda s: None)
+    assert len(out.typed) == len(plain.typed) + 1  # one Enter more, in the list
+    for opts in (bot.BotOptions(delay_ms=0, known_codes=frozenset({"STORE-67-0253"})), bot.BotOptions(delay_ms=0)):
+        with pytest.raises(bot.Stopped, match="หน้าค้นหาสินค้าที่รหัส “9900001”"):
+            bot.run([bot.actions_for(_doc(), opts)], opts, LookUp(), sleep=lambda s: None)
+    opts = bot.BotOptions(delay_ms=0, known_codes=known, pick_code=False)
+    with pytest.raises(bot.Stopped, match="Express เปิดหน้าต่าง"):
+        bot.run([bot.actions_for(_doc(), opts)], opts, LookUp(), sleep=lambda s: None)

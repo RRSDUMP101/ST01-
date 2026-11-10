@@ -131,6 +131,10 @@ class BotOptions:
     # whose item has more than one unit - the unit Express puts there is the item's own (ตัวคูณ 1.0), so Enter
     # until it closes keeps it, and the keying goes on. Any other window stops the run.
     popup_enter: list[str] = field(default_factory=lambda: list(POPUP_ENTER))
+    # the look-up list of items Express opens on a line (ค้นหาสินค้า) with the row of the code typed chosen: Enter
+    # takes it - only for a code of the item list of Express held here (known_codes), so never the nearest row of a
+    # code Express does not have (the store's first try took item 10000 on every line)
+    pick_code: bool = True
 
 
 class TemplateError(ValueError):
@@ -487,7 +491,7 @@ def run(docs_actions: list[list[Action]], options: BotOptions, out: Output, prog
     Returns the document numbers keyed (up to their {STOP} / end); a stop raises Stopped with the same list and the
     document left half-typed."""
     keyed: list[str] = []
-    state = {"current": "", "typed": False}
+    state = {"current": "", "typed": False, "last_text": "", "last_label": ""}
 
     def stop(message: str):
         partial = state["current"] if state["current"] and state["typed"] and state["current"] not in keyed else ""
@@ -507,6 +511,19 @@ def run(docs_actions: list[list[Action]], options: BotOptions, out: Output, prog
 
     def popup_check(where: str) -> None:
         shown = out.popup()
+        code = state["last_text"] if state["last_label"].endswith(" รหัส") else ""
+        if shown is not None and code and options.pick_code \
+                and not any(p and p in shown for p in options.popup_enter):
+            if code.strip().upper() not in options.known_codes:
+                why = ("ไม่มีในรายการสินค้าของ Express ที่นำเข้าไว้" if options.known_codes else
+                       "ตรวจไม่ได้ว่ามีใน Express (ยังไม่ได้นำเข้ารายการสินค้าของ Express ในหน้าสโตร์)")
+                raise stop(f"{state['current']}: Express เปิดหน้าค้นหาสินค้าที่รหัส “{code}” – รหัสนี้{why}: "
+                           "ไม่เลือกให้ เพราะ Enter จะได้สินค้าแถวที่ใกล้ที่สุด (ผิดตัว) · ตรวจรหัส / บริษัทใน Express")
+            out.key("ENTER")  # the row of the code typed is the chosen one: take it
+            pause(max(options.settle_ms, 300))
+            shown = out.popup()
+            if progress and shown is None:
+                progress(done, total, f"{where} – เลือก {code} ในหน้าค้นหาสินค้าของ Express")
         if shown is not None and any(p and p in shown for p in options.popup_enter):
             for _ in range(5):  # the fields of the window, then its ตกลง: Enter until it is gone
                 out.key("ENTER")
@@ -552,6 +569,7 @@ def run(docs_actions: list[list[Action]], options: BotOptions, out: Output, prog
             elif a.kind == "text":
                 out.text(a.value, options.paste_thai and not a.value.isascii())
                 state["typed"] = True
+                state["last_text"], state["last_label"] = a.value, a.label
             elif a.kind == "key":
                 out.key(a.value, a.times)
                 state["typed"] = True

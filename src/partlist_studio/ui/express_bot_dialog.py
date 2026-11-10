@@ -44,6 +44,7 @@ def load_options(settings, warehouse: str = "01", department: str = "") -> bot.B
     opts.warehouses = [str(w) for w in data.get("warehouses", []) if str(w).strip()]
     opts.check_screen = bool(data.get("check_screen", opts.check_screen))
     opts.zero_negative = bool(data.get("zero_negative", opts.zero_negative))
+    opts.pick_code = bool(data.get("pick_code", opts.pick_code))
     if isinstance(data.get("popup_enter"), list):
         opts.popup_enter = [str(p) for p in data["popup_enter"] if str(p).strip()]
     for t, parts in (data.get("templates") or {}).items():
@@ -60,6 +61,7 @@ def save_options(settings, opts: bot.BotOptions) -> None:
                                            "remark_ref": opts.remark_ref, "departments": opts.departments,
                                            "warehouses": opts.warehouses, "check_screen": opts.check_screen,
                                            "zero_negative": opts.zero_negative, "popup_enter": opts.popup_enter,
+                                           "pick_code": opts.pick_code,
                                            "templates": opts.templates},
                                           ensure_ascii=False))
 
@@ -308,6 +310,12 @@ class ExpressBotDialog(QDialog):
                                    "ป้อนหน่วยนับที่รับ/จ่าย: ใช้หน่วยที่ Express เสนอ (หน่วยของสินค้า ตัวคูณ 1.0) · "
                                    "หน้าต่างอื่น (ค้นหาสินค้า/แผนก, ข้อความเตือน) หยุดคีย์ทุกครั้ง")
         form.addRow("หน้าต่าง Express ที่กด Enter ให้", self.popup_edit)
+        self.pick_box = QCheckBox("หน้าค้นหาสินค้าของ Express ขึ้น: เลือกรหัสของใบให้ (เฉพาะรหัสที่มีในรายการสินค้า Express)")
+        self.pick_box.setToolTip("Express เปิดหน้าค้นหาสินค้าโดยเลือกแถวของรหัสที่พิมพ์ไว้แล้ว – โปรแกรมกด Enter รับแถวนั้น "
+                                 "เฉพาะเมื่อรหัสอยู่ในรายการสินค้าที่นำเข้าจาก Express (ผลตรวจวัตถุดิบเทียบสต็อกใช้รายการเดียวกัน) · "
+                                 "รหัสที่ไม่มี: หยุด ไม่เลือกแถวที่ใกล้ที่สุด")
+        self.pick_box.setChecked(self.options.pick_code)
+        form.addRow("", self.pick_box)
         self.step_box = QCheckBox("ทดลองทีละขั้น – หยุดก่อนทุกช่อง ดูว่าเคอร์เซอร์ใน Express อยู่ช่องที่ถูกต้อง")
         self.step_box.setToolTip("ใช้ตอนตั้งลำดับการกดครั้งแรกกับ Express จริง: หน้าต่างเล็กมุมจอบอกว่าจะพิมพ์อะไรต่อ "
                                  "ถ้าเคอร์เซอร์อยู่ผิดช่อง กด หยุด แล้วแก้ลำดับการกดทางขวา")
@@ -438,6 +446,7 @@ class ExpressBotDialog(QDialog):
         o.step = self.step_box.isChecked()
         o.zero_negative = self.zero_neg.isChecked()
         o.popup_enter = [p.strip() for p in self.popup_edit.text().split(",") if p.strip()]
+        o.pick_code = self.pick_box.isChecked()
         for t, edits in self.tpl_edits.items():
             o.templates[t] = {sec: e.toPlainText().strip() for sec, e in edits.items()}
         return o

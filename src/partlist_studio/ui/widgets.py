@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import gc
+import threading
 import traceback
 
 from PySide6.QtCore import QEvent, QObject, QPoint, QPointF, QRect, QRectF, QRunnable, QSize, Qt, QThreadPool, Signal
@@ -644,6 +646,7 @@ class Worker(QRunnable):
         self.signals = _Signals()
 
     def run(self):
+        _hold_gc(True)
         try:
             result = self.fn(*self.args, **self.kwargs)
         except Exception as exc:  # noqa: BLE001 - reported in the UI
@@ -651,12 +654,34 @@ class Worker(QRunnable):
             self.signals.failed.emit(str(exc))
         else:
             self.signals.done.emit(result)
+        finally:
+            _hold_gc(False)
 
 
 _ACTIVE: set[Worker] = set()
+# Python's garbage collector runs in whatever thread happens to allocate: inside a worker (reading a DXF makes
+# many objects) it could free widgets left over from the UI thread, and Qt objects freed off their thread crash
+# the program (seen in CI: a segfault "Garbage-collecting" in the DXF reader). So the UI thread collects before a
+# worker starts, and automatic collection waits while workers run (it is the same for the whole program).
+_GC = {"held": 0, "was_on": True}
+_GC_LOCK = threading.Lock()
+
+
+def _hold_gc(hold: bool) -> None:
+    with _GC_LOCK:
+        if hold:
+            if not _GC["held"]:
+                _GC["was_on"] = gc.isenabled()
+                gc.disable()
+            _GC["held"] += 1
+        else:
+            _GC["held"] = max(0, _GC["held"] - 1)
+            if not _GC["held"] and _GC["was_on"]:
+                gc.enable()
 
 
 def run_async(fn, on_done, on_error, *args, **kwargs) -> None:
+    gc.collect()  # leftovers of the UI thread freed here, on the UI thread
     worker = Worker(fn, *args, **kwargs)
     _ACTIVE.add(worker)
     QApplication.setOverrideCursor(Qt.BusyCursor)

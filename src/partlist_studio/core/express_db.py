@@ -234,3 +234,58 @@ def folder_ok(folder: str | Path) -> bool:
     return COMPANY_FILE in _files(Path(folder))
 
 
+# ---- the number Express gave a document just saved ------------------------------------------------------------------
+# Which table holds the stock documents is not assumed: the text field whose last records hold numbers of the
+# type (PD0000546 …) is found once and remembered (where); a document just saved is the last live record there.
+def _doc_no_re(prefix: str):
+    import re
+
+    return re.compile(rf"^{re.escape(prefix.upper())}[A-Z0-9*/-]{{3,14}}$")
+
+
+def find_doc_field(folder: str | Path, prefix: str, tail: int = 200) -> tuple[str, str] | None:
+    """(table, field) holding the numbers of documents of a type: the text field whose last records match most."""
+    want = _doc_no_re(prefix)
+    best, best_n = None, 0
+    for name, path in sorted(_files(Path(folder)).items()):
+        if not name.endswith(".DBF"):
+            continue
+        try:
+            t = DbfTable.open(path)
+        except (OSError, ValueError):
+            continue
+        fields = [f for f in t.fields if f.type in ("C", "V") and 6 <= f.length <= 20]
+        if not fields or not t.count:
+            continue
+        seen: dict[str, set] = {f.name: set() for f in fields}  # distinct numbers: a table of lines repeats them
+        try:
+            for rec in t.tail(tail):
+                for f in fields:
+                    v = rec.get(f.name)
+                    if isinstance(v, str) and want.match(v.strip().upper()):
+                        seen[f.name].add(v.strip().upper())
+        except OSError:
+            continue
+        name_f, n = max(((k, len(v)) for k, v in seen.items()), key=lambda kv: kv[1])
+        # a table of documents (one record each) beats one of lines (the same number on many records) at equal count
+        if n > best_n or (n == best_n and n and best and t.count < best[2]):
+            best, best_n = (name, name_f, t.count), n
+    return (best[0], best[1]) if best else None
+
+
+def last_doc_no(folder: str | Path, prefix: str, where: tuple[str, str] | None = None) -> tuple[str, tuple | None]:
+    """The number of the last document of a type saved in Express ("" when none), and where it was read."""
+    where = where or find_doc_field(folder, prefix)
+    if not where:
+        return "", None
+    want = _doc_no_re(prefix)
+    t = table(folder, where[0])
+    if t is None:
+        return "", None
+    for rec in reversed(t.tail(50)):
+        v = rec.get(where[1])
+        if isinstance(v, str) and want.match(v.strip().upper()):
+            return v.strip().upper(), where
+    return "", where
+
+

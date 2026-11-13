@@ -1594,3 +1594,63 @@ def test_express_practice_with_examples(window, app, monkeypatch, tmp_path):
     import openpyxl
 
     assert {"รายการส่ง Express", "ตัวอย่าง-PD", "ตัวอย่าง-JU"} <= set(openpyxl.load_workbook(out).sheetnames)
+
+
+def test_express_bot_reads_the_number_express_gave(window, app, monkeypatch, tmp_path):
+    """After บันทึกใน Express แล้ว the keying dialog reads the number Express gave (its files, read only): the new
+    last number of the type, put in the box of เลขที่ Express - the person checks it and presses OK."""
+    import time
+    from datetime import date
+
+    from test_express_db import make_dbf
+
+    from partlist_studio.core import express_bot as bot
+    from partlist_studio.core.movements import DocLine
+    from partlist_studio.ui import express_bot_dialog as dlg_mod
+
+    folder = tmp_path / "ffff"
+    folder.mkdir()
+    make_dbf(folder / "ISINFO.DBF", [("THINAM", "C", 60, 0)], [["บริษัทตัวอย่าง จำกัด"]])
+    head = [("DOCNUM", "C", 12, 0), ("DOCDAT", "D", 8, 0)]
+    rows = [["PD0000544", date(2026, 11, 10)], ["PD0000545", date(2026, 11, 12)]]
+    make_dbf(folder / "STCRDH.DBF", head, rows)
+    state = window.state
+    doc = state.ledger.new_doc("PD", [DocLine("RRS-A-012", "ราง 3 คู่หน้าเฟรมล่าง", 1, "ชิ้น")], job="JOB-001")
+    state.post_doc(doc)
+
+    class Fake(bot.Output):
+        def activate(self, title):
+            return True
+
+        def text(self, text, paste=False):
+            pass
+
+        def key(self, name, times=1):
+            pass
+
+    asked = []
+    monkeypatch.setattr(dlg_mod.QInputDialog, "getText",
+                        staticmethod(lambda *a, **k: asked.append(a) or (a[4] if len(a) > 4 else "", True)))
+    monkeypatch.setattr(dlg_mod.QMessageBox, "question", staticmethod(lambda *a, **k: dlg_mod.QMessageBox.Yes))
+    d = dlg_mod.ExpressBotDialog(state, [doc], window, output_factory=Fake)
+    d.data_folder.setText(str(folder))
+    d._folder_changed()
+    assert "บริษัทตัวอย่าง" in d.folder_note.text()
+
+    def saved_in_express(label):  # the person saves: Express writes the new document
+        make_dbf(folder / "STCRDH.DBF", head, [*rows, ["PD0000546", date(2026, 11, 13)]])
+        return "saved"
+
+    d.ask_saved = saved_in_express
+    d.ask_confirm = lambda doc_no, q: True
+    d.countdown_s = 0
+    d.delay.setValue(0)
+    d.start()
+    deadline = time.monotonic() + 20
+    while d.worker is not None and time.monotonic() < deadline:
+        app.processEvents()
+        time.sleep(0.01)
+    assert d.worker is None and doc.express_no == "PD0000546"
+    assert "อ่านจาก Express ได้ PD0000546" in asked[0][2] and asked[0][4] == "PD0000546"
+    assert state.settings.get(dlg_mod.DATA_FOLDER_KEY) == str(folder)
+    d.close()

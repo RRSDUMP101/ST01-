@@ -91,3 +91,25 @@ def test_never_writes_express_files():
     opens = re.findall(r"with open\(([^)]*)\)", source)  # every file the module opens
     assert opens and all(o.rstrip().endswith('"rb"') for o in opens)
     assert not re.search(r"write_bytes|write_text|\.write\(|\"wb\"|\"r\+b\"|\"ab\"|os\.remove|unlink|rename", source)
+
+
+def test_the_number_of_the_document_just_saved(tmp_path):
+    """After a document is saved in Express, its number is the last record of the table of documents of that type -
+    found once by the numbers in it (a table of lines repeats them; a table of another type does not match)."""
+    folder = tmp_path / "ffff"
+    folder.mkdir()
+    make_dbf(folder / "ISINFO.DBF", [("THINAM", "C", 60, 0)], [["บริษัทตัวอย่าง จำกัด"]])
+    head = [("DOCNUM", "C", 12, 0), ("DOCDAT", "D", 8, 0)]
+    make_dbf(folder / "STCRDH.DBF", head, [["PD0000544", date(2026, 11, 10)], ["OU6900001", date(2026, 11, 10)],
+                                            ["PD0000545", date(2026, 11, 12)]])
+    make_dbf(folder / "STCRDL.DBF", [("DOCNUM", "C", 12, 0), ("STKCOD", "C", 20, 0)],
+             [["PD0000544", "RRS-A-012"], ["PD0000544", "RRS-A-017"], ["PD0000545", "RRS-A-021-80"]])
+    where = xdb.find_doc_field(folder, "PD")
+    assert where == ("STCRDH.DBF", "DOCNUM")  # the table of documents, not the one of lines
+    no, where = xdb.last_doc_no(folder, "PD")
+    assert no == "PD0000545"
+    make_dbf(folder / "STCRDH.DBF", head, [["PD0000544", date(2026, 11, 10)], ["OU6900001", date(2026, 11, 10)],
+                                            ["PD0000545", date(2026, 11, 12)], ["PD0000546", date(2026, 11, 13)]])
+    assert xdb.last_doc_no(folder, "PD", where)[0] == "PD0000546"
+    assert xdb.last_doc_no(folder, "OU")[0] == "OU6900001"
+    assert xdb.last_doc_no(folder, "JU") == ("", None)

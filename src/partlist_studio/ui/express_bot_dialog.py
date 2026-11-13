@@ -8,6 +8,7 @@ import json
 import sys
 import threading
 from datetime import datetime
+from pathlib import Path
 
 from PySide6.QtCore import QEventLoop, QObject, Qt, QTimer, Signal
 from PySide6.QtGui import QCursor, QGuiApplication
@@ -16,11 +17,13 @@ from PySide6.QtWidgets import (QCheckBox, QDialog, QFileDialog, QFormLayout, QHB
                                QPushButton, QSpinBox, QSplitter, QTabWidget, QVBoxLayout, QWidget)
 
 from ..core import express_bot as bot
+from ..core import express_db
 from ..core import express_out
 from ..core.access import AccessDenied, Perm
 from .widgets import button, fit_to_screen
 
 SETTINGS_KEY = "express/bot"
+DATA_FOLDER_KEY = "express/data_folder"  # the company folder of Express (ISINFO.DBF): the number of a saved document
 HELP = ("<b>[ช่อง]</b> ค่าของเอกสาร: " + ", ".join(f"[{k}]" for k in bot.DOC_FIELDS)
         + " · ของบรรทัด: " + ", ".join(f"[{k}]" for k in bot.LINE_FIELDS)
         + "<br><b>{ปุ่ม}</b> {ENTER} {TAB} {ESC} {DOWN} {F4} {F8} {F10} {CTRL+S} {TAB 3} (กด 3 ครั้ง) · "
@@ -316,6 +319,21 @@ class ExpressBotDialog(QDialog):
                                  "รหัสที่ไม่มี: หยุด ไม่เลือกแถวที่ใกล้ที่สุด")
         self.pick_box.setChecked(self.options.pick_code)
         form.addRow("", self.pick_box)
+        folder_row = QHBoxLayout()
+        self.data_folder = QLineEdit(state.settings.get(DATA_FOLDER_KEY, "") or "")
+        self.data_folder.setPlaceholderText(r"เช่น \\Server-express\e\ExpressA\ffff (แถบล่างของ Express)")
+        self.data_folder.setToolTip("โฟลเดอร์ข้อมูลของบริษัทใน Express (มีไฟล์ ISINFO.DBF) – หลังกดบันทึกใน Express โปรแกรมอ่าน "
+                                    "เลขที่ที่ Express ออกให้จากไฟล์ของ Express (อ่านอย่างเดียว ไม่เขียน) แล้วใส่ให้ในช่องเลขที่ Express")
+        self.data_folder.editingFinished.connect(self._folder_changed)
+        folder_row.addWidget(self.data_folder, 1)
+        pick = button("เลือก…")
+        pick.clicked.connect(self._pick_folder)
+        folder_row.addWidget(pick)
+        form.addRow("ข้อมูลบริษัทใน Express", folder_row)
+        self.folder_note = QLabel("")
+        self.folder_note.setObjectName("Hint")
+        self.folder_note.setWordWrap(True)
+        form.addRow("", self.folder_note)
         self.step_box = QCheckBox("ทดลองทีละขั้น – หยุดก่อนทุกช่อง ดูว่าเคอร์เซอร์ใน Express อยู่ช่องที่ถูกต้อง")
         self.step_box.setToolTip("ใช้ตอนตั้งลำดับการกดครั้งแรกกับ Express จริง: หน้าต่างเล็กมุมจอบอกว่าจะพิมพ์อะไรต่อ "
                                  "ถ้าเคอร์เซอร์อยู่ผิดช่อง กด หยุด แล้วแก้ลำดับการกดทางขวา")
@@ -409,7 +427,64 @@ class ExpressBotDialog(QDialog):
                 w.setEnabled(False)
         if self.doc_list.count():
             self.doc_list.setCurrentRow(0)
+        self._where = {}
+        self._folder_changed()
         self._preview()
+
+    # ---- the number Express gives (read from its files, read only) -----------------------------------------------
+    def _pick_folder(self) -> None:
+        start = self.data_folder.text().strip() or str(Path.home())
+        path = QFileDialog.getExistingDirectory(self, "โฟลเดอร์ข้อมูลบริษัทใน Express (มี ISINFO.DBF)", start)
+        if path:
+            self.data_folder.setText(path)
+            self._folder_changed()
+
+    def _folder_changed(self) -> None:
+        folder = self.data_folder.text().strip()
+        self.state.settings.set(DATA_FOLDER_KEY, folder)
+        self._where = {}
+        if not folder:
+            self.folder_note.setText("ไม่ได้ตั้ง: หลังบันทึกใน Express พิมพ์เลขที่เอง")
+            return
+        try:
+            ok = express_db.folder_ok(folder)
+        except OSError:
+            ok = False
+        if not ok:
+            self.folder_note.setText("⚠ ไม่ใช่โฟลเดอร์บริษัทของ Express (ไม่มี ISINFO.DBF) หรือเปิดไม่ได้")
+            return
+        found = express_db.companies(folder)
+        self.folder_note.setText(f"✓ {found[0].name if found else folder} – หลังบันทึกใน Express โปรแกรมอ่านเลขที่ให้")
+
+    def express_no_now(self, doc) -> str:
+        """The number of the last document of the type of doc in Express ("" when it cannot be read)."""
+        folder = self.data_folder.text().strip() if hasattr(self, "data_folder") else ""
+        if not folder or doc is None:
+            return ""
+        prefix = bot.express_type(doc.doc_type)
+        where = getattr(self, "_where", {}).get(prefix)
+        try:
+            no, where = express_db.last_doc_no(folder, prefix, where)
+        except (OSError, ValueError):
+            return ""
+        if where:
+            self._where = {**getattr(self, "_where", {}), prefix: where}
+        return no
+
+    def read_new_express_no(self, doc, before: str, seconds: float = 8.0) -> str:
+        """After the person saved in Express: the number of the document just saved - a new last number of its
+        type (Express writes its files a moment after the save; tried for a few seconds)."""
+        import time
+
+        end = time.monotonic() + seconds
+        while True:
+            no = self.express_no_now(doc)
+            if no and no != before:
+                return no
+            if time.monotonic() >= end:
+                return ""
+            QGuiApplication.processEvents()
+            time.sleep(0.3)
 
     def open_notepad(self) -> None:
         """A safe place to try the keys: Notepad, and the bot types into it."""
@@ -627,6 +702,7 @@ class ExpressBotDialog(QDialog):
         doc = self._by_no.get(doc_no)
         label = f"{doc_no} ({doc.doc_type} {doc.type_name})" if doc is not None else doc_no
         self._log(f"หยุดรอบันทึก {label}")
+        before = "" if self.practice else self.express_no_now(doc)  # the last number before this one is saved
         answer = self.ask_saved(label)
         now = datetime.now().isoformat(timespec="seconds")
         if self.practice:  # an example: nothing is kept
@@ -640,8 +716,16 @@ class ExpressBotDialog(QDialog):
             doc.keyed_at, doc.key_partial, doc.keyed_by = now, "", self.state.who()
             self.state.log("doc.keyed", "doc", doc.doc_no, source="bot")
             prompt = f"{label}: เลขที่ที่ Express ออกให้ (เว้นว่างได้ – ใส่ภายหลังในหน้า Express)"
+            read = self.read_new_express_no(doc, before) if self.data_folder.text().strip() else ""
+            if read:
+                prompt = f"{label}: อ่านจาก Express ได้ {read} – ตรวจกับหน้าจอ Express แล้วกด OK"
+                self._log(f"อ่านเลขที่จาก Express: {read}")
+            elif self.data_folder.text().strip():
+                prompt += "\n(อ่านจาก Express ไม่ได้ – ยังไม่ได้บันทึก หรือโฟลเดอร์ข้อมูลไม่ใช่บริษัทนี้: พิมพ์เอง)"
+            first = read
             while True:
-                no, ok = QInputDialog.getText(self, "เลขที่ Express", prompt)
+                no, ok = QInputDialog.getText(self, "เลขที่ Express", prompt, QLineEdit.Normal, first)
+                first = no
                 no = no.strip().upper()
                 warn = express_out.check_express_no(doc, no, self.state.ledger) if ok and no else []
                 if not warn or QMessageBox.question(self, "ตรวจเลขที่ Express", "\n".join(warn)

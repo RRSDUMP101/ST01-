@@ -8,9 +8,10 @@ import traceback
 
 from PySide6.QtCore import QEvent, QObject, QPoint, QPointF, QRect, QRectF, QRunnable, QSize, Qt, QThreadPool, Signal
 from PySide6.QtGui import QBrush, QColor, QGuiApplication, QIntValidator, QPainter, QPainterPath, QPen, QPolygonF
-from PySide6.QtWidgets import (QAbstractItemView, QApplication, QFrame, QGraphicsScene, QGraphicsView, QHBoxLayout,
-                               QHeaderView, QLabel, QLayout, QLineEdit, QPushButton, QScrollArea, QStyle,
-                               QStyledItemDelegate, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QAbstractButton, QAbstractItemView, QApplication, QBoxLayout, QDialog,
+                               QDialogButtonBox, QFrame, QGraphicsScene, QGraphicsView, QHBoxLayout, QHeaderView, QLabel,
+                               QLayout, QLineEdit, QProgressBar, QPushButton, QScrollArea, QStyle, QStyledItemDelegate,
+                               QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
 from . import theme
 
@@ -38,6 +39,101 @@ def fit_to_screen(widget: QWidget, width: int, height: int) -> None:
         width = min(width, int(avail.width() * 0.96))
         height = min(height, int(avail.height() * 0.94))
     widget.resize(width, height)
+
+
+# ---- every dialog fits the screen ---------------------------------------------------------------------------------
+# A dialog whose content wants more than the screen (a laptop at 125-150 %: about 1280 x 680 left) had its bottom
+# buttons off the screen - เริ่มคีย์เข้า Express could not be pressed. When a dialog is shown and wants more than the
+# screen gives, its content goes in a scroll area and its last row of buttons stays under it, always on the screen.
+FIT_SCREEN: QSize | None = None  # the space to fit in (the tests set it; None = the screen of the dialog)
+
+
+def _available(widget: QWidget) -> QSize | None:
+    if FIT_SCREEN is not None:
+        return FIT_SCREEN
+    if QGuiApplication.platformName() in ("offscreen", "minimal"):
+        return None
+    screen = widget.screen() or QGuiApplication.primaryScreen()
+    return screen.availableGeometry().size() if screen is not None else None
+
+
+def _is_button_row(item) -> bool:
+    w = item.widget() if item is not None else None
+    if w is not None:
+        return isinstance(w, QDialogButtonBox)
+    lay = item.layout() if item is not None else None
+    if lay is None:
+        return False
+    widgets = [lay.itemAt(i).widget() for i in range(lay.count()) if lay.itemAt(i).widget() is not None]
+    return bool(widgets) and any(isinstance(x, QAbstractButton) for x in widgets) \
+        and all(isinstance(x, (QAbstractButton, QLabel, QDialogButtonBox, QProgressBar)) for x in widgets)
+
+
+def scroll_dialog(dlg: QWidget) -> bool:
+    """Put the content of a dialog (its box layout but the last row of buttons) in a scroll area. True when done."""
+    lay = dlg.layout()
+    if not isinstance(lay, QBoxLayout) or lay.count() < 2 or dlg.property("_scrolled"):
+        return False
+    keep = 1 if _is_button_row(lay.itemAt(lay.count() - 1)) else 0
+    body = QWidget()
+    body.setObjectName("DialogBody")
+    inner = QVBoxLayout(body)
+    inner.setContentsMargins(0, 0, 0, 0)
+    inner.setSpacing(lay.spacing() if lay.spacing() >= 0 else 6)
+    for _ in range(lay.count() - keep):
+        stretch = lay.stretch(0)
+        item = lay.takeAt(0)
+        if item.widget() is not None:
+            inner.addWidget(item.widget(), stretch)
+        elif item.layout() is not None:
+            sub = item.layout()
+            sub.setParent(None)
+            inner.addLayout(sub, stretch)
+        else:
+            inner.addItem(item)
+    scroll = QScrollArea()
+    scroll.setObjectName("DialogScroll")
+    scroll.setWidgetResizable(True)
+    scroll.setFrameShape(QFrame.NoFrame)
+    scroll.setWidget(body)
+    lay.insertWidget(0, scroll, 1)
+    dlg.setProperty("_scrolled", True)
+    return True
+
+
+def fit_dialog(dlg: QWidget) -> None:
+    """Fit a dialog being shown to the screen: scroll its content when it wants more, keep it on the screen."""
+    avail = _available(dlg)
+    if avail is None:
+        return
+    max_w, max_h = int(avail.width() * 0.96), int(avail.height() * 0.92)
+    need = dlg.minimumSizeHint()
+    if (need.height() > max_h or need.width() > max_w) and scroll_dialog(dlg):
+        dlg.setMinimumSize(min(dlg.minimumWidth(), max_w), min(dlg.minimumHeight(), max_h))
+    if dlg.width() > max_w or dlg.height() > max_h:
+        dlg.resize(min(dlg.width(), max_w), min(dlg.height(), max_h))
+    if FIT_SCREEN is None:
+        screen = dlg.screen() or QGuiApplication.primaryScreen()
+        if screen is not None:
+            g = screen.availableGeometry()
+            x = min(max(dlg.x(), g.left()), g.right() - dlg.width())
+            y = min(max(dlg.y(), g.top()), g.bottom() - dlg.height())
+            if (x, y) != (dlg.x(), dlg.y()):
+                dlg.move(x, y)
+
+
+_QDIALOG_SHOW = QDialog.showEvent
+
+
+def _dialog_show(self, event) -> None:  # every dialog of this program (Python classes) passes here
+    _QDIALOG_SHOW(self, event)
+    try:
+        fit_dialog(self)
+    except RuntimeError:  # deleted while being shown
+        pass
+
+
+QDialog.showEvent = _dialog_show
 
 
 def scroll_body(page: QWidget) -> QVBoxLayout:

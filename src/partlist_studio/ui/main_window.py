@@ -8,7 +8,8 @@ from pathlib import Path
 from PySide6.QtCore import QSize, Qt, QTimer
 from PySide6.QtGui import QAction, QColor, QCursor, QGuiApplication, QKeySequence, QShortcut
 from PySide6.QtWidgets import (QApplication, QFrame, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow,
-                               QMessageBox, QPushButton, QStackedWidget, QTabWidget, QVBoxLayout, QWidget)
+                               QMessageBox, QPushButton, QScrollArea, QStackedWidget, QTabWidget, QVBoxLayout,
+                               QWidget)
 
 from .. import APP_NAME, __version__
 from ..core import access
@@ -31,7 +32,7 @@ from .pages.production import ProductionPage
 from .pages.settings import SettingsPage
 from .pages.stock import StockPage
 from .state import AppState
-from .widgets import StepBar
+from .widgets import StepBar, fit_to_screen
 from .work_dialogs import CompareDialog
 from .workflow import STEP_PAGES, next_action, workflow_steps
 
@@ -86,8 +87,8 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.state = state or AppState()
         self.actions = Actions(self.state, self)
-        self.resize(1360, 840)
-        self.setMinimumSize(QSize(1080, 680))
+        self.setMinimumSize(QSize(760, 480))  # pages scroll when the window is smaller than they want
+        fit_to_screen(self, 1360, 840)
         self.setAcceptDrops(True)
 
         root = QWidget()
@@ -167,8 +168,17 @@ class MainWindow(QMainWindow):
         self.mobile_hub = MobileHub(self.state)
         self.pages["mobile"] = MobilePage(self.state, self.actions, self.mobile_hub)
         self.pages["settings"] = SettingsPage(self.state)
+        # each page in a scroll area: a page taller or wider than the window (a laptop at 125-150 %) scrolls,
+        # instead of making the window bigger than the screen and its bottom buttons unreachable
+        self._frames: dict[str, QScrollArea] = {}
         for key, _label in NAV:
-            self.stack.addWidget(self.pages[key])
+            frame = QScrollArea()
+            frame.setWidgetResizable(True)
+            frame.setFrameShape(QFrame.NoFrame)
+            frame.setObjectName("PageFrame")
+            frame.setWidget(self.pages[key])
+            self._frames[key] = frame
+            self.stack.addWidget(frame)
         self.nav.currentItemChanged.connect(self._nav_changed)
         self.go("dashboard")
 
@@ -508,7 +518,7 @@ class MainWindow(QMainWindow):
     def _nav_changed(self, item, _previous=None) -> None:
         key = item.data(Qt.UserRole) if item else None
         if key in self.pages:
-            self.stack.setCurrentWidget(self.pages[key])
+            self.stack.setCurrentWidget(self._frames[key])
             self.refresh_steps()
 
     # ---- the work path: the step bar and the next thing to do -------------

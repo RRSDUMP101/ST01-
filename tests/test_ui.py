@@ -44,7 +44,7 @@ def test_all_pages_open(window, app):
     for key, _label in NAV:
         window.go(key)
         app.processEvents()
-        assert window.stack.currentWidget() is window.pages[key] and window.current_page() == key
+        assert window.stack.currentWidget().widget() is window.pages[key] and window.current_page() == key
     headers = [window.nav.item(r) for r in range(window.nav.count()) if not window.nav.item(r).data(0x0100)]
     assert headers and all(not (h.flags() & h.flags().ItemIsSelectable) for h in headers)  # group titles
 
@@ -352,7 +352,7 @@ def test_production_documents_nesting_minmax(window, app, monkeypatch):
     assert job.parts[0].status == "เสร็จ"
     prod.make_documents()
     moves = window.pages["movements"]
-    assert window.stack.currentWidget() is moves and moves.docs.rowCount() >= 1
+    assert window.stack.currentWidget().widget() is moves and moves.docs.rowCount() >= 1
     fr = next(d for d in state.ledger.docs if d.doc_type == "FR")
     moves._show_doc(fr)
     moves.post_doc()
@@ -1654,3 +1654,55 @@ def test_express_bot_reads_the_number_express_gave(window, app, monkeypatch, tmp
     assert "อ่านจาก Express ได้ PD0000546" in asked[0][2] and asked[0][4] == "PD0000546"
     assert state.settings.get(dlg_mod.DATA_FOLDER_KEY) == str(folder)
     d.close()
+
+
+def test_windows_fit_a_small_screen(window, app):
+    """A laptop at 125-150 % leaves about 1280 x 670: the bottom buttons of a dialog went off the screen (เริ่มคีย์
+    เข้า Express could not be pressed). A dialog wanting more than the screen scrolls its content, its last row of
+    buttons stays on the screen; a page wanting more than the window scrolls in it."""
+    from PySide6.QtCore import QSize
+
+    from partlist_studio.core import express_out, laser
+    from partlist_studio.core.models import Part
+    from partlist_studio.ui import express_bot_dialog as bd
+    from partlist_studio.ui import login_dialog as ld
+    from partlist_studio.ui import widgets, work_dialogs as wd
+    from partlist_studio.ui.pages import nesting as nest_page
+
+    widgets.FIT_SCREEN = QSize(1024, 600)
+    try:
+        makes = {
+            "keying": lambda: bd.ExpressBotDialog(window.state, express_out.example_docs(), window,
+                                                 output_factory=lambda: None, practice=True),
+            "users": lambda: ld.UsersDialog(window.state, window),
+            "sign-in": lambda: ld.LoginDialog(window.state, window),
+            "laser": lambda: nest_page.LaserSettingsDialog(laser.LaserParams(), window),
+            "new code": lambda: wd.NewCodeDialog(window.state, "ฝาข้าง", window),
+            "thickness": lambda: wd.ThicknessDialog([Part(name="a", thickness=3)], [0], 3, window),
+            "material": lambda: wd.MaterialDialog([Part(name="a", material="Steel")], [0], window),
+        }
+        for name, make in makes.items():
+            d = make()
+            d.show()
+            app.processEvents()
+            assert d.width() <= 1024 and d.height() <= 600, (name, d.size())
+            body = d.findChild(widgets.QWidget, "DialogBody")  # what scrolls: its buttons are reached by scrolling
+            buttons = [b for b in d.findChildren(widgets.QPushButton)
+                       if b.isVisible() and (body is None or not body.isAncestorOf(b))]
+            assert buttons, name
+            last = max(buttons, key=lambda b: b.mapTo(d, b.rect().bottomLeft()).y())
+            assert last.mapTo(d, last.rect().bottomLeft()).y() <= d.height(), name  # the bottom button is on it
+            d.close()
+        keying = makes["keying"]()
+        keying.show()
+        app.processEvents()
+        assert keying.property("_scrolled") and keying.run_btn.isVisible()
+        keying.close()
+    finally:
+        widgets.FIT_SCREEN = None
+    assert window.minimumWidth() <= 800 and window.minimumHeight() <= 500
+    window.resize(1000, 600)
+    for key in window.pages:
+        window.go(key)
+        app.processEvents()
+        assert window.width() <= 1000 and window.height() <= 600, key  # the page scrolls, the window stays

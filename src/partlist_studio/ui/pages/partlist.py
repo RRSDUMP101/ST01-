@@ -13,7 +13,8 @@ from ..widgets import PageHeader, button, empty_hint
 
 COLUMN_WIDTHS = {"item_no": 50, "part_no": 120, "drawing_no": 110, "name": 200, "material": 90, "spec": 130,
                  "thickness": 70,
-                 "qty": 60, "unit": 60, "weight": 95, "stock_code": 130, "process": 100, "status": 90}
+                 "qty": 60, "unit": 60, "weight": 95, "stock_code": 130, "process": 100, "bend_tools": 260,
+                 "status": 90}
 
 
 class PartListPage(QWidget):

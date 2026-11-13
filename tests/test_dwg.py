@@ -556,3 +556,34 @@ def test_left_and_right_from_pieces_drawn_side_by_side(tmp_path):
     back = PartList.load(saved).parts
     assert [(p.name, p.drawing_box, p.side_source) for p in back] == [
         (p.name, p.drawing_box, p.side_source) for p in (left.part, right.part)]
+
+
+@pytest.mark.parametrize("text, items", [
+    ('Sec.1 = P ("punch") - L400', [(1, "P", "punch", 400)]),
+    ("DV22 - L400", [(None, "DV22", "", 400)]),
+    ("SEC 2 = P88-L1200", [(2, "P88", "", 1200)]),
+    ("Sec.1 = P - L400   DV22 - L400", [(1, "P", "", 400), (None, "DV22", "", 400)]),
+    ("RRS-T-001 เฟรมบน", []), ("t3 16 ชิ้น", []), ("M=Steel", []), ("UP 90° R 0", []),
+])
+def test_parse_tooling(text, items):
+    assert [(i["sec"], i["tool"], i["note"], i["length"]) for i in dwg_io.parse_tooling(text)] == items
+
+
+def test_press_brake_tools_under_a_part(tmp_path):
+    """The drafter writes the tools of the press brake under the lines of thickness / quantity / material:
+    'Sec.1 = P ("punch") - L400' then, indented, 'DV22 - L400' - read as the part's sections of bends, shown in
+    the Part List as written; not taken for its name, thickness or quantity."""
+    two = [(0, 200, 150, 60), (300, 200, 150, 60)]
+    lines = [(v, x, 192 - i * 6) for i, (v, x) in enumerate((
+        ("RRS-T-001", 0), ("เฟรมบน", 0), ("t=3", 0), ("2 ชิ้น", 0), ("M=Steel", 0),
+        ('Sec.1 = P ("punch") - L400', 0), ("DV22 - L400", 25), ("Sec.2 = P88 - L1200", 0), ("DV16 - L1200", 25)))]
+    data, got = _read(tmp_path, two, lines)
+    part, other = (c.part for c in dwg_io.drawing_to_candidates(data))
+    assert (part.part_no, part.name, part.thickness, part.qty, part.material) == ("RRS-T-001", "เฟรมบน", 3, 2, "Steel")
+    assert part.bend_setups == [
+        {"sec": 1, "punch": "P", "punch_len": 400, "die": "DV22", "die_len": 400, "punch_note": "punch"},
+        {"sec": 2, "punch": "P88", "punch_len": 1200, "die": "DV16", "die_len": 1200}]
+    assert part.bend_tools == "Sec.1 = P (punch) - L400, DV22 - L400 / Sec.2 = P88 - L1200, DV16 - L1200"
+    assert not other.bend_tools and not other.bend_setups
+    again = Part.from_dict(part.__dict__ | {})  # saved and read back
+    assert again.bend_tools == part.bend_tools and again.bend_setups == part.bend_setups

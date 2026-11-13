@@ -1187,10 +1187,12 @@ def _stacked_material(data: DrawingData, owned: list[tuple[TextItem, float, int]
     moved = True
     while moved:
         moved = False
-        for t in [n for n in data.notes if parse_material(n.text)[0]]:
+        for t in [n for n in data.notes if parse_material(n.text)[0] or parse_tooling(n.text)]:
             h = max(t.height, 1e-6)
+            tool = bool(parse_tooling(t.text))  # a die line is often written indented under its punch
             above = [(gap, i) for o, gap, i in owned
-                     if abs(o.left - t.left) <= h and 0 < abs(o.y - t.y) <= 1.8 * max(h, o.height)]
+                     if (abs(o.left - t.left) <= h or (tool and abs(o.left - t.left) <= 12 * h))
+                     and 0 < abs(o.y - t.y) <= 1.8 * max(h, o.height)]
             if len({i for _gap, i in above}) != 1:
                 continue
             gap, i = min(above)
@@ -1223,6 +1225,63 @@ def parse_qty(text) -> float:
     """'16 ชิ้น', '16ชิ้น', 'จำนวน 16', 'QTY: 4', '8 pcs', '1,000 ชิ้น' -> the quantity; 0 when the text gives none."""
     match = _QTY_RE.search("" if text is None else str(text))
     return to_number(match.group(1) or match.group(2)) if match else 0
+
+
+# Tools of the press brake written under the part's lines by the drafter, one tool a line:
+#   Sec.1 = P ("punch") - L400      section 1 of the bends: punch P, 400 long
+#           DV22 - L400             its die: V 22, 400 long
+_TOOL_RE = re.compile(r"(?:\bsec(?:tion)?\s*\.?\s*(\d+)\s*[=:]\s*)?\b([A-Za-z][A-Za-z0-9./]*?)\s*"
+                      r"(\([^)]*\))?\s*[-–]\s*L\s*\.?\s*(\d+(?:\.\d+)?)\b", re.IGNORECASE)
+
+
+def parse_tooling(text) -> list[dict]:
+    """'Sec.1 = P ("punch") - L400' -> [{sec: 1, tool: 'P', note: 'punch', length: 400}]; 'DV22 - L400' -> [{sec:
+    None, tool: 'DV22', length: 400}]; [] for a text that is not a tool."""
+    out = []
+    for m in _TOOL_RE.finditer("" if text is None else str(text)):
+        note = (m.group(3) or "").strip("() \"'“”")
+        out.append({"sec": int(m.group(1)) if m.group(1) else None, "tool": m.group(2).upper(), "note": note,
+                    "length": to_number(m.group(4))})
+    return out
+
+
+def _is_die(tool: str) -> bool:
+    return bool(re.match(r"^(?:D|V)\w*\d", tool))  # DV22, V16, D25
+
+
+def tooling_sections(lines: list[str]) -> list[dict]:
+    """The tool lines of a part, top to bottom -> its sections of bends: [{sec, punch, punch_len, die, die_len}].
+    'Sec.N = …' starts a section with its punch; a die line (DV22) goes to the section above it."""
+    sections: list[dict] = []
+    for line in lines:
+        for item in parse_tooling(line):
+            if item["sec"] is not None or not sections or (not _is_die(item["tool"]) and sections[-1]["punch"]):
+                if _is_die(item["tool"]) and item["sec"] is None:
+                    sections.append({"sec": len(sections) + 1, "punch": "", "punch_len": 0, "die": item["tool"],
+                                     "die_len": item["length"]})
+                    continue
+                sections.append({"sec": item["sec"] or len(sections) + 1, "punch": "", "punch_len": 0, "die": "",
+                                 "die_len": 0})
+            sec = sections[-1]
+            if _is_die(item["tool"]) and not sec["die"]:
+                sec["die"], sec["die_len"] = item["tool"], item["length"]
+            elif not sec["punch"]:
+                sec["punch"], sec["punch_len"] = item["tool"], item["length"]
+                if item["note"]:
+                    sec["punch_note"] = item["note"]
+    return sections
+
+
+def tooling_text(sections: list[dict]) -> str:
+    """As the drafter writes it, on one line for the Part List:
+    'Sec.1 = P (punch) - L400, DV22 - L400 / Sec.2 = …'."""
+    out = []
+    for s in sections:
+        punch = (f"{s['punch']}" + (f" ({s['punch_note']})" if s.get("punch_note") else "")
+                 + f" - L{s['punch_len']:g}") if s.get("punch") else ""
+        die = f"{s['die']} - L{s['die_len']:g}" if s.get("die") else ""
+        out.append(f"Sec.{s['sec']} = " + ", ".join(x for x in (punch, die) if x))
+    return " / ".join(out)
 
 
 def parse_material(text) -> tuple[str, str]:
@@ -1268,8 +1327,15 @@ def read_labels(items: list[tuple[float, TextItem]]) -> dict:
     info: dict = {}
     names: list[tuple[int, float, float, str, float, float]] = []  # (rank, gap, -height, name, x, y)
     code_at = None
+    tools = sorted(((t.y, t.x, t.text.strip()) for _gap, t in items if not t.key and parse_tooling(t.text)),
+                   key=lambda v: (-v[0], v[1]))  # top to bottom: Sec.1, its die, Sec.2 …
+    if tools:
+        info["tooling"] = tooling_sections([text for _y, _x, text in tools])
+        info["tooling_lines"] = [text for _y, _x, text in tools]
     for gap, t in sorted(items, key=lambda it: it[0]):
         text = t.text.strip()
+        if not t.key and parse_tooling(text):
+            continue  # a tool of the press brake: not a name, a thickness or a quantity
         material, material_text = parse_material(text) if not t.key else ("", "")
         if material:  # 'RRS-T-001 เฟรมบน t3 16 ชิ้น M=Steel': the material, then read the rest
             if "material" not in info:
@@ -1474,6 +1540,9 @@ def drawing_to_candidates(data: DrawingData, densities: dict[str, float] | None 
                 part.weight = plate_weight(prof.net_area, thickness, density_for(mat, densities))
             part.outline = profile_outline(data, prof)
             part.bend_lines = profile_bends(data, prof)
+            if lab.get("tooling"):  # 'Sec.1 = P ("punch") - L400' / 'DV22 - L400' written under the part
+                part.bend_setups = lab["tooling"]
+                part.bend_tools = tooling_text(lab["tooling"])
             part.drawing_box = [round(v, 1) for v in prof.bbox]
             part.cad_fixes = cad_fix.fix_summary(part_fixes(data, i))
             cand = CandidatePart(part, "profile", profile_index=i, thickness_source=source, material_source=mat_source)
@@ -1751,8 +1820,8 @@ def drawing_record(data: DrawingData, part_count: int, parts: list[Part] | None 
 # Export: Part List as a table drawing ZWCAD can open / insert
 # --------------------------------------------------------------------------
 _DXF_COL_WIDTH = {"item_no": 12, "part_no": 35, "drawing_no": 35, "name": 60, "material": 28, "spec": 40,
-                  "thickness": 18, "qty": 15, "unit": 15, "weight": 22, "stock_code": 30, "process": 28, "status": 22,
-                  "remark": 60}
+                  "thickness": 18, "qty": 15, "unit": 15, "weight": 22, "stock_code": 30, "process": 28, "bend_tools": 70,
+                  "status": 22, "remark": 60}
 
 
 def export_dxf_table(partlist: PartList, path: str | Path, thai_headers: bool = True,

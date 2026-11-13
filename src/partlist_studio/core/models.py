@@ -23,6 +23,7 @@ COLUMNS: list[tuple[str, str]] = [
     ("weight", "น้ำหนัก/ชิ้น (kg)"),
     ("stock_code", "รหัสสโตร์"),
     ("process", "กระบวนการ"),
+    ("bend_tools", "เครื่องมือพับ"),
     ("status", "สถานะ"),
     ("remark", "หมายเหตุ"),
 ]
@@ -53,6 +54,7 @@ class Part:
     weight: float = 0
     stock_code: str = ""
     process: str = ""
+    bend_tools: str = ""  # tools of the press brake from the drawing: 'Sec.1 P L400 + DV22 L400'
     status: str = "รอตรวจ"
     remark: str = ""
     image: str = ""  # picture of the part (from the company Parts List workbook), not a table column
@@ -66,6 +68,7 @@ class Part:
     cad_fixes: list = field(default_factory=list)  # what the import repaired in its lines ('ต่อเส้น 2 จุด ...')
     drawing_box: list = field(default_factory=list)  # where the flat pattern is drawn [x0, y0, x1, y1] mm (sides)
     side_source: str = ""  # how the drawing told ซ้าย/ขวา: 'แบบ (วางคู่ในแนวนอน): ชิ้นที่วางฝั่งซ้าย = ซ้าย (L)'
+    bend_setups: list = field(default_factory=list)  # [{sec, punch, punch_len, die, die_len}] from the drawing
 
     def get(self, key: str):
         return getattr(self, key)
@@ -97,6 +100,7 @@ class Part:
         box = data.get("drawing_box") or []
         part.drawing_box = [float(v) for v in box] if len(box) == 4 else []
         part.side_source = str(data.get("side_source", "") or "")
+        part.bend_setups = [dict(x) for x in data.get("bend_setups") or [] if isinstance(x, dict)]
         return part
 
 

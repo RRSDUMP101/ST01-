@@ -45,6 +45,7 @@ CAD_HEADERS: dict[str, str] = {
     "weight": "Mass",
     "stock_code": "Stock Code",
     "process": "Process",
+    "bend_tools": "Bend Tools",
     "status": "Status",
     "remark": "Remark",
 }

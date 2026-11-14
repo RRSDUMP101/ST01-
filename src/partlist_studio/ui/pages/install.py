@@ -13,7 +13,7 @@ from ...core import install_manual as im
 from .. import theme
 from ..state import AppState
 from ..widgets import PageHeader, StatusChipRow, button, fill, table
-from .oem_parts import OemPartsTab
+from .assembly3d import AssemblyTab
 
 # field of InstallJob → (label, kind, (min, max), suffix) – kind: int · float · bool · text · combo name
 FORM = {
@@ -102,9 +102,9 @@ class InstallPage(QWidget):
         self.tabs.addTab(self._form_tab(), "ข้อมูลงาน")
         self.tabs.addTab(self._findings_tab(), "ผลตรวจ BEMM")
         self.tabs.addTab(self._steps_tab(), "ขั้นตอนติดตั้ง")
+        self.assembly = AssemblyTab(state, lambda: self.job)
+        self.tabs.addTab(self.assembly, "ประกอบ 3D")
         self.tabs.addTab(self._reference_tab(), "ข้อมูลอ้างอิง")
-        self.oem = OemPartsTab(state)
-        self.tabs.addTab(self.oem, "อะไหล่ Ford OEM")
         lay.addWidget(self.tabs, 1)
         self.load_job(self.job)
 
@@ -263,6 +263,8 @@ class InstallPage(QWidget):
                                  f"{self.job.cab_spec.name} + {self.job.product_spec.name}")
             self.verdict.setStyleSheet(f"color:{theme.status_color(im.PASS).name()}; font-weight:bold;")
         self._fill_steps()
+        if hasattr(self, "assembly"):
+            self.assembly.job_changed()
 
     def _fill_steps(self) -> None:
         self.steps = im.procedure(self.job)

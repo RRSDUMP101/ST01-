@@ -13,6 +13,7 @@ from ...core import install_manual as im
 from .. import theme
 from ..state import AppState
 from ..widgets import PageHeader, StatusChipRow, button, fill, table
+from .oem_parts import OemPartsTab
 
 # field of InstallJob → (label, kind, (min, max), suffix) – kind: int · float · bool · text · combo name
 FORM = {
@@ -102,6 +103,8 @@ class InstallPage(QWidget):
         self.tabs.addTab(self._findings_tab(), "ผลตรวจ BEMM")
         self.tabs.addTab(self._steps_tab(), "ขั้นตอนติดตั้ง")
         self.tabs.addTab(self._reference_tab(), "ข้อมูลอ้างอิง")
+        self.oem = OemPartsTab(state)
+        self.tabs.addTab(self.oem, "อะไหล่ Ford OEM")
         lay.addWidget(self.tabs, 1)
         self.load_job(self.job)
 

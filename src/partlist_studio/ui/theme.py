@@ -18,6 +18,11 @@ TEXT = "#1E2A3A"
 MUTED = "#6B7A90"
 
 STATUS_COLORS = {
+    # checks of the installation manual (BEMM)
+    "ผ่าน": "#2E9D5B",
+    "ไม่ผ่าน": "#D64545",
+    "ตรวจเพิ่ม": "#E08A1E",
+    "ข้อมูล": "#6B7A90",
     "พร้อม": "#2E9D5B",
     "พอ": "#2E9D5B",
     "รอตรวจ": "#8A96A8",

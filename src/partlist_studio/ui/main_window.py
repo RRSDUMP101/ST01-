@@ -23,6 +23,7 @@ from .pages.drawings import DrawingsPage
 from .mobile_hub import MobileHub
 from .pages.express import ExpressPage
 from .pages.gsheets import GoogleSheetsPage
+from .pages.install import InstallPage
 from .pages.mobile import MobilePage
 from .pages.models import ModelsPage
 from .pages.movements import MovementsPage
@@ -46,6 +47,7 @@ NAV_GROUPS = [
         ("nesting", "④   ตัดเลเซอร์"),
         ("stock", "⑤   สโตร์ / พร้อมประกอบ"),
         ("movements", "⑥   เบิก / รับ สต็อก"),
+        ("install", "⚒   ติดตั้งบนรถ (Ford)"),
     ]),
     ("ข้อมูลหลัก & เชื่อมต่อ", [
         ("models", "▣   แบบกระบะมาตรฐาน"),
@@ -168,6 +170,7 @@ class MainWindow(QMainWindow):
         self.mobile_hub = MobileHub(self.state)
         self.pages["mobile"] = MobilePage(self.state, self.actions, self.mobile_hub)
         self.pages["settings"] = SettingsPage(self.state)
+        self.pages["install"] = InstallPage(self.state, self.actions)
         # each page in a scroll area: a page taller or wider than the window (a laptop at 125-150 %) scrolls,
         # instead of making the window bigger than the screen and its bottom buttons unreachable
         self._frames: dict[str, QScrollArea] = {}

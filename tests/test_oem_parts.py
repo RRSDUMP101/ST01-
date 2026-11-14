@@ -159,3 +159,27 @@ def test_oem_tab_pictures(tmp_path):
     app.processEvents()
     w.state.dirty = False
     w.close()
+
+
+def test_oem_tab_new_catalog_and_many_pictures(tmp_path):
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    QtWidgets = pytest.importorskip("PySide6.QtWidgets")
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    from partlist_studio.ui.main_window import MainWindow
+    from partlist_studio.ui.state import AppState
+
+    w = MainWindow(AppState(data_dir=tmp_path / "data"))
+    tab = w.pages["install"].oem
+    tab.new_catalog("2026 Ford F-350 Super Duty XL 7.3L V8 Gas", "Headlamp Components")
+    cat = tab.new_catalog("2026 Ford F-350 Super Duty XL 7.3L V8 Gas", "Front Bumper")
+    assert tab.catalogs.count() == 2 and cat.category == "Front Bumper" and cat.assemblies == []
+    pics = [_png(tmp_path / "diagram_2 Mounting Brackets.png"), _png(tmp_path / "1 Front Bumper.png"),
+            _png(tmp_path / "IMG_20261114_1.png")]
+    assert tab.attach_images([str(p) for p in pics]) == [1, 2, 3]  # a camera name: the next free number
+    got = tab.catalog
+    assert got.category == "Front Bumper" and [(a.number, a.title) for a in got.assemblies] == [
+        (1, "Front Bumper"), (2, "Mounting Brackets"), (3, "IMG 20261114 1")]
+    assert all(tab.library.image_path(a) for a in got.assemblies)
+    app.processEvents()
+    w.state.dirty = False
+    w.close()

@@ -38,6 +38,9 @@ class OemPartsTab(QWidget):
         for text, slot, kind, tip in (
                 ("นำเข้าหน้าเว็บที่บันทึก…", self.import_pages, "accent",
                  "เลือกไฟล์ที่บันทึกจาก Chrome (⌘S / Ctrl+S แบบ HTML) ได้หลายไฟล์พร้อมกัน – 1 ไฟล์ต่อ 1 แผนภาพ"),
+                ("แคตตาล็อกใหม่…", lambda: self.new_catalog(), "", "แคตตาล็อกของรุ่นรถ + หมวดใหม่ เช่น Front Bumper"),
+                ("นำเข้ารูปหลายรูป…", lambda: self.attach_images(), "",
+                 "รูปแผนภาพหลายรูปพร้อมกัน – 1 รูปต่อ 1 แผนภาพ เลขแผนภาพจากชื่อไฟล์ (diagram_3.png → 3) หรือเลขถัดไปที่ว่าง"),
                 ("นำเข้า JSON…", self.import_json, "", "ไฟล์แคตตาล็อกอะไหล่รูปแบบ JSON"),
                 ("ลบ", self.remove_catalog, "", "ลบแคตตาล็อกนี้ออกจากโปรแกรม")):
             b = button(text, kind, tip) if kind else button(text, tooltip=tip)
@@ -247,15 +250,9 @@ class OemPartsTab(QWidget):
             path, _ = QFileDialog.getOpenFileName(self, "เลือกรูปแผนภาพ", "", IMAGE_FILTER)
         if not path:
             return None
-        cat = self.catalog
+        cat = self.catalog or self.new_catalog()
         if cat is None:
-            vehicle, ok = QInputDialog.getText(self, "แคตตาล็อกใหม่", "รุ่นรถ", text=DEFAULT_VEHICLE)
-            if not ok:
-                return None
-            category, ok = QInputDialog.getText(self, "แคตตาล็อกใหม่", "หมวด", text=DEFAULT_CATEGORY)
-            if not ok:
-                return None
-            cat = oem.OemCatalog(vehicle.strip(), category.strip(), "ford.oempartsonline.com")
+            return None
         asm = self.current_assembly() if number is None else None
         if asm is None and number is None:
             free = oem.missing_numbers(cat, LAST_DIAGRAM)
@@ -270,6 +267,55 @@ class OemPartsTab(QWidget):
         self.diagrams.setCurrentRow(1 + next(i for i, a in enumerate(self.catalog.assemblies) if a.number == n))
         self.state.notify(f"แนบรูปแผนภาพ {n} แล้ว")
         return asm
+
+    def new_catalog(self, vehicle: str = "", category: str = "") -> oem.OemCatalog | None:
+        """An empty catalogue for a vehicle + category (its diagrams come from pictures or saved pages)."""
+        if not vehicle:
+            vehicle, ok = QInputDialog.getText(self, "แคตตาล็อกใหม่", "รุ่นรถ",
+                                               text=self.catalog.vehicle if self.catalog else DEFAULT_VEHICLE)
+            if not ok or not vehicle.strip():
+                return None
+        if not category:
+            category, ok = QInputDialog.getText(self, "แคตตาล็อกใหม่", "หมวด เช่น Headlamp Components, Front Bumper",
+                                                text=DEFAULT_CATEGORY if not self.catalog else "")
+            if not ok or not category.strip():
+                return None
+        cat = oem.OemCatalog(vehicle.strip(), category.strip(), "ford.oempartsonline.com")
+        old = next((c for c in self.library.catalogs if c.key == cat.key), None)
+        if old is None:
+            self.library.save(cat)
+        self.reload(cat.key)
+        return self.catalog
+
+    def attach_images(self, paths: list[str] | None = None) -> list[int]:
+        """Several pictures at once, one diagram each: the number from the file name ('diagram_3.png', '03.png'),
+        else the next free number; the title from the rest of the name ('3 Front Bumper.png' → 'Front Bumper')."""
+        import re
+
+        if paths is None:
+            paths, _ = QFileDialog.getOpenFileNames(self, "เลือกรูปแผนภาพ (หลายรูป)", "", IMAGE_FILTER)
+        cat = (self.catalog or self.new_catalog()) if paths else None
+        if not paths or cat is None:
+            return []
+        named, unnamed = [], []
+        for path in sorted(paths):
+            stem = Path(path).stem
+            m = re.match(r"(?i)\s*(?:diagram|assembly|asm)?[\s_-]*(\d{1,3})(?!\d)", stem)
+            if m and int(m.group(1)) > 0:
+                title = re.sub(r"(?i)^\s*(diagram|assembly|asm)?[\s_-]*\d{1,3}[\s_.-]*", "", stem)
+                named.append((int(m.group(1)), path, title.replace("_", " ").strip()))
+            else:
+                unnamed.append((path, stem.replace("_", " ").strip()))
+        taken = {n for n, _p, _t in named}
+        free = [n for n in oem.missing_numbers(cat, 999) if n not in taken]
+        jobs = named + [(free[i], path, title) for i, (path, title) in enumerate(unnamed)]
+        done = []
+        for n, path, title in jobs:
+            self.library.attach_image(cat, n, path, title)
+            done.append(n)
+        self.reload(cat.key)
+        self.state.notify(f"แนบรูปแผนภาพ {len(done)} รูป: แผนภาพ {', '.join(map(str, done))}")
+        return done
 
     def import_json(self, path: str = "") -> None:
         if not path:

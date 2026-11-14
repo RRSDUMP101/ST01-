@@ -26,7 +26,7 @@ MAX_ORDERED = 1200  # more pieces than this: all faces sorted by distance instea
 class _Piece:
     """A convex piece of a part, ready to draw: all corners in one array, a start and a length per face, the normals."""
 
-    def __init__(self, faces: list, convex: bool):
+    def __init__(self, faces: list, convex: bool, cull: bool = False):
         pts = [p for f, _e in faces for p in f]
         self.points = np.array(pts, dtype=float).reshape(-1, 3)
         self.counts = np.array([len(f) for f, _e in faces], dtype=int)
@@ -42,12 +42,13 @@ class _Piece:
         length[length == 0] = 1
         self.normals = normals / length[:, None]
         self.convex = convex  # an imported mesh is not: its faces may wind either way and hide one another
+        self.cull = cull  # … unless it is a closed skin wound outwards (Part3D.cull): its back faces are never seen
         self.lo, self.hi = (self.points.min(axis=0), self.points.max(axis=0)) if len(pts) else (np.zeros(3), np.ones(3))
 
 
 class _Mesh:
     def __init__(self, part: Part3D):
-        self.pieces = [_Piece(faces, part.shape != "mesh") for faces in part.chunks()]
+        self.pieces = [_Piece(faces, part.shape != "mesh", part.shape == "mesh" and part.cull) for faces in part.chunks()]
         self.lo = np.min([c.lo for c in self.pieces], axis=0)
         self.hi = np.max([c.hi for c in self.pieces], axis=0)
         self.centre = (self.lo + self.hi) / 2
@@ -307,7 +308,7 @@ class Assembly3DView(QWidget):
             sx = (pts @ r) * zoom + cx
             sy = cy - (pts @ u) * zoom
             lit = -(piece.normals @ light)
-            if piece.convex:
+            if piece.convex or piece.cull:
                 show = (piece.normals @ d) < -1e-6
             else:
                 lit = np.abs(lit)

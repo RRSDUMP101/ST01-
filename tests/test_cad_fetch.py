@@ -1,10 +1,11 @@
 """tools/cad_fetch.py: download from (a local stand-in for) Google Drive, unpack untrusted archives, inventory.
 
 Nothing here leaves the machine: Drive is an http.server on 127.0.0.1, the refusing proxy a socket on 127.0.0.1.
-A real RAR cannot be made in this environment (no rar program; 7z and unar only read the format), so the RAR5
-archives below are built by hand from the published format with stored (uncompressed) entries: enough for 7z and
-unar to take them as RAR5, with Thai names, links and a missing volume. A WinRAR-compressed or encrypted RAR is
-not covered by a test.
+A real RAR cannot be made in this environment (no rar program; 7z, unrar and unar only read the format), so the
+RAR5 archives below are built by hand from the published format with stored (uncompressed) entries: enough for 7z,
+unrar and unar to take them as RAR5, with Thai names, links and a missing volume. A compressed or encrypted RAR
+is not covered by a test here; the customer's 3.5 GB RAR (packed by WinRAR 7, which 7z 23.01 lists but cannot
+unpack) was unpacked with the tool by hand.
 """
 
 import importlib.util
@@ -17,6 +18,7 @@ import struct
 import subprocess
 import sys
 import threading
+import time
 import zipfile
 import zlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -33,6 +35,7 @@ spec.loader.exec_module(cf)
 
 needs_curl = pytest.mark.skipif(not shutil.which("curl"), reason="curl is not installed")
 needs_7z = pytest.mark.skipif(not shutil.which("7z"), reason="7z is not installed")
+needs_unrar = pytest.mark.skipif(not shutil.which("unrar"), reason="unrar is not installed")
 needs_unar = pytest.mark.skipif(not (shutil.which("unar") and shutil.which("lsar")), reason="unar is not installed")
 
 PAYLOAD = bytes(range(256)) * 1200  # 307,200 bytes that are different everywhere
@@ -40,7 +43,8 @@ THAI_NAME = "พื้นเรียบ ford.rar"
 SMALL, LARGE, FORBIDDEN, QUOTA, SNEAKY, BUSY, PLAIN, GONE = (
     "small-file-0001", "large-file-0001", "forbidden-0001", "quota-page-0001", "sneaky-html-0001", "busy-file-0001",
     "plain-old-0001", "gone-file-0001")
-HTML = b"<!DOCTYPE html><html><head><title>Google Drive - Quota exceeded</title></head><body>Too many users</body></html>"
+HTML = (b"<!DOCTYPE html><html><head><title>Google Drive - Quota exceeded</title></head>"
+        b"<body>Too many users</body></html>")
 
 
 # --------------------------------------------------------------------------- a stand-in for Google Drive
@@ -50,9 +54,9 @@ class _DriveHandler(BaseHTTPRequestHandler):
     def log_message(self, *_args):
         pass
 
-    def _send(self, status: int, body: bytes, ctype: str = "text/html; charset=utf-8", extra: dict | None = None) -> None:
+    def _send(self, status: int, body: bytes, extra: dict | None = None) -> None:
         self.send_response(status)
-        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         for key, value in (extra or {}).items():
             self.send_header(key, value)
@@ -78,6 +82,12 @@ class _DriveHandler(BaseHTTPRequestHandler):
         if status == 206:
             self.send_header("Content-Range", f"bytes {start}-{end}/{len(data)}")
         self.end_headers()
+        if st["slow"] and len(body) > 1:  # a thin line: the file comes in pieces
+            for i in range(0, len(body), len(body) // 6 + 1):
+                self.wfile.write(body[i:i + len(body) // 6 + 1])
+                self.wfile.flush()
+                time.sleep(st["slow"])
+            return
         if st["cut"] and len(body) > st["cut"]:
             self.wfile.write(body[:st["cut"]])
             self.wfile.flush()
@@ -87,7 +97,7 @@ class _DriveHandler(BaseHTTPRequestHandler):
             return
         self.wfile.write(body)
 
-    def do_GET(self):  # noqa: N802
+    def do_GET(self):
         st = self.server.state
         url = urlsplit(self.path)
         q = {k: v[0] for k, v in parse_qs(url.query).items()}
@@ -108,6 +118,8 @@ class _DriveHandler(BaseHTTPRequestHandler):
                 <input type="hidden" name="id" value="{fid}"><input type="hidden" name="export" value="download">
                 <input type="hidden" name="confirm" value="t"><input type="hidden" name="uuid" value="u-123">
                 </form></body></html>"""
+            if st["page_ranges"] and self.headers.get("Range") == "bytes=0-0":  # a server that cuts the page too
+                return self._send(206, page.encode()[:1], extra={"Content-Range": f"bytes 0-0/{len(page.encode())}"})
             self._send(200, page.encode())
         elif fid == FORBIDDEN:
             self._send(403, b"<html><body>Forbidden</body></html>")
@@ -140,7 +152,7 @@ def drive(monkeypatch):
     monkeypatch.setenv("no_proxy", "127.0.0.1,localhost")
     server = ThreadingHTTPServer(("127.0.0.1", 0), _DriveHandler)
     base = f"http://127.0.0.1:{server.server_address[1]}"
-    server.state = {"data": PAYLOAD, "hits": [], "cut": 0, "busy": 0, "base": base}
+    server.state = {"data": PAYLOAD, "hits": [], "cut": 0, "busy": 0, "slow": 0.0, "page_ranges": False, "base": base}
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     yield base, server.state
@@ -199,6 +211,19 @@ def test_large_file_goes_through_the_virus_scan_form(drive, tmp_path):
     paths = [(h["path"], h["uuid"]) for h in st["hits"]]
     assert ("/uc", None) in paths and ("/download", None) in paths  # the redirect, then the page with the form
     assert paths[-1] == ("/download", "u-123")  # the file itself, with what the form's hidden inputs hold
+    st["page_ranges"] = True  # the page may come as one byte of itself: it is asked again, whole
+    _get(base, LARGE, tmp_path / "large2.bin", len(PAYLOAD))
+    assert (tmp_path / "large2.bin").read_bytes() == PAYLOAD
+
+
+@needs_curl
+def test_progress_line_now_and_then(drive, tmp_path):
+    base, st = drive
+    st["slow"] = 0.1
+    _out, log, _waits = _get(base, SMALL, tmp_path / "slow.bin", len(PAYLOAD))
+    assert (tmp_path / "slow.bin").read_bytes() == PAYLOAD
+    lines = [line for line in log if "/วินาที" in line]
+    assert len(lines) >= 2 and all("300.0 KB" in line and "%" in line for line in lines)  # done / total (%) · rate
 
 
 @needs_curl
@@ -387,7 +412,8 @@ def _write_tree(root: Path, tree: dict[str, bytes]) -> None:
 
 
 def _read_tree(root: Path) -> dict[str, bytes]:
-    return {p.relative_to(root).as_posix(): p.read_bytes() for p in root.rglob("*") if p.is_file() and not p.is_symlink()}
+    files = [p for p in root.rglob("*") if p.is_file() and not p.is_symlink()]
+    return {p.relative_to(root).as_posix(): p.read_bytes() for p in files}
 
 
 def _zip(path: Path, entries: dict[str, bytes], links: dict[str, str] | None = None) -> Path:
@@ -414,7 +440,8 @@ def _unpack(archive, dest, **kw):
 def test_unpack_zip_7z_and_rar5_keep_thai_names(tmp_path):
     src = tmp_path / "src"
     _write_tree(src, THAI_TREE)
-    made = {"zip": _zip(tmp_path / "งาน ford.zip", THAI_TREE), "7z": tmp_path / "งาน ford.7z", "Rar5": tmp_path / "งาน ford.rar"}
+    made = {"zip": _zip(tmp_path / "งาน ford.zip", THAI_TREE), "7z": tmp_path / "งาน ford.7z",
+            "Rar5": tmp_path / "งาน ford.rar"}
     _seven("a", str(made["7z"]), ".", cwd=src)
     made["Rar5"].write_bytes(rar5([{"name": "แบบ", "dir": True}, {"name": "แบบ/ชิ้นส่วน", "dir": True}]
                                   + [{"name": k, "data": v} for k, v in THAI_TREE.items()]))
@@ -422,8 +449,17 @@ def test_unpack_zip_7z_and_rar5_keep_thai_names(tmp_path):
         dest = tmp_path / "out" / f"แตก {kind}"
         got = _unpack(archive, dest)
         assert _read_tree(dest) == THAI_TREE
-        assert (got["tool"], got["kind"], got["files"]) == ("7z", kind, 3)
+        tool = "unrar" if kind == "Rar5" and shutil.which("unrar") else "7z"  # a RAR goes to unrar when it is there
+        assert (got["tool"], got["kind"], got["files"]) == (tool, kind, 3)
         assert got["bytes"] == sum(map(len, THAI_TREE.values()))
+    # names that read like a message of 7z are names all the same
+    odd = {"Wrong password.txt": b"a", "ERROR = Missing volume : x.part2.rar": b"b",
+           "Unexpected end of archive.stp": b"c"}
+    (tmp_path / "odd.rar").write_bytes(rar5([{"name": k, "data": v} for k, v in odd.items()]))
+    for archive in (_zip(tmp_path / "odd.zip", odd), tmp_path / "odd.rar"):
+        for tool in filter(shutil.which, ("7z", "unar")):  # each of them lists and extracts on its own
+            _unpack(archive, tmp_path / "odd" / f"{archive.name} {tool}", tools=(tool,))
+            assert _read_tree(tmp_path / "odd" / f"{archive.name} {tool}") == odd
     (tmp_path / "empty").mkdir()  # an empty folder that is already there is as good as a new one
     _unpack(made["zip"], tmp_path / "empty")
     assert _read_tree(tmp_path / "empty") == THAI_TREE
@@ -437,9 +473,23 @@ def test_unpack_with_unar_as_the_other_tool(tmp_path):
     (tmp_path / "a.rar").write_bytes(rar5([{"name": k, "data": v} for k, v in THAI_TREE.items()]))
     _unpack(tmp_path / "a.rar", tmp_path / "r", tools=("unar",))
     assert _read_tree(tmp_path / "r") == THAI_TREE
-    with pytest.raises(cf.UnsafeArchive):
-        _unpack(_zip(tmp_path / "slip.zip", {"ok.txt": b"ok", "../evil.txt": b"evil"}), tmp_path / "s", tools=("unar",))
-    assert not (tmp_path / "s").exists() and not (tmp_path / "evil.txt").exists()
+    bad = {"slip.zip": _zip(tmp_path / "slip.zip", {"ok.txt": b"ok", "../evil.txt": b"evil"}).read_bytes(),
+           "out.rar": rar5([{"name": "ok.txt", "data": b"ok"}, {"name": "sub/out", "link": "../../x"}]),
+           # lsar does not tell where a link in a zip points: such a link cannot be checked, so it is refused
+           "link.zip": _zip(tmp_path / "link.zip", {"a.txt": b"a"}, {"l": "a.txt"}).read_bytes()}
+    for name, data in bad.items():
+        (tmp_path / name).write_bytes(data)
+        with pytest.raises(cf.UnsafeArchive):
+            _unpack(tmp_path / name, tmp_path / "s", tools=("unar",))
+        assert not (tmp_path / "s").exists() and not (tmp_path / "evil.txt").exists()
+    (tmp_path / "v.part1.rar").write_bytes(rar5([{"name": "big.bin", "data": b"y" * 500, "split": True}], volume=True))
+    with pytest.raises(cf.FetchError) as e:
+        _unpack(tmp_path / "v.part1.rar", tmp_path / "v", tools=("unar",))
+    assert "ไม่ครบ" in str(e.value) and not (tmp_path / "v").exists()
+    for tools in ((), ("unrar",)):  # nothing that can list the archive: nothing is extracted unchecked
+        with pytest.raises(cf.FetchError) as e:
+            _unpack(archive, tmp_path / "none", tools=tools)
+        assert "ไม่มีโปรแกรมสำหรับตรวจรายการ" in str(e.value) and not (tmp_path / "none").exists()
 
 
 @needs_7z
@@ -469,7 +519,7 @@ def test_links_out_are_refused_links_inside_are_kept(tmp_path):
     _write_tree(src, {"d/a.txt": b"a"})
     os.symlink("../../outside", src / "d" / "out")
     _seven("a", "-snl", str(tmp_path / "out.7z"), ".", cwd=src)
-    (tmp_path / "out.rar").write_bytes(rar5([{"name": "ok.txt", "data": b"ok"}, {"name": "sub/out", "link": "../../x"}]))
+    (tmp_path / "out.rar").write_bytes(rar5([{"name": "ok.txt", "data": b"ok"}, {"name": "sub/o", "link": "../../x"}]))
     for archive in (out_zip, abs_zip, through, tmp_path / "out.7z", tmp_path / "out.rar"):
         dest = tmp_path / f"d_{archive.name}"
         with pytest.raises(cf.UnsafeArchive):
@@ -478,17 +528,25 @@ def test_links_out_are_refused_links_inside_are_kept(tmp_path):
     inside = _zip(tmp_path / "in.zip", {"แบบ/a.txt": b"a"}, {"แบบ/ทางลัด": "a.txt", "top": "แบบ/a.txt"})
     _unpack(inside, tmp_path / "in")
     assert os.readlink(tmp_path / "in" / "แบบ" / "ทางลัด") == "a.txt" and (tmp_path / "in" / "top").read_bytes() == b"a"
-    (tmp_path / "in.rar").write_bytes(rar5([{"name": "a.txt", "data": b"a"}, {"name": "sub/back", "link": "../a.txt"}]))
+    (tmp_path / "in.rar").write_bytes(rar5([{"name": "a.txt", "data": b"a"}, {"name": "ทางลัด", "link": "a.txt"}]))
     _unpack(tmp_path / "in.rar", tmp_path / "in_rar")
-    assert (tmp_path / "in_rar" / "sub" / "back").read_bytes() == b"a"
+    assert os.readlink(tmp_path / "in_rar" / "ทางลัด") == "a.txt"
+    # '..' that stays inside passes the check, but 7z never makes such a link: the files come out, the link is named
+    (tmp_path / "up.rar").write_bytes(rar5([{"name": "a.txt", "data": b"a"}, {"name": "sub/back", "link": "../a.txt"}]))
+    log = []
+    cf.unpack(tmp_path / "up.rar", tmp_path / "up", tools=("7z",), log=log.append)
+    assert _read_tree(tmp_path / "up") == {"a.txt": b"a"} and not os.path.lexists(tmp_path / "up" / "sub" / "back")
+    assert any("ข้ามลิงก์ 1 รายการ" in line and "sub/back" in line for line in log)
 
 
 def test_unsafe_entries_rules():
     E = cf.Entry
-    assert cf.unsafe_entries([E("a/b.txt", 1), E("a", is_dir=True), E("a/l", link="b.txt"), E("a/up", link="../a/b.txt")]) == []
+    fine = [E("a/b.txt", 1), E("a", is_dir=True), E("a/l", link="b.txt"), E("a/up", link="../a/b.txt")]
+    assert cf.unsafe_entries(fine) == []
     assert len(cf.unsafe_entries([E("a/../../b")])) == 1
     assert len(cf.unsafe_entries([E("/etc/passwd")])) == 1
     assert len(cf.unsafe_entries([E("")])) == 1 and len(cf.unsafe_entries([E("a\nb")])) == 1
+    assert len(cf.unsafe_entries([E("a\u2028Symbolic Link = /etc")])) == 1  # nothing that could pass for a new line
     assert len(cf.unsafe_entries([E("l", link="")])) == 1  # a link nobody can check
     assert len(cf.unsafe_entries([E("d/l", link="../..")])) == 1
     assert len(cf.unsafe_entries([E("d/h", link="../x", hard=True)])) == 1  # a hard link counts from the top
@@ -508,6 +566,53 @@ def test_verify_tree_removes_a_link_that_leads_out(tmp_path):
     with pytest.raises(cf.FetchError) as e:  # listed, but not in the folder: it went somewhere else
         cf.verify_tree(dest, [cf.Entry("a/b.txt", 1), cf.Entry("a/missing.txt", 1)])
     assert "a/missing.txt" in str(e.value)
+    with pytest.raises(cf.FetchError) as e:  # there, but shorter than the archive says: not written to its end
+        cf.verify_tree(dest, [cf.Entry("a/b.txt", 500)])
+    assert "ขนาดไม่ตรง" in str(e.value) and "1 จาก 500" in str(e.value)
+    left_out = [cf.Entry("a/gone", link="b.txt"), cf.Entry("a/b.txt:s", 9, extra=True)]  # no loss: not asked for
+    cf.verify_tree(dest, [cf.Entry("a", is_dir=True), *left_out])
+
+
+@needs_7z
+@needs_unrar
+def test_rar_is_extracted_by_unrar_also_under_a_posix_locale(tmp_path, monkeypatch):
+    for name in ("LC_ALL", "LC_CTYPE", "LANG"):
+        monkeypatch.setenv(name, "C")  # unrar alone would write '???' for Thai names here
+    entries = [{"name": k, "data": v} for k, v in THAI_TREE.items()]
+    (tmp_path / "งาน.rar").write_bytes(rar5(entries + [{"name": "แบบ/ทางลัด", "link": "คานขวาง 01.stp"}]))
+    got = _unpack(tmp_path / "งาน.rar", tmp_path / "out")
+    assert got["tool"] == "unrar" and _read_tree(tmp_path / "out") == THAI_TREE
+    assert os.readlink(tmp_path / "out" / "แบบ" / "ทางลัด") == "คานขวาง 01.stp"
+    assert _unpack(_zip(tmp_path / "a.zip", THAI_TREE), tmp_path / "zip")["tool"] == "7z"  # unrar reads RAR only
+    monkeypatch.setenv("LC_ALL", "en_US.UTF-8")
+    assert cf._utf8_env() is None  # a UTF-8 locale is left as it is
+
+
+@needs_7z
+@needs_unar
+def test_next_program_takes_over_when_the_method_is_unsupported(tmp_path, monkeypatch):
+    """The real 3.5 GB RAR: 7z 23.01 lists it, then answers 'Unsupported Method' to every file (packed by WinRAR 7)."""
+    (tmp_path / "a.rar").write_bytes(rar5([{"name": k, "data": v} for k, v in THAI_TREE.items()]))
+    real, calls = cf._extract, []
+
+    def extract(tool, archive, dest, password, tick, every):
+        calls.append(tool)
+        if len(calls) == 1:  # what such a run leaves behind: empty files and an error code
+            (dest / "readme.txt").write_bytes(b"")
+            return 2, "ERROR: Unsupported Method : readme.txt\nSub items Errors: 3"
+        return real(tool, archive, dest, password, tick, every)
+
+    monkeypatch.setattr(cf, "_extract", extract)
+    log = []
+    got = cf.unpack(tmp_path / "a.rar", tmp_path / "out", tools=("7z", "unar"), log=log.append)
+    assert calls == ["7z", "unar"] and got["tool"] == "unar" and _read_tree(tmp_path / "out") == THAI_TREE
+    assert any("7z แตกไฟล์รูปแบบนี้ไม่ได้" in line for line in log)
+    calls.clear()
+    monkeypatch.setattr(cf, "_extract", lambda tool, *a: (calls.append(tool), (2, "ERROR: Unsupported Method : x"))[1])
+    monkeypatch.setattr(cf.shutil, "which", lambda name: None if name == "unrar" else f"/usr/bin/{name}")
+    with pytest.raises(cf.FetchError) as e:  # nobody can: say which program is missing
+        cf.unpack(tmp_path / "a.rar", tmp_path / "none", tools=("7z", "unrar", "unar"), log=log.append)
+    assert calls == ["7z", "unar"] and "ต้องติดตั้งโปรแกรม unrar" in str(e.value)
 
 
 @needs_7z
@@ -569,7 +674,8 @@ def test_missing_volume_truncated_and_not_an_archive(tmp_path):
     with pytest.raises(cf.FetchError) as e:
         _unpack(tmp_path / "set.7z.001", tmp_path / "part")
     assert "ไม่ครบ" in str(e.value) and not (tmp_path / "part").exists()
-    (tmp_path / "งาน.part1.rar").write_bytes(rar5([{"name": "big.bin", "data": b"y" * 500, "split": True}], volume=True))
+    first = rar5([{"name": "big.bin", "data": b"y" * 500, "split": True}], volume=True)
+    (tmp_path / "งาน.part1.rar").write_bytes(first)
     with pytest.raises(cf.FetchError) as e:
         _unpack(tmp_path / "งาน.part1.rar", tmp_path / "vol")
     assert "งาน.part2.rar" in str(e.value) and "หลายส่วน" in str(e.value) and not (tmp_path / "vol").exists()
@@ -593,17 +699,20 @@ IGES_LINE = b"RRS flat tray".ljust(72) + b"S      1\n"
 INVENTORY_TREE = {
     # class → files (the content only matters where the header is read)
     "mesh": {"3D/mesh/CROSS_MEMBER_01.stl": _binary_stl(12), "3D/mesh/CROSS_MEMBER_02.stl": _binary_stl(12),
-             "3D/mesh/CROSS_MEMBER_10.stl": _binary_stl(40), "3D/mesh/พื้น.obj": b"v 0 0 0\n" * 50, "3D/scan.ply": b"ply\n",
-             "3D/print.3mf": b"PK\x03\x04", "3D/view.glb": b"glTF", "3D/view.gltf": b"{}"},
+             "3D/mesh/CROSS_MEMBER_10.stl": _binary_stl(40), "3D/mesh/พื้น.obj": b"v 0 0 0\n" * 50,
+             "3D/scan.ply": b"ply\n", "3D/print.3mf": b"PK\x03\x04", "3D/view.glb": b"glTF", "3D/view.gltf": b"{}"},
     "cad_neutral": {"3D/ford tray.step": b"ISO-10303-21;" + bytes(900), "3D/sub/bracket.STP": b"ISO-10303-21;",
-                    "พื้นเรียบ ford.igs": IGES_LINE * 40, "3D/old.iges": IGES_LINE, "3D/shape.brep": b"DBRep_DrawableShape",
-                    "3D/noext_step": b"ISO-10303-21;\nHEADER;"},
-    "cad_neutral_unreadable": {"3D/para/body.x_t": b"x", "3D/para/body.x_b": b"x", "3D/para/a.sat": b"x", "3D/para/a.jt": b"x",
-                               "3D/para/a.3dxml": b"x"},
+                    "3D/parts/rail.stp": b"ISO-10303-21;", "3D/parts/floor.stp": b"ISO-10303-21;",
+                    "พื้นเรียบ ford.igs": IGES_LINE * 40, "3D/old.iges": IGES_LINE,
+                    "3D/shape.brep": b"DBRep_DrawableShape", "3D/noext_step": b"ISO-10303-21;\nHEADER;"},
+    "cad_neutral_unreadable": {"3D/para/body.x_t": b"x", "3D/para/body.x_b": b"x", "3D/para/a.sat": b"x",
+                               "3D/para/a.jt": b"x", "3D/para/a.3dxml": b"x"},
     "cad_native": {"ZW3D/ford -260-190.Z3": bytes(5000), "ZW3D/tray.Z3ASM": bytes(700), "ZW3D/rail.Z3PRT": bytes(300),
-                   "ZW3D/tray.Z3DRW": bytes(10), "SW/tray.SLDASM": bytes(40), "SW/rail.sldprt": bytes(30), "SW/rail.slddrw": b"x",
-                   "INV/a.ipt": b"x", "INV/a.iam": b"x", "INV/a.idw": b"x", "CATIA/a.CATPart": b"x", "CATIA/a.CATProduct": b"x",
-                   "NX/model1.prt": b"\x00\x01binary", "CREO/bracket.prt": b"#UGC:2 PART 1234", "CREO/bracket.prt.3": b"#UGC:2",
+                   "ZW3D/tray.Z3DRW": bytes(10), "ZW3D/ford -260-190.Z3.12.z3bak": bytes(90),
+                   "SW/tray.SLDASM": bytes(40), "SW/rail.sldprt": bytes(30),
+                   "SW/rail.slddrw": b"x", "INV/a.ipt": b"x", "INV/a.iam": b"x", "INV/a.idw": b"x",
+                   "CATIA/a.CATPart": b"x", "CATIA/a.CATProduct": b"x", "NX/model1.prt": b"\x00\x01binary",
+                   "CREO/bracket.prt": b"#UGC:2 PART 1234", "CREO/bracket.prt.3": b"#UGC:2",
                    "CREO/tray.asm.12": b"#UGC:2", "SE/top.asm": b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1", "F/a.f3d": b"x",
                    "F/a.FCStd": b"PK\x03\x04"},
     "drawing_2d": {"2D/แบบ-01.dwg": b"AC1027" + bytes(60), "2D/แบบ-02.dwg": b"AC1027", "2D/plan.dxf": b"0\nSECTION\n"},
@@ -613,7 +722,8 @@ INVENTORY_TREE = {
     "video": {"vid/assembly.mp4": bytes(64), "vid/walk.MOV": b"x"},
     "archive": {"old/backup.rar": b"Rar!\x1a\x07\x01\x00", "old/more.zip": b"PK\x03\x04", "old/x.7z": b"7z",
                 "old/set.part2.rar": b"x", "old/set.7z.002": b"x"},
-    "other": {"misc/data.bin": bytes(20), "misc/README": b"hello", "SW/~$rail.sldprt": b"lock", "a/b/c/d/e/deep.xyz": b"deep"},
+    "other": {"misc/data.bin": bytes(20), "misc/README": b"hello", "SW/~$rail.sldprt": b"lock",
+              "a/b/c/d/e/deep.xyz": b"deep"},
 }
 ALL_FILES = {path: data for group in INVENTORY_TREE.values() for path, data in group.items()}
 
@@ -637,6 +747,7 @@ def test_inventory_totals_and_a_class_for_every_file(inv):
         assert inv["classes"][cls]["bytes"] == sum(map(len, group.values())), cls
     formats = {f["path"]: f["format"] for f in inv["files"]}
     assert formats["ZW3D/ford -260-190.Z3"] == "ZW3D" and formats["SW/tray.SLDASM"] == "SolidWorks"
+    assert formats["ZW3D/ford -260-190.Z3.12.z3bak"].startswith("ZW3D – ไฟล์สำรอง")  # a backup, not a second model
     assert formats["CREO/bracket.prt"] == formats["CREO/bracket.prt.3"] == formats["CREO/tray.asm.12"] == "Creo"
     assert formats["NX/model1.prt"].startswith("NX") and formats["SE/top.asm"] == "Solid Edge"
     assert formats["3D/noext_step"] == "STEP" and formats["doc/unnamed_pdf"] == "PDF"  # told by the first bytes
@@ -648,7 +759,7 @@ def test_inventory_extensions_tree_and_largest(inv):
     assert exts["dwg"]["count"] == 2 and exts[""]["count"] == 3  # README and the two files told by their header
     assert [e["bytes"] for e in inv["extensions"]] == sorted((e["bytes"] for e in inv["extensions"]), reverse=True)
     tree = {t["path"]: t for t in inv["tree"]}
-    assert tree["."]["files"] == inv["total_files"] and tree["."]["bytes"] == inv["total_bytes"] and tree["."]["depth"] == 0
+    assert tree["."] == {"path": ".", "depth": 0, "files": inv["total_files"], "bytes": inv["total_bytes"]}
     assert tree["3D"]["files"] == sum(1 for p in ALL_FILES if p.startswith("3D/")) and tree["3D/mesh"]["depth"] == 2
     assert tree["a/b/c"] == {"path": "a/b/c", "depth": 3, "files": 1, "bytes": 4}  # what lies deeper counts in it
     assert max(t["depth"] for t in inv["tree"]) == 3 and "a/b/c/d" not in tree
@@ -662,37 +773,42 @@ def test_inventory_ranks_what_the_3d_manual_can_use(inv):
     use = inv["use_for_3d"]
     assert [u["rank"] for u in use] == sorted(u["rank"] for u in use)
     by_rank = {r: [u["path"] for u in use if u["rank"] == r] for r in range(1, 6)}
-    assert set(by_rank[1]) == {"3D/mesh/CROSS_MEMBER_01.stl", "3D/mesh/CROSS_MEMBER_02.stl", "3D/mesh/CROSS_MEMBER_10.stl",
-                               "3D/mesh/พื้น.obj"}  # meshes the program opens first …
+    cross = [f"3D/mesh/CROSS_MEMBER_{n}.stl" for n in ("01", "02", "10")]
+    assert set(by_rank[1]) == {*cross, "3D/mesh/พื้น.obj"}  # meshes the program opens first …
     assert by_rank[1][0] == "3D/mesh/CROSS_MEMBER_10.stl"  # … the largest on top
     assert set(by_rank[2]) == {"3D/scan.ply", "3D/print.3mf", "3D/view.glb", "3D/view.gltf"}
-    assert by_rank[3] == ["3D/ford tray.step", "3D/noext_step", "3D/sub/bracket.STP"]  # then STEP …
+    assert by_rank[3] == ["3D/ford tray.step", "3D/noext_step", "3D/parts/floor.stp", "3D/parts/rail.stp",
+                          "3D/sub/bracket.STP"]  # then STEP …
     assert by_rank[4] == ["พื้นเรียบ ford.igs", "3D/old.iges"] and by_rank[5] == ["3D/shape.brep"]  # … then IGES
     assert all(u["bytes"] == len(ALL_FILES[u["path"]]) and u["how"] for u in use)
     assert {u["path"]: u.get("faces") for u in use}["3D/mesh/CROSS_MEMBER_10.stl"] == 40  # from the STL header
     native = inv["native_cad"]
-    assert native["count"] == len(INVENTORY_TREE["cad_native"]) and "STEP" in native["note"] and "อ่านที่นี่ไม่ได้" in native["note"]
+    assert native["count"] == len(INVENTORY_TREE["cad_native"])
+    assert "STEP" in native["note"] and "อ่านที่นี่ไม่ได้" in native["note"] and "ส่งออก" in native["note"]
     rows = {r["format"]: r for r in native["formats"]}
     assert rows["ZW3D"]["count"] == 4 and rows["ZW3D"]["assemblies"] == ["ZW3D/tray.Z3ASM"]
     assert rows["SolidWorks"]["assemblies"] == ["SW/tray.SLDASM"] and rows["Creo"]["assemblies"] == ["CREO/tray.asm.12"]
     assert not any(u["path"].startswith(("ZW3D/", "SW/", "2D/")) for u in use)
     assert inv["drawings_2d"]["count"] == 3
+    assert {f["path"] for f in inv["nested_archives"]["files"]} == set(INVENTORY_TREE["archive"])  # to unpack next
 
 
 def test_inventory_groups_the_parts_of_one_assembly(inv):
     series = {(g["folder"], g["name"], g["ext"]): g for g in inv["groups"] if g["kind"] == "series"}
     cross = series[("3D/mesh", "CROSS_MEMBER", "stl")]
     assert cross["count"] == 3 and cross["class"] == "mesh"
-    assert cross["files"] == ["3D/mesh/CROSS_MEMBER_01.stl", "3D/mesh/CROSS_MEMBER_02.stl", "3D/mesh/CROSS_MEMBER_10.stl"]
+    assert cross["files"] == [f"3D/mesh/CROSS_MEMBER_{n}.stl" for n in ("01", "02", "10")]  # 10 after 02
     assert series[("2D", "แบบ", "dwg")]["count"] == 2
     assert ("pic", "IMG", "jpg") not in series  # photos are numbered too, but are no parts
     folders = {(g["folder"], g["ext"]): g["count"] for g in inv["groups"] if g["kind"] == "folder"}
-    assert folders[("3D/mesh", "stl")] == 3 and ("ZW3D", "z3") not in folders
+    assert folders == {("3D/parts", "stp"): 2}  # part files that share a folder, whatever their names
+    # the three STL files are the series already (named once) · native files are no parts anybody can load here
 
 
 def test_inventory_markdown_is_thai_and_json_keys_are_english(inv, tmp_path, capsys):
     text = cf.render_markdown(inv)
     for part in ("# สรุปไฟล์ใน", "## ใช้อะไรทำคู่มือประกอบ 3 มิติ", "## ไฟล์ต้นฉบับของโปรแกรม CAD", "## แยกตามประเภท",
+                 "## ไฟล์บีบอัดที่ซ้อนอยู่ข้างใน", "old/backup.rar",
                  "## แยกตามนามสกุล", "## โครงสร้างโฟลเดอร์ (ลึก 3 ชั้น)", "## ไฟล์ใหญ่ที่สุด 30 ไฟล์", "พื้นเรียบ ford.igs",
                  "ZW3D/tray.Z3ASM", "CROSS_MEMBER", f"{inv['total_files']:,} ไฟล์"):
         assert part in text, part
@@ -719,6 +835,9 @@ def test_classify_by_name_alone():
     assert cf.classify("set.r00")[0] == "archive" and cf.classify("a.STEP")[:2] == ("cad_neutral", "STEP")
     assert cf.classify("noext") == ("other", "", "") and cf.classify(".hidden") == ("other", "", "")
     assert cf.classify("Thumbs.db")[0] == "other" and cf.classify("~$tray.sldasm")[0] == "other"
+    assert cf.classify("แบบ v1. แก้ไขล่าสุด") == ("other", "", "")  # a dot in a name is not always an extension
+    assert sorted(["part 10.stl", "part 9.stl", "²", "๑๒.stl", "Part 2.stl"], key=cf._natural)[:3] == [
+        "๑๒.stl", "Part 2.stl", "part 9.stl"]  # by number, and no name can break the order
     assert cf.human(0) == "0 ไบต์" and cf.human(1536) == "1.5 KB" and cf.human(3539808068) == "3.30 GB"
 
 

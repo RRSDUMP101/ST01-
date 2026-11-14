@@ -83,6 +83,7 @@ class Part3D:
     size: str = ""  # 'C100×50×5 L=2600'
     note: str = ""
     mesh: list = field(default_factory=list)  # shape 'mesh': [[(x, y, z), …], …] faces
+    cull: bool = False  # shape 'mesh': a closed skin whose faces all wind outwards – the view hides its back faces
 
     def chunks(self) -> list[list[Face]]:
         """The faces in convex pieces (a box: one; a channel: three; an imported mesh: one, of any form)."""

@@ -3,26 +3,35 @@
 from __future__ import annotations
 
 import tempfile
+import time
 from pathlib import Path
 from struct import error as struct_error
 
-from PySide6.QtCore import Qt, QTimer, QUrl
+from PySide6.QtCore import QObject, Qt, QTimer, QUrl, Signal
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QFileDialog, QHBoxLayout, QLabel, QLineEdit, QMessageBox,
                                QPlainTextEdit, QSlider, QSplitter, QTableWidgetItem, QVBoxLayout, QWidget)
 
 from ...core import assembly3d as a3
+from ...core import cad_import
 from ...core import install_manual as im
 from ..assembly_view import Assembly3DView
 from ..state import AppState
-from ..widgets import button, fill, table
+from ..widgets import button, fill, run_async, table
 
 PART_HEADERS = ["แสดง", "ชิ้นส่วน", "กลุ่ม", "ขั้น", "ขนาด", "Part No."]
 C_SHOW, C_NAME, C_GROUP, C_STEP, C_SIZE, C_PN = range(6)
 BOM_HEADERS = ["#", "ชิ้นส่วน", "ขนาด", "Part No.", "จำนวน"]
-MODEL_FILTER = "โมเดล 3 มิติ (*.obj *.stl)"
+MODEL_FILTER = ("โมเดล 3 มิติ (*.step *.stp *.igs *.iges *.obj *.stl);;CAD: STEP / IGES (*.step *.stp *.igs *.iges);;"
+                "Mesh: OBJ / STL (*.obj *.stl)")
 ALL_GROUPS = "ทุกกลุ่ม"
 JOB_KEYS = ("product", "cab", "body_length", "body_width", "body_height", "cab_gap", "bolt_size", "bolt_grade",
             "rigid_subframe", "lamp_low", "lamp_high", "lamp_from_edge")
+
+
+class _CadProgress(QObject):
+    """Carries how far the CAD reader is from its worker thread to the window."""
+
+    changed = Signal(str, float)  # stage, 0 … 1
 
 
 class AssemblyTab(QWidget):
@@ -34,6 +43,13 @@ class AssemblyTab(QWidget):
         self._key = None
         self._loading = False
         self._playing = False
+        self._cad_busy = ""  # the STEP / IGES file a worker is reading ('' = none)
+        self._cad_stage, self._cad_started = ("", 0.0), 0.0
+        self._cad_progress = _CadProgress(self)
+        self._cad_progress.changed.connect(self._cad_progressed)
+        self._cad_timer = QTimer(self)  # the minutes go on in the note while one long stage is at work
+        self._cad_timer.setInterval(1000)
+        self._cad_timer.timeout.connect(self._show_cad_progress)
 
         lay = QVBoxLayout(self)
         row = QHBoxLayout()
@@ -42,8 +58,9 @@ class AssemblyTab(QWidget):
         row.addWidget(self.title, 1)
         for text, slot, kind, tip in (
                 ("สร้างจากงานนี้", lambda: self.rebuild(force=True), "", "โมเดลตัวอย่างจากขนาดในแท็บ ข้อมูลงาน"),
-                ("นำเข้าโมเดล (OBJ / STL)…", lambda: self.import_files(), "accent",
-                 "โมเดลจริงจาก CAD: ส่งออกเป็น OBJ (ทั้งชุด – 1 object ต่อ 1 ชิ้น) หรือ STL (1 ไฟล์ต่อ 1 ชิ้น)"),
+                ("นำเข้าโมเดล (STEP / IGES / OBJ / STL)…", lambda: self.import_files(), "accent",
+                 "โมเดลจริงจาก CAD: STEP หรือ IGES ทั้งชุดประกอบ (ต้องติดตั้ง cadquery-ocp) · หรือ OBJ (1 object ต่อ 1 ชิ้น) "
+                 "· หรือ STL (1 ไฟล์ต่อ 1 ชิ้น)"),
                 ("เปิด…", lambda: self.open_model(), "", "เปิดไฟล์คู่มือประกอบ (.rrsasm)"),
                 ("บันทึก…", lambda: self.save_model(), "", "บันทึกโมเดล + ขั้นตอน (.rrsasm)"),
                 ("คู่มือประกอบ PDF", lambda: self.export_pdf(), "primary", "ภาพ 3 มิติทุกขั้น + ตารางชิ้นส่วน + จุดตรวจ")):
@@ -204,7 +221,7 @@ class AssemblyTab(QWidget):
         self.title.setText(model.name if model else "ยังไม่มีโมเดล 3 มิติสำหรับผลิตภัณฑ์นี้")
         problems = model.problems() if model else []
         self.note.setText(" · ".join(x for x in ((model.note if model else
-                          "หางลากยังไม่มีโมเดลตัวอย่าง – นำเข้าโมเดลจริงจาก CAD (OBJ / STL)"), *problems) if x))
+                          "หางลากยังไม่มีโมเดลตัวอย่าง – นำเข้าโมเดลจริงจาก CAD (STEP / IGES / OBJ / STL)"), *problems) if x))
         self._fill_groups()
         self._fill_parts()
         self._options_changed()
@@ -410,6 +427,10 @@ class AssemblyTab(QWidget):
             paths, _ = QFileDialog.getOpenFileNames(self, "เลือกโมเดล 3 มิติจาก CAD", "", MODEL_FILTER)
         if not paths:
             return None
+        cad = [p for p in paths if cad_import.is_cad_file(p)]
+        if cad:  # read on a worker: the model is set when it is done
+            self.import_cad(cad[0], ignored=len(paths) - 1)
+            return None
         try:
             model = a3.model_from_files(paths)
         except (OSError, ValueError, IndexError, struct_error) as e:
@@ -419,6 +440,52 @@ class AssemblyTab(QWidget):
         self.state.notify(f"นำเข้า {len(model.parts)} ชิ้น {a3.face_count(model):,} หน้า · {len(model.steps)} กลุ่ม/ขั้น – "
                           "แก้ชื่อ กลุ่ม และขั้นในตารางได้")
         return model
+
+    def import_cad(self, path: str, ignored: int = 0) -> bool:
+        """STEP / IGES: read by OpenCascade behind a worker thread (in a child process, see `read_cad_isolated`),
+        so that a file of hundreds of MB does not freeze the window; the note shows how far it is."""
+        if self._cad_busy:
+            self.state.notify(f"กำลังนำเข้า {self._cad_busy} อยู่ – รอให้เสร็จก่อน")
+            return False
+        if not cad_import.have_ocp():
+            QMessageBox.warning(self, "นำเข้าโมเดล", cad_import.INSTALL_HINT)
+            return False
+        name, note = Path(path).name, self.note.text()
+        self._cad_busy, self._cad_stage, self._cad_started = name, ("เริ่มอ่านไฟล์", 0.0), time.monotonic()
+        self._show_cad_progress()
+        self._cad_timer.start()
+        if ignored:
+            self.state.notify(f"นำเข้าไฟล์ CAD ได้ครั้งละ 1 ไฟล์ – ใช้ {name} (อีก {ignored} ไฟล์ไม่ได้นำเข้า)")
+
+        def finish() -> None:
+            self._cad_busy = ""
+            self._cad_timer.stop()
+
+        def done(model: a3.AssemblyModel) -> None:
+            finish()
+            self.set_model(model)
+            self.state.notify(f"นำเข้า {name}: {len(model.parts)} ชิ้น {a3.face_count(model):,} หน้า · {len(model.steps)} กลุ่ม/ขั้น – "
+                              "แก้ชื่อ กลุ่ม และขั้นในตารางได้")
+
+        def failed(message: str) -> None:
+            finish()
+            self.note.setText(note)
+            QMessageBox.warning(self, "นำเข้าโมเดล", f"นำเข้า {name} ไม่ได้\n\n{message}")
+
+        run_async(cad_import.read_cad_isolated, done, failed, path, progress=self._cad_progress.changed.emit)
+        return True
+
+    def _cad_progressed(self, stage: str, fraction: float) -> None:
+        self._cad_stage = (stage, fraction)
+        self._show_cad_progress()
+
+    def _show_cad_progress(self) -> None:
+        if not self._cad_busy:
+            return
+        stage, fraction = self._cad_stage
+        spent = int(time.monotonic() - self._cad_started)
+        self.note.setText(f"กำลังนำเข้า {self._cad_busy} – {stage} {fraction:.0%} · ผ่านไป {spent // 60}:{spent % 60:02d} นาที "
+                          "(ไฟล์ใหญ่ใช้เวลาหลายนาที ระหว่างนี้ใช้งานหน้าต่างอื่นต่อได้)")
 
     def swap_up(self) -> None:
         if self.model:

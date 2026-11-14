@@ -7,11 +7,12 @@
 * `download` – a public Drive file of any size: follows the "can't scan this file for viruses" form, continues a
   partial file with a Range request, retries network errors, and stops at once when the session's proxy refuses
   the host (a policy, not a fault: the hosts must be allowed first).
-* `unpack` – RAR / RAR5 / ZIP / 7z with 7z (unar when 7z cannot read it) into a new or empty folder. The archive is
-  untrusted: it is listed first and refused whole when an entry could land outside the folder.
+* `unpack` – RAR / RAR5 / ZIP / 7z into a new or empty folder: listed with 7z (or lsar), extracted with unrar when
+  it is a RAR and unrar is installed (7z 23 and unar answer "Unsupported Method" to what WinRAR 7 writes), else with
+  7z, then unar. The archive is untrusted: it is refused whole when an entry could land outside the folder.
 * `inventory` – what is in the folder and which of it can become the 3D assembly manual (สรุปเป็นภาษาไทย).
 
-Standard library only; curl, 7z and unar/lsar are run with argument lists, never through a shell. Nothing from a
+Standard library only; curl, 7z, unrar and unar/lsar are run with argument lists, never through a shell. Nothing from a
 downloaded file is executed or imported. Exit codes: 0 done · 1 failed · 3 the proxy does not allow the host.
 """
 
@@ -68,10 +69,10 @@ def human(n: float) -> str:
     return ""
 
 
-def _run(args: list[str], tick=None, every: float = 15.0) -> tuple[int, str, str]:
+def _run(args: list[str], tick=None, every: float = 15.0, env: dict | None = None) -> tuple[int, str, str]:
     """A program with an argument list (no shell, no input). `tick` is called now and then while it runs."""
     try:
-        proc = subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        proc = subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
     except FileNotFoundError:
         raise FetchError(f"ไม่พบโปรแกรม {args[0]} ในเครื่องนี้") from None
     try:
@@ -215,7 +216,7 @@ class _Drive:
         self.dump.unlink(missing_ok=True)
         # -q: no ~/.curlrc, so nothing there can switch certificate checks off or add a header
         args = ["curl", "-q", "-sS", "-L", "--max-redirs", "10", "--proto", "=http,https", "--proto-redir",
-                "=http,https", "--connect-timeout", "30", "-A", USER_AGENT, "-b", str(self.jar), "-c", str(self.jar),
+                "=http,https", "--connect-timeout", "90", "-A", USER_AGENT, "-b", str(self.jar), "-c", str(self.jar),
                 "-D", str(self.dump), "-w", "%{http_code} %{http_connect} %{url_effective}", *extra, "--", url]
         code, out, err = _run(args, tick, self.every)
         http, connect, last = (out.split(" ", 2) + ["", "", ""])[:3]
@@ -260,10 +261,13 @@ class _Drive:
             if status != 416:
                 self.check(code, err, status, "ถามหาไฟล์")
             name = _file_name(headers.get("content-disposition", ""))
+            is_page = headers.get("content-type", "").lower().startswith("text/html") and not name
+            if is_page and status == 206:  # the page itself, cut to its first byte: ask for all of it
+                code, err, status, headers, last = self.curl(first[2:], url)
+                self.check(code, err, status, "ถามหาไฟล์")
             if status == 206:
                 total = headers.get("content-range", "").rpartition("/")[2]
                 return _Target(url, int(total) if total.isdigit() else None, True, name)
-            is_page = headers.get("content-type", "").lower().startswith("text/html") and not name
             if not is_page:  # the whole file, or the refusal of a range for an empty one: no resume with this server
                 length = headers.get("content-length", "")
                 return _Target(url, 0 if status == 416 else int(length) if length.isdigit() else None, False, name)
@@ -295,6 +299,8 @@ class _Drive:
         extra = ["--fail", "--speed-limit", "1", "--speed-time", "90", "-o", str(part)]
         extra += ["-C", str(offset)] if offset else []
         code, err, status, headers, _last = self.curl(extra, target.url, tick)
+        if code == 22 and status == 416 and offset and target.total is None:
+            return  # nothing after what we have, and the server never told the size: the file was complete
         if code == 33 or (code == 22 and status == 416):  # no range after all: the next try asks the address again
             raise _Again("เซิร์ฟเวอร์ไม่ยอมส่งต่อจากจุดที่ค้าง")
         self.check(code, err, status, "ดาวน์โหลด")
@@ -372,6 +378,7 @@ class Entry:
     link: str | None = None  # a link's target · '' = a link whose target the listing does not tell · None = no link
     hard: bool = False  # a hard link: its target counts from the top of the archive, not from its own folder
     encrypted: bool = False
+    extra: bool = False  # an NTFS stream ('name:stream'): its name is checked, but not every program writes it
 
 
 @dataclass
@@ -396,11 +403,13 @@ def free_space(path: str | Path) -> int:
 def _archive_fault(text: str, archive: Path) -> None:
     """What 7z / lsar say about an archive that cannot be unpacked as it is, in the user's words."""
     missing = re.search(r"Missing volume\s*:\s*(.+)", text)
-    if missing or "XADVolumeScanningFailed" in text:
-        name = f" “{missing.group(1).strip()}”" if missing else ""
-        raise FetchError(f"{archive.name} เป็นส่วนหนึ่งของไฟล์บีบอัดหลายส่วน และขาดไฟล์ส่วน{name} – "
-                         "ต้องมีทุกส่วน (part1, part2 …) อยู่ในโฟลเดอร์เดียวกันก่อนแตกไฟล์")
-    if re.search(r"Cannot open encrypted archive|Wrong password|requires a password", text):
+    if missing:
+        raise FetchError(f"{archive.name} เป็นส่วนหนึ่งของไฟล์บีบอัดหลายส่วน และขาดไฟล์ส่วน “{missing.group(1).strip()}” "
+                         "– ต้องมีทุกส่วน (part1, part2 …) อยู่ในโฟลเดอร์เดียวกันก่อนแตกไฟล์")
+    missing = re.search(r"Cannot find volume (.+)", text)
+    if missing:
+        raise FetchError(f"{archive.name} ขาดไฟล์ส่วน “{missing.group(1).strip()}” ของไฟล์บีบอัดหลายส่วน")
+    if re.search(r"Cannot open encrypted archive|Wrong password|requires a password|[Ii]ncorrect password", text):
         raise FetchError(f"{archive.name} ใส่รหัสผ่านไว้ (เข้ารหัส) – ต้องขอรหัสผ่านจากเจ้าของไฟล์ "
                          "แล้วรันใหม่ด้วย --password")
     if re.search(r"Unexpected end of (archive|data)|Unavailable data|Headers Error", text):
@@ -409,18 +418,22 @@ def _archive_fault(text: str, archive: Path) -> None:
 
 def _list_7z(archive: Path, password: str) -> Listing:
     code, out, err = _run(["7z", "l", "-slt", "-sccUTF-8", f"-p{password}", "--", str(archive)])
-    _archive_fault(out + err, archive)
-    lines = out.splitlines()
-    if code or "----------" not in lines:
-        raise _NotRead(" · ".join(x.strip() for x in (out + err).splitlines() if "ERROR" in x)[-400:])
-    cut = len(lines) - 1 - lines[::-1].index("----------")
+    lines = [x.rstrip("\r") for x in out.split("\n")]  # not splitlines(): a name may hold U+2028 and the like
+    cut = len(lines) - 1 - lines[::-1].index("----------") if "----------" in lines else len(lines)
+    # what 7z says about the archive stands above the entries; the names below must not be read as its messages
+    said = "\n".join(x for x in lines[:cut] if not x.startswith(("Path = ", "Listing archive: "))) + "\n" + err
+    _archive_fault(said, archive)
+    if code or cut == len(lines):
+        raise _NotRead(" · ".join(x.strip() for x in said.splitlines() if "ERROR" in x)[-400:])
     kinds = [x.partition(" = ")[2] for x in lines[:cut] if x.startswith("Type = ")]
     listing = Listing("7z", kinds[-1] if kinds else "")
     block: dict[str, str] = {}
     for line in lines[cut + 1:] + [""]:
         key, sep, value = line.partition(" =")
-        if sep and re.fullmatch(r"[A-Za-z][A-Za-z ]*", key) and key not in block:
-            block[key] = value[1:] if value.startswith(" ") else value
+        is_field = bool(sep) and bool(re.fullmatch(r"[A-Za-z][A-Za-z ]*", key))
+        value = value.removeprefix(" ")
+        if is_field and key not in block:
+            block[key] = value
             continue
         if "Path" in block:
             attrs = block.get("Attributes", "")
@@ -429,10 +442,10 @@ def _list_7z(archive: Path, password: str) -> Listing:
             listing.entries.append(Entry(
                 block["Path"], int(block.get("Size") or 0), block.get("Folder") == "+" or attrs.startswith("D"),
                 target if (target or is_link) else None, bool(block.get("Hard Link") or block.get("Copy Link")),
-                block.get("Encrypted") == "+"))
-        block = {}
+                block.get("Encrypted") == "+", block.get("Alternate Stream") == "+"))
+        block = {key: value} if is_field else {}
     # zip and 7z keep a link's target as the entry's data: read it (-spd: the name as it is, no wildcards)
-    unknown = [e for e in listing.entries if e.link == "" and not e.encrypted]
+    unknown = [e for e in listing.entries if e.link == "" and (password or not e.encrypted)]
     for e in unknown[:MAX_LINKS]:
         code, out, _err = _run(["7z", "e", "-so", "-spd", f"-p{password}", "--", str(archive), e.path])
         if code == 0 and 0 < len(out) <= 4096 and e.size == len(out.encode("utf-8")):
@@ -441,13 +454,16 @@ def _list_7z(archive: Path, password: str) -> Listing:
 
 
 def _list_unar(archive: Path, password: str) -> Listing:
-    code, out, err = _run(["lsar", "-j", *(["-p", password] if password else []), str(archive)])
-    _archive_fault(out + err, archive)
+    _code, out, err = _run(["lsar", "-j", *(["-p", password] if password else []), str(archive)])
+    _archive_fault(err, archive)  # not the listing: a file may be called 'Wrong password.txt'
     try:
         data = json.loads(out)
         items = data["lsarContents"]
     except (ValueError, KeyError, TypeError):
         raise _NotRead(err.strip()[-400:]) from None
+    if not items and (data.get("lsarProperties") or {}).get("XADVolumeScanningFailed"):
+        # alone the flag says nothing (lsar sets it for whole archives too); with no entry at all it is a lost volume
+        _archive_fault("Unexpected end of archive", archive)
     listing = Listing("unar", str(data.get("lsarFormatName", "")))
     for it in items:
         is_link = bool(it.get("XADIsLink") or it.get("XADIsHardLink"))
@@ -458,22 +474,26 @@ def _list_unar(archive: Path, password: str) -> Listing:
     return listing
 
 
-_LIST = {"7z": _list_7z, "unar": _list_unar}
-_NEEDS = {"7z": "7z", "unar": "lsar"}
+TOOLS = ("7z", "unrar", "unar")
+_LIST = {"7z": (_list_7z, "7z"), "unar": (_list_unar, "lsar")}  # unrar only extracts: its listing is made for reading
 
 
-def list_archive(archive: str | Path, tools: tuple[str, ...] = ("7z", "unar"), password: str = "") -> Listing:
+def list_archive(archive: str | Path, tools: tuple[str, ...] = TOOLS, password: str = "") -> Listing:
     """The entries of the archive, by the first of `tools` that is installed and can open it."""
     archive = Path(archive)
     said = []
     for tool in tools:
-        if not shutil.which(_NEEDS[tool]):
+        if tool not in _LIST:
+            continue
+        if not shutil.which(_LIST[tool][1]):
             said.append(f"{tool}: ไม่ได้ติดตั้ง")
             continue
         try:
-            return _LIST[tool](archive, password)
+            return _LIST[tool][0](archive, password)
         except _NotRead as e:
             said.append(f"{tool}: {str(e) or 'เปิดไม่ได้'}")
+    if not said:
+        raise FetchError("ไม่มีโปรแกรมสำหรับตรวจรายการในไฟล์บีบอัด (ต้องมี 7z หรือ lsar) – ไม่แตกไฟล์โดยไม่ตรวจก่อน")
     raise FetchError(f"เปิด {archive.name} เป็นไฟล์บีบอัดไม่ได้ (ไฟล์เสีย ดาวน์โหลดไม่ครบ หรือไม่ใช่ RAR/ZIP/7z)\n"
                      + "\n".join(said))
 
@@ -488,7 +508,7 @@ def unsafe_entries(entries: list[Entry]) -> list[str]:
     bad, links = [], set()
     for e in entries:
         name = e.path.replace("\\", "/")  # a RAR or ZIP made on Windows may keep '\' – on Windows that is a folder
-        if not name.strip("/") or any(ord(c) < 32 for c in name):
+        if not name.strip("/") or any(c < " " or c in "\x7f\x85\u2028\u2029" for c in name):
             bad.append(f"ชื่อว่างหรือมีอักขระควบคุม: {e.path!r}")
         elif _outside(name):
             bad.append(f"พาธแบบเต็ม (absolute) – จะเขียนออกนอกโฟลเดอร์ปลายทาง: {e.path}")
@@ -511,28 +531,55 @@ def unsafe_entries(entries: list[Entry]) -> list[str]:
     return bad
 
 
+def _utf8_env() -> dict | None:
+    """unrar writes names in the character set of the locale: under 'C' / 'POSIX' Thai names become '???'."""
+    now = os.environ.get("LC_ALL") or os.environ.get("LC_CTYPE") or os.environ.get("LANG") or ""
+    return None if "utf" in now.lower() else dict(os.environ, LC_ALL="C.UTF-8")
+
+
 def _extract(tool: str, archive: Path, dest: Path, password: str, tick, every: float) -> tuple[int, str]:
+    env = None
     if tool == "7z":  # -o and the archive are absolute paths, so neither can be taken for a switch
         args = ["7z", "x", "-y", "-bd", "-sccUTF-8", f"-p{password}", f"-o{dest}", "--", str(archive)]
+    elif tool == "unrar":  # -p-: never ask for a password · -idq: only errors · -op: the folder, as an absolute path
+        args = ["unrar", "x", "-y", "-o+", "-c-", "-idq", f"-p{password}" if password else "-p-", f"-op{dest}",
+                "--", str(archive)]
+        env = _utf8_env()
     else:  # -D: straight into the folder, no folder of its own · -f: never ask
         args = ["unar", "-q", "-f", "-D", "-o", str(dest), *(["-p", password] if password else []), str(archive)]
-    code, out, err = _run(args, tick, every)
+    code, out, err = _run(args, tick, every, env)
     return code, (out + err).strip()
+
+
+def _links_left_out(tool: str, code: int, said: str) -> list[str]:
+    """The links the program refused to make, when that is all it complains about: 7z and unrar leave out every
+    link with '..' in its target, also one that stays inside the folder, and end with an error code for it."""
+    if tool == "7z" and code == 2:
+        found = re.findall(r"Dangerous (?:symbolic )?link path was ignored : (.+)", said)
+        errors = re.search(r"Sub items Errors: (\d+)", said)
+        return found if errors and int(errors.group(1)) == len(found) else []
+    if tool == "unrar" and code == 1:
+        lines = [x.strip() for x in said.splitlines() if x.strip()]
+        found = [m.group(1) for m in (re.match(r"Skipping the potentially unsafe (.+) link", x) for x in lines) if m]
+        return found if len(found) == len(lines) else []
+    return []
 
 
 def _tree_size(root: Path) -> tuple[int, int]:
     files = total = 0
     for folder, _dirs, names in os.walk(root):
         for name in names:
-            p = os.path.join(folder, name)
-            if not os.path.islink(p):
-                files, total = files + 1, total + os.path.getsize(p)
+            try:
+                if not os.path.islink(p := os.path.join(folder, name)):
+                    files, total = files + 1, total + os.path.getsize(p)
+            except OSError:  # counted while the program is still writing: a file may be gone again
+                continue
     return files, total
 
 
 def verify_tree(dest: Path, entries: list[Entry]) -> None:
-    """After extraction: no link in the folder may lead out of it (such a link is removed), and every entry of the
-    listing must be inside – one that is not went somewhere else."""
+    """After extraction: no link in the folder may lead out of it (such a link is removed), and every file of the
+    listing must be inside with its size – one that is not went somewhere else, or was not written to its end."""
     root = os.path.realpath(dest)
     escaped = []
     for folder, dirs, names in os.walk(dest):
@@ -544,17 +591,28 @@ def verify_tree(dest: Path, entries: list[Entry]) -> None:
     if escaped:
         raise UnsafeArchive("หลังแตกไฟล์พบลิงก์ที่ชี้ออกนอกโฟลเดอร์ปลายทาง (ลบลิงก์ออกแล้ว):\n  "
                             + "\n  ".join(escaped[:20]))
-    missing = [e.path for e in entries
-               if not os.path.lexists(os.path.join(dest, *e.path.replace("\\", "/").strip("/").split("/")))]
+    missing, short = [], []
+    for e in entries:
+        if e.link is not None or e.extra:  # a link the program left out is no loss
+            continue
+        p = os.path.join(dest, *e.path.replace("\\", "/").strip("/").split("/"))
+        if not os.path.lexists(p):
+            missing.append(e.path)
+        elif not e.is_dir and e.size and os.path.getsize(p) != e.size:
+            short.append(f"{e.path} ({os.path.getsize(p):,} จาก {e.size:,} ไบต์)")
     if missing:
         raise FetchError(f"แตกไฟล์แล้ว แต่ {len(missing)} รายการในไฟล์บีบอัดไม่อยู่ในโฟลเดอร์ปลายทาง "
                          "(แตกไม่ครบ หรือถูกเขียนไว้ที่อื่น):\n  " + "\n  ".join(missing[:20]))
+    if short:
+        raise FetchError(f"แตกไฟล์แล้ว แต่ {len(short)} ไฟล์ขนาดไม่ตรงกับรายการในไฟล์บีบอัด (แตกไม่ครบ):\n  "
+                         + "\n  ".join(short[:20]))
 
 
-def unpack(archive: str | Path, dest: str | Path, *, tools: tuple[str, ...] = ("7z", "unar"), password: str = "",
+def unpack(archive: str | Path, dest: str | Path, *, tools: tuple[str, ...] = TOOLS, password: str = "",
            progress_every: float = 30.0, log=print) -> dict:
     """RAR / RAR5 / ZIP / 7z → a new or empty folder. The archive is listed and checked before a single file is
-    written. `password` reaches the program as an argument: other users of the machine can see it while it runs."""
+    written. `tools`: the programs that may be used, in the order to try them (a RAR goes to unrar first).
+    `password` reaches the program as an argument: other users of the machine can see it while it runs."""
     archive, dest = Path(archive).resolve(), Path(os.path.abspath(dest))
     if not archive.is_file():
         raise FetchError(f"ไม่พบไฟล์บีบอัด {archive}")
@@ -579,11 +637,15 @@ def unpack(archive: str | Path, dest: str | Path, *, tools: tuple[str, ...] = ("
         raise FetchError(f"เนื้อที่ดิสก์ไม่พอ: แตกแล้วได้ {human(size)} ต้องมีที่ว่าง {human(need)} (เผื่อไว้แล้ว) "
                          f"แต่ดิสก์ของ {dest} เหลือ {human(free)}")
     log(f"แตกไฟล์ {archive.name} ({listing.kind}) – {len(files):,} ไฟล์ {human(size)} → {dest}")
-    order = [listing.tool] + [t for t in tools if t != listing.tool and shutil.which(t)]
+    is_rar = listing.kind.lower().startswith("rar")
+    have = [t for t in tools if shutil.which(t) and (is_rar or t != "unrar")]
+    # a RAR goes to the program of the format's author: what WinRAR 7 packs, 7z 23 and unar cannot unpack
+    first = "unrar" if is_rar and "unrar" in have else listing.tool
+    order = [first] + [t for t in have if t != first]
     said = ""
     for n, tool in enumerate(order):
-        if n:  # the first program gave up on the format: start again, empty (only our own files are in the folder)
-            log(f"{order[0]} แตกไฟล์ไม่ได้ – ลองด้วย {tool}")
+        if n:  # the program before gave up on the format: start again, empty (only our own files are in the folder)
+            log(f"{order[n - 1]} แตกไฟล์รูปแบบนี้ไม่ได้ – ลองด้วย {tool}")
             shutil.rmtree(dest)
         dest.mkdir(parents=True, exist_ok=True)
 
@@ -592,11 +654,20 @@ def unpack(archive: str | Path, dest: str | Path, *, tools: tuple[str, ...] = ("
             log(f"  แตกแล้ว {done_files:,} ไฟล์ {human(done)}" + (f" ({done * 100 / size:.0f}%)" if size else ""))
 
         code, said = _extract(tool, archive, dest, password, tick, progress_every)
-        if code == 0 or not re.search(r"Unsupported Method|Unsupported feature|Cannot open the file as", said):
+        unknown = re.search(r"(?i)unsupported|unknown method|not supported|cannot open the file as|is not rar", said)
+        if code == 0 or not unknown:
             break
+    left_out = _links_left_out(tool, code, said)
+    if left_out:
+        code = 0
+        log(f"ข้ามลิงก์ {len(left_out)} รายการที่ {tool} ไม่ยอมสร้าง (ไฟล์จริงแตกครบ): " + " · ".join(left_out[:5]))
     if code != 0:
         _archive_fault(said, archive)
-        raise FetchError(f"แตกไฟล์ไม่สำเร็จ ({tool} รหัส {code}) – ไฟล์ที่แตกได้บางส่วนยังอยู่ใน {dest}\n"
+        hint = ""
+        if is_rar and unknown and not shutil.which("unrar"):
+            hint = ("\nไฟล์ RAR นี้บีบอัดด้วยวิธีของ WinRAR รุ่นใหม่ ซึ่ง 7z รุ่นในเครื่องนี้และ unar ยังแตกไม่ได้ "
+                    "– ต้องติดตั้งโปรแกรม unrar แล้วรันใหม่")
+        raise FetchError(f"แตกไฟล์ไม่สำเร็จ ({tool} รหัส {code}) – ไฟล์ที่แตกได้บางส่วนยังอยู่ใน {dest}{hint}\n"
                          + said[-1200:])
     verify_tree(dest, listing.entries)
     done_files, done = _tree_size(dest)
@@ -624,7 +695,8 @@ _FORMATS = {
     "cad_neutral": {"STEP": "step stp", "IGES": "iges igs", "BREP": "brep brp"},
     "cad_neutral_unreadable": {"Parasolid": "x_t x_b xmt_txt xmt_bin", "ACIS": "sat sab", "JT": "jt", "3DXML": "3dxml",
                                "VDA-FS": "vda", "STEP (บีบอัด)": "stpz", "IFC": "ifc", "3D PDF (PRC/U3D)": "prc u3d"},
-    "cad_native": {"ZW3D": "z3 z3prt z3asm z3drw z3sht vx", "SolidWorks": "sldprt sldasm slddrw",
+    "cad_native": {"ZW3D": "z3 z3prt z3asm z3drw z3sht vx", "ZW3D – ไฟล์สำรอง / ไฟล์เสริม": "z3bak zwlyr",
+                   "SolidWorks": "sldprt sldasm slddrw",
                    "SolidWorks eDrawings": "eprt easm edrw", "Inventor": "ipt iam idw ipn",
                    "CATIA": "catpart catproduct catdrawing cgr model", "NX": "prt", "Creo": "asm drw",
                    "Solid Edge": "par psm dft", "Fusion 360": "f3d f3z", "FreeCAD": "fcstd", "Rhino": "3dm",
@@ -640,12 +712,14 @@ _FORMATS = {
 EXT_CLASS = {ext: (cls, fmt) for cls, fmts in _FORMATS.items() for fmt, exts in fmts.items() for ext in exts.split()}
 ASSEMBLY_EXT = {"z3asm", "sldasm", "iam", "catproduct", "asm", "ad_asm", "easm"}  # one of these = one STEP to export
 OPENS_NOW = {"obj", "stl"}  # what the program's 3D tab imports as it is
-_SNIFF_EXT = {"prt", "asm", "drw", "model", "top"}  # one extension, several programs: the first bytes tell
+_SNIFF_EXT = {"prt", "asm", "drw"}  # one extension, several programs: the first bytes tell
 _SERIES = re.compile(r"[\s_.:#-]*\d+$")  # the running number at the end of a name (as core.assembly3d._group_of)
 _3D = ("mesh", "cad_neutral", "cad_neutral_unreadable", "cad_native", "drawing_2d")
 NATIVE_NOTE = ("ไฟล์ต้นฉบับของโปรแกรม CAD อ่านที่นี่ไม่ได้ (รูปแบบปิดของแต่ละโปรแกรม) – ต้องเปิดในโปรแกรม CAD นั้น "
                "แล้วส่งออก (Export) เป็น STEP (.stp) 1 ไฟล์ต่อ 1 ชุดประกอบ ซึ่งได้ชื่อและโครงสร้างชิ้นส่วนครบ "
                "หรือส่งออกเป็น OBJ / STL")
+NESTED_NOTE = ("ไฟล์บีบอัดที่ซ้อนอยู่ข้างใน ยังไม่ได้แตก – ถ้าต้องการดูข้างใน ให้แตกต่อด้วยคำสั่ง unpack "
+               "ลงโฟลเดอร์ใหม่ไฟล์ละโฟลเดอร์ แล้วสรุปอีกครั้ง")
 DRAWING_NOTE = "แบบ 2 มิติ DWG / DXF ไม่ใช่โมเดล 3 มิติ – โปรแกรมนำเข้าเพื่อทำ Part List ได้อยู่แล้ว"
 USE_HOW = {
     1: "เปิดในแท็บ “คู่มือประกอบ 3 มิติ” ได้เลย (นำเข้าโมเดล OBJ / STL)",
@@ -694,6 +768,7 @@ def classify(name: str, path: str | None = None) -> tuple[str, str, str]:
     if volume:
         return "archive", "ไฟล์บีบอัด (หลายส่วน)", low.rpartition(".")[2]
     ext = low.rpartition(".")[2] if "." in low.lstrip(".") else ""
+    ext = ext if re.fullmatch(r"[a-z0-9_+~-]{1,12}", ext) else ""  # 'drawing v1. final' has no extension
     cls, fmt = EXT_CLASS.get(ext, ("other", ""))
     if path and (ext in _SNIFF_EXT or cls == "other"):
         head = _sniff(path)
@@ -718,7 +793,7 @@ def _stl_faces(path: str, size: int) -> int | None:
 
 def _natural(text: str) -> list:
     """'part 10' after 'part 9'. Numbers and words alternate, so two keys never compare a number with a word."""
-    return [int(t) if t.isdigit() else t.lower() for t in re.split(r"(\d+)", text)]
+    return [int(t) if i % 2 else t.lower() for i, t in enumerate(re.split(r"(\d+)", text))]
 
 
 def _tree_key(path: str) -> list:
@@ -804,11 +879,12 @@ def inventory(root: str | Path) -> dict:
     groups = []
     for kind, found in (("series", series), ("folder", folders)):
         for (folder, base, ext, cls), members in found.items():
-            if len(members) >= 2:
+            paths = [m["path"] for m in members]
+            if len(members) >= 2 and not any(g["files"] == paths for g in groups):  # not the same set twice
                 groups.append({"kind": kind, "folder": folder or ".", "name": base, "ext": ext, "class": cls,
                                "count": len(members), "bytes": sum(m["bytes"] for m in members),
-                               "files": [m["path"] for m in members]})
-    groups.sort(key=lambda g: (g["kind"] != "series", -g["bytes"], g["folder"], g["name"]))
+                               "files": paths})
+    groups.sort(key=lambda g: (g["kind"] != "series", _3D.index(g["class"]), -g["bytes"], g["folder"], g["name"]))
 
     return {
         "root": str(root),
@@ -828,6 +904,8 @@ def inventory(root: str | Path) -> dict:
                        "note": NATIVE_NOTE, "formats": sorted(native.values(), key=lambda r: -r["bytes"])},
         "drawings_2d": {"count": by_class.get("drawing_2d", [0, 0])[0], "bytes": by_class.get("drawing_2d", [0, 0])[1],
                         "note": DRAWING_NOTE},
+        "nested_archives": {"note": NESTED_NOTE, "files": [{"path": f["path"], "bytes": f["bytes"]} for f in files
+                                                           if f["class"] == "archive"]},
         "groups": groups,
         "files": files,
     }
@@ -861,6 +939,10 @@ def render_markdown(inv: dict, limit: int = 40) -> str:
         if any(row["format"] == "ZW3D" for row in native["formats"]):
             out.append("- หมายเหตุ ZW3D: ไฟล์ `.Z3` ไฟล์เดียวเก็บได้ทั้งชิ้นส่วน ชุดประกอบ และแบบ "
                        "– ต้องเปิดดูใน ZW3D ว่าชุดประกอบอยู่ไฟล์ไหน")
+    if inv["nested_archives"]["files"]:
+        out += ["", "## ไฟล์บีบอัดที่ซ้อนอยู่ข้างใน", "", inv["nested_archives"]["note"], ""]
+        out += [f"- `{f['path']}` – {human(f['bytes'])}" for f in inv["nested_archives"]["files"][:limit]]
+        out += more(inv["nested_archives"]["files"], limit, "ไฟล์")
     if inv["drawings_2d"]["count"]:
         out += ["", f"{DRAWING_NOTE}: {inv['drawings_2d']['count']:,} ไฟล์ {human(inv['drawings_2d']['bytes'])}"]
     if inv["groups"]:

@@ -6,8 +6,9 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import (QComboBox, QFileDialog, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
-                               QMessageBox, QSpinBox, QSplitter, QVBoxLayout, QWidget)
+from PySide6.QtGui import QPixmap
+from PySide6.QtWidgets import (QComboBox, QFileDialog, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QListWidget,
+                               QListWidgetItem, QMessageBox, QSpinBox, QSplitter, QVBoxLayout, QWidget)
 
 from ...core import oem_parts as oem
 from ..state import AppState
@@ -16,6 +17,9 @@ from ..widgets import button, empty_hint, fill, selected_rows, table
 HEADERS = ["แผนภาพ", "ตำแหน่ง", "Part Number", "รายละเอียด", "หมายเหตุ / รุ่นที่ใช้", "จำนวน", "MSRP", "ราคา", "ผู้ขาย"]
 PAGE_FILTER = "หน้าเว็บที่บันทึก / ข้อความ (*.html *.htm *.mhtml *.txt);;ทุกไฟล์ (*)"
 LAST_DIAGRAM = 29  # Headlamp Components of the 2026 F-350: diagrams 1 – 29
+IMAGE_FILTER = "รูปภาพ (*.png *.jpg *.jpeg *.gif *.webp *.bmp)"
+DEFAULT_VEHICLE = "2026 Ford F-350 Super Duty XL 7.3L V8 Gas"
+DEFAULT_CATEGORY = "Headlamp Components"
 
 
 class OemPartsTab(QWidget):
@@ -46,9 +50,34 @@ class OemPartsTab(QWidget):
         lay.addWidget(self.coverage)
 
         split = QSplitter(Qt.Horizontal)
+        left = QWidget()
+        ll = QVBoxLayout(left)
+        ll.setContentsMargins(0, 0, 0, 0)
         self.diagrams = QListWidget()
         self.diagrams.currentRowChanged.connect(lambda _r: self.show_rows())
-        split.addWidget(self.diagrams)
+        self.diagrams.setMinimumHeight(120)
+        ll.addWidget(self.diagrams, 1)
+        self.picture = QLabel("เลือกแผนภาพเพื่อดูรูป")
+        self.picture.setAlignment(Qt.AlignCenter)
+        self.picture.setFixedHeight(290)
+        self.picture.setStyleSheet("background:white; border:1px solid #DDE3EC;")
+        ll.addWidget(self.picture)
+        crow = QHBoxLayout()
+        crow.addWidget(QLabel("หมายเลขในรูป"))
+        self.callouts = QLineEdit()
+        self.callouts.setPlaceholderText("เช่น 1-12")
+        self.callouts.setToolTip("หมายเลขตำแหน่งที่พิมพ์อยู่ในรูปแผนภาพ – ใช้ตรวจว่าทุกหมายเลขมีอะไหล่ครบ")
+        self.callouts.editingFinished.connect(self.set_callouts)
+        crow.addWidget(self.callouts, 1)
+        ll.addLayout(crow)
+        self.callout_check = QLabel()
+        self.callout_check.setWordWrap(True)
+        ll.addWidget(self.callout_check)
+        attach = button("แนบรูปแผนภาพ…", tooltip="เก็บรูปแผนภาพ (บันทึกรูปจากเว็บ หรือภาพหน้าจอ) ไว้กับแผนภาพที่เลือก")
+        attach.clicked.connect(lambda: self.attach_image())
+        ll.addWidget(attach)
+        ll.addStretch(1)
+        split.addWidget(left)
         right = QWidget()
         rl = QVBoxLayout(right)
         rl.setContentsMargins(0, 0, 0, 0)
@@ -61,7 +90,7 @@ class OemPartsTab(QWidget):
                    if not self.library.catalogs else "ไม่พบรายการ")
         rl.addWidget(self.table, 1)
         split.addWidget(right)
-        split.setSizes([260, 900])
+        split.setSizes([380, 820])
         lay.addWidget(split, 1)
 
         row = QHBoxLayout()
@@ -107,7 +136,7 @@ class OemPartsTab(QWidget):
         if cat:
             self.diagrams.addItem(QListWidgetItem(f"ทั้งหมด ({cat.part_count})"))
             for a in cat.assemblies:
-                self.diagrams.addItem(QListWidgetItem(f"{a.number}. {a.title}  ({len(a.parts)})"))
+                self.diagrams.addItem(QListWidgetItem(self._item_text(a)))
             missing = oem.missing_numbers(cat, max(LAST_DIAGRAM, max((a.number for a in cat.assemblies), default=0)))
             self.coverage.setText(
                 f"ที่มา {cat.source} · ดึงข้อมูล {cat.fetched_at} · Part Number ไม่ซ้ำ {len(cat.unique_numbers())} เบอร์ · "
@@ -130,6 +159,7 @@ class OemPartsTab(QWidget):
                 number = cat.assemblies[r - 1].number
                 rows = [(a, p) for a, p in rows if a.number == number]
             self.rows = rows
+        self.show_diagram()
         fill(self.table, [[a.number, p.callout, p.part_number, p.description, p.notes, oem.qty_of(p.qty),
                            p.msrp, p.price, p.seller] for a, p in self.rows])
         total = sum(oem.money(p.price or p.msrp) * oem.qty_of(p.qty) for _a, p in self.rows)
@@ -148,17 +178,98 @@ class OemPartsTab(QWidget):
                                 "บันทึกหน้าแบบ Webpage, HTML Only หรือ Webpage, Complete แล้วลองใหม่")
             return None
         old = next((c for c in self.library.catalogs if c.key == cat.key), None)
-        if old:  # pages saved in several rounds: the diagrams already imported stay
+        if old:  # pages saved in several rounds: the diagrams already imported stay, with their pictures
             have = {a.number for a in cat.assemblies}
+            for a in cat.assemblies:
+                if (prev := old.assembly(a.number)) is not None:
+                    a.image_file, a.callouts = prev.image_file, prev.callouts or a.callouts
             cat.assemblies = sorted(cat.assemblies + [a for a in old.assemblies if a.number not in have],
                                     key=lambda a: a.number)
-        self.library.folder.mkdir(parents=True, exist_ok=True)
-        cat.save(self.library.folder / f"{cat.key}.json")
+        self.library.save(cat)
+        pictures = 0
+        for path, page in zip(paths, pages):  # 'Webpage, Complete': the picture of the diagram is in its _files folder
+            asm, _veh = oem.parse_page(page)
+            img = oem.local_image(path, oem.diagram_image_src(page, asm.number)) if asm else None
+            if img:
+                self.library.attach_image(cat, asm.number, img)
+                pictures += 1
         self.reload(cat.key)
         no_pn = sum(1 for _a, p in cat.rows() if not p.part_number)
         self.state.notify(f"นำเข้า {len(paths)} หน้า: {len(cat.assemblies)} แผนภาพ {cat.part_count} รายการ"
+                          + (f" · รูปแผนภาพ {pictures}" if pictures else "")
                           + (f" · ไม่มี Part Number {no_pn} รายการ" if no_pn else ""))
         return cat
+
+    # ---- the picture of a diagram ------------------------------------------
+    def current_assembly(self) -> oem.Assembly | None:
+        cat, r = self.catalog, self.diagrams.currentRow()
+        return cat.assemblies[r - 1] if cat and 0 < r <= len(cat.assemblies) else None
+
+    def show_diagram(self) -> None:
+        asm = self.current_assembly()
+        self.callouts.blockSignals(True)
+        self.callouts.setText(asm.callouts if asm else "")
+        self.callouts.setEnabled(asm is not None)
+        self.callouts.blockSignals(False)
+        img = self.library.image_path(asm) if asm else None
+        pix = QPixmap(str(img)) if img else QPixmap()
+        if not pix.isNull():
+            self.picture.setPixmap(pix.scaled(max(360, self.picture.width() - 8), 280, Qt.KeepAspectRatio,
+                                              Qt.SmoothTransformation))
+        else:
+            self.picture.setPixmap(QPixmap())
+            self.picture.setText("ยังไม่มีรูป – กด แนบรูปแผนภาพ…" if asm else "เลือกแผนภาพเพื่อดูรูป")
+        if asm and asm.callout_numbers():
+            missing = asm.missing_callouts()
+            self.callout_check.setText(f"⚠ หมายเลขในรูปที่ยังไม่มีอะไหล่: {', '.join(missing)}" if missing else
+                                       f"✔ ครบทุกหมายเลข ({len(asm.callout_numbers())})")
+            self.callout_check.setStyleSheet("color:#D64545;" if missing else "color:#2E9D5B;")
+        else:
+            self.callout_check.setText("")
+
+    @staticmethod
+    def _item_text(a: oem.Assembly) -> str:
+        marks = ("  🖼" if a.image_file else "") + ("  ⚠" if a.missing_callouts() else "")
+        return f"{a.number}. {a.title or 'แผนภาพ'}  ({len(a.parts)}){marks}"
+
+    def set_callouts(self) -> None:
+        cat, asm, r = self.catalog, self.current_assembly(), self.diagrams.currentRow()
+        if cat and asm and asm.callouts != self.callouts.text().strip():
+            asm.callouts = self.callouts.text().strip()
+            self.library.save(cat)
+            self.diagrams.item(r).setText(self._item_text(asm))
+            self.show_diagram()
+
+    def attach_image(self, path: str = "", number: int | None = None, title: str = "") -> oem.Assembly | None:
+        """The picture of a diagram (saved from the site or a screenshot). With no diagram chosen, its number is asked;
+        a diagram not imported yet is made, so the pictures can come before the pages."""
+        if not path:
+            path, _ = QFileDialog.getOpenFileName(self, "เลือกรูปแผนภาพ", "", IMAGE_FILTER)
+        if not path:
+            return None
+        cat = self.catalog
+        if cat is None:
+            vehicle, ok = QInputDialog.getText(self, "แคตตาล็อกใหม่", "รุ่นรถ", text=DEFAULT_VEHICLE)
+            if not ok:
+                return None
+            category, ok = QInputDialog.getText(self, "แคตตาล็อกใหม่", "หมวด", text=DEFAULT_CATEGORY)
+            if not ok:
+                return None
+            cat = oem.OemCatalog(vehicle.strip(), category.strip(), "ford.oempartsonline.com")
+        asm = self.current_assembly() if number is None else None
+        if asm is None and number is None:
+            free = oem.missing_numbers(cat, LAST_DIAGRAM)
+            number, ok = QInputDialog.getInt(self, "แนบรูปแผนภาพ", "เลขแผนภาพ (Diagram N)", free[0] if free else 1, 1, 999)
+            if not ok:
+                return None
+            if cat.assembly(number) is None and not title:
+                title, _ok = QInputDialog.getText(self, "แนบรูปแผนภาพ", "ชื่อแผนภาพ เช่น Headlamp Assembly")
+        n = asm.number if asm else number
+        asm = self.library.attach_image(cat, n, path, title.strip())
+        self.reload(cat.key)
+        self.diagrams.setCurrentRow(1 + next(i for i, a in enumerate(self.catalog.assemblies) if a.number == n))
+        self.state.notify(f"แนบรูปแผนภาพ {n} แล้ว")
+        return asm
 
     def import_json(self, path: str = "") -> None:
         if not path:

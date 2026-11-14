@@ -81,6 +81,16 @@ class Assembly:
     url: str = ""
     image_url: str = ""
     parts: list[OemPart] = field(default_factory=list)
+    image_file: str = ""  # picture of the diagram kept in <library>/images (name only)
+    callouts: str = ""  # the numbers printed on the diagram, as typed: '1-12' · '1-4, 6, 8'
+
+    def callout_numbers(self) -> list[str]:
+        return parse_callouts(self.callouts)
+
+    def missing_callouts(self) -> list[str]:
+        """Numbers on the picture that no part row has (the page was not read whole, or rows to add)."""
+        have = {p.callout for p in self.parts}
+        return [c for c in self.callout_numbers() if c not in have]
 
     @classmethod
     def from_dict(cls, d: dict) -> Assembly:
@@ -91,7 +101,8 @@ class Assembly:
             n = 0
         return cls(n, _text(d.get("title") or d.get("name")), _text(d.get("url")),
                    _text(d.get("diagram_image_url") or d.get("image_url") or d.get("image")),
-                   [OemPart.from_dict(p) for p in d.get("parts") or [] if isinstance(p, dict)])
+                   [OemPart.from_dict(p) for p in d.get("parts") or [] if isinstance(p, dict)],
+                   _text(d.get("image_file")), _text(d.get("callouts")))
 
 
 @dataclass
@@ -141,7 +152,11 @@ class OemCatalog:
         return {"source": self.source, "vehicle": self.vehicle, "category": self.category,
                 "fetched_at": self.fetched_at,
                 "assemblies": [{"assembly": a.number, "title": a.title, "url": a.url, "diagram_image_url": a.image_url,
+                                "image_file": a.image_file, "callouts": a.callouts,
                                 "parts": [asdict(p) for p in a.parts]} for a in self.assemblies]}
+
+    def assembly(self, number: int) -> Assembly | None:
+        return next((a for a in self.assemblies if a.number == number), None)
 
     @classmethod
     def load(cls, path: str | Path) -> OemCatalog:
@@ -178,8 +193,42 @@ class OemLibrary:
         return next(c for c in self.catalogs if c.key == cat.key)
 
     def remove(self, cat: OemCatalog) -> None:
+        for a in cat.assemblies:
+            if a.image_file:
+                (self.images / a.image_file).unlink(missing_ok=True)
         (self.folder / f"{cat.key}.json").unlink(missing_ok=True)
         self.reload()
+
+    @property
+    def images(self) -> Path:
+        return self.folder / "images"
+
+    def image_path(self, asm: Assembly) -> Path | None:
+        if asm.image_file and (self.images / asm.image_file).is_file():
+            return self.images / asm.image_file
+        return None
+
+    def save(self, cat: OemCatalog) -> None:
+        self.folder.mkdir(parents=True, exist_ok=True)
+        cat.save(self.folder / f"{cat.key}.json")
+        self.reload()
+
+    def attach_image(self, cat: OemCatalog, number: int, image: str | Path, title: str = "") -> Assembly:
+        """Keep a copy of the picture of diagram `number` (the diagram is made when the catalogue has none yet)."""
+        import shutil
+
+        src = Path(image)
+        asm = cat.assembly(number)
+        if asm is None:
+            asm = Assembly(number, title)
+            cat.assemblies = sorted(cat.assemblies + [asm], key=lambda a: a.number)
+        self.images.mkdir(parents=True, exist_ok=True)
+        if asm.image_file:
+            (self.images / asm.image_file).unlink(missing_ok=True)
+        asm.image_file = f"{cat.key}_{number:02d}{src.suffix.lower() or '.png'}"
+        shutil.copyfile(src, self.images / asm.image_file)
+        self.save(cat)
+        return asm
 
 
 # --------------------------------------------------------------------------- to the program
@@ -265,6 +314,7 @@ def parse_page(page: str) -> tuple[Assembly | None, str]:
         return None, vehicle
     start, m = head
     asm = Assembly(int(m.group(1)), _text(re.sub(r"\s+\d+$", "", m.group(2))))
+    asm.image_url = diagram_image_src(page, asm.number) if "<" in page else ""
     body = lines[start + 1:]
     table_at = next((i for i, ln in enumerate(body) if ln.lower().startswith("part #")), -1)
     body = body[table_at + 1:] if table_at >= 0 else body
@@ -332,6 +382,36 @@ def catalog_from_pages(pages: list[str], category: str = "", source: str = "ford
                              if (m := re.match(r"(.+?) for \d{4} Ford ", ln))), "")
     return OemCatalog(vehicle, category, source, datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                       [by_no[n] for n in sorted(by_no)])
+
+
+def parse_callouts(text: str) -> list[str]:
+    """'1-12' → ['1', …, '12'] · '1-4, 6, 8' → ['1', '2', '3', '4', '6', '8'] (order kept, no repeats)."""
+    out: list[str] = []
+    for chunk in re.split(r"[,\s]+", _text(text)):
+        m = re.fullmatch(r"(\d+)\s*[-–]\s*(\d+)", chunk)
+        items = [str(n) for n in range(int(m.group(1)), int(m.group(2)) + 1)] if m and int(m.group(2)) - int(m.group(1)) < 500 \
+            else [chunk] if chunk else []
+        out += [x for x in items if x not in out]
+    return out
+
+
+def diagram_image_src(page: str, number: int) -> str:
+    """The picture of diagram `number` in a saved page: the first <img> after the 'Diagram N:' heading."""
+    m = re.search(rf"Diagram\s+{number}\s*:", page)
+    if not m:
+        return ""
+    img = re.search(r"""(?is)<img\b[^>]*?\bsrc=["']([^"']+)["']""", page[m.end():])
+    return img.group(1) if img and not img.group(1).startswith("data:") else ""
+
+
+def local_image(html_file: str | Path, src: str) -> Path | None:
+    """A picture of a page saved as 'Webpage, Complete' (in its _files folder) → the file, if it is there."""
+    from urllib.parse import unquote
+
+    if not src or re.match(r"(?i)^[a-z]+:", src):
+        return None
+    f = (Path(html_file).parent / unquote(src.split("?")[0])).resolve()
+    return f if f.is_file() else None
 
 
 def missing_numbers(cat: OemCatalog, last: int) -> list[int]:

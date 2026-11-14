@@ -96,3 +96,66 @@ def test_oem_tab(tmp_path):
     app.processEvents()
     w.state.dirty = False
     w.close()
+
+
+def _png(path):
+    from PIL import Image
+
+    Image.new("RGB", (120, 90), "white").save(path)
+    return path
+
+
+def test_diagram_pictures_and_callouts(tmp_path):
+    assert oem.parse_callouts("1-12")[-1] == "12" and oem.parse_callouts("1-4, 6,8 8") == ["1", "2", "3", "4", "6", "8"]
+    cat = oem.catalog_from_pages([SAMPLE.read_text(encoding="utf-8")])
+    a1 = cat.assembly(1)
+    assert a1.image_url == "https://example.invalid/diagrams/headlamp-1.png"
+    a1.callouts = "1-12"
+    assert a1.missing_callouts() == ["3", "4", "5", "6", "7", "9", "10", "11", "12"]
+    lib = oem.OemLibrary(tmp_path / "lib")
+    lib.attach_image(cat, 1, _png(tmp_path / "d1.png"))
+    lib.attach_image(cat, 7, _png(tmp_path / "d7.png"), "Low Beam Bulb")  # a picture before its page
+    back = lib.catalogs[0]
+    assert [a.number for a in back.assemblies] == [1, 7] and back.assembly(7).title == "Low Beam Bulb"
+    assert back.assembly(1).callouts == "1-12" and lib.image_path(back.assembly(1)).is_file()
+    lib.remove(back)
+    assert not list((tmp_path / "lib" / "images").iterdir())
+    # a page saved as 'Webpage, Complete': its picture is in the _files folder next to it
+    folder = tmp_path / "page_files"
+    folder.mkdir()
+    _png(folder / "headlamp 1.png")
+    page = SAMPLE.read_text(encoding="utf-8").replace("https://example.invalid/diagrams/headlamp-1.png",
+                                                       "./page_files/headlamp%201.png")
+    assert oem.local_image(tmp_path / "page.html", oem.diagram_image_src(page, 1)) == (folder / "headlamp 1.png").resolve()
+    assert oem.local_image(tmp_path / "page.html", "https://x.invalid/a.png") is None
+
+
+def test_oem_tab_pictures(tmp_path):
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    QtWidgets = pytest.importorskip("PySide6.QtWidgets")
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    from partlist_studio.ui.main_window import MainWindow
+    from partlist_studio.ui.state import AppState
+
+    w = MainWindow(AppState(data_dir=tmp_path / "data"))
+    tab = w.pages["install"].oem
+    folder = tmp_path / "saved_files"
+    folder.mkdir()
+    _png(folder / "d1.png")
+    saved = tmp_path / "saved.html"
+    saved.write_text(SAMPLE.read_text(encoding="utf-8").replace("https://example.invalid/diagrams/headlamp-1.png",
+                                                                 "saved_files/d1.png"), encoding="utf-8")
+    tab.import_pages([str(saved)])
+    tab.diagrams.setCurrentRow(1)
+    assert tab.picture.pixmap() and not tab.picture.pixmap().isNull() and "🖼" in tab.diagrams.item(1).text()
+    tab.callouts.setText("1-12")
+    tab.set_callouts()
+    assert "3, 4, 5" in tab.callout_check.text() and "⚠" in tab.diagrams.item(1).text()
+    tab.import_pages([str(SAMPLE)])  # the page again: its picture and numbers stay
+    assert tab.catalog.assembly(1).image_file and tab.catalog.assembly(1).callouts == "1-12"
+    tab.diagrams.setCurrentRow(0)
+    asm = tab.attach_image(str(_png(tmp_path / "x.png")), number=4, title="Low Beam Bulb")
+    assert asm.number == 4 and tab.current_assembly().number == 4 and tab.catalog.part_count == 3
+    app.processEvents()
+    w.state.dirty = False
+    w.close()

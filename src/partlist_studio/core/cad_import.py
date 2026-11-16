@@ -80,9 +80,12 @@ RAW_NAME_SECONDS = 20.0  # the most time spent on looking up IGES names that cam
 # The last one is the floor: a 50 mm bracket keeps its form (a hole is still six-sided), nothing coarser is tried.
 LEVELS = ((0.004, 2.0, 0.35), (0.01, 4.0, 0.6), (0.025, 8.0, 0.9), (0.06, 15.0, 1.2))
 MIN_DEFLECTION = 0.02
-# memory the reader needs for a file of 1 byte (measured, see tests/test_cad_import.py::test_measure): below
-# this much free memory the file is refused before the machine starts to swap or the system kills the program
-MEMORY_PER_BYTE = {"IGES": 6.0, "STEP": 6.0}
+# memory the reader needs: OpenCascade itself, and so much for every byte of the file. Measured on real files -
+# a 265 MB IGES of 31,000 trimmed surfaces peaks at 2.06 GB, a 17 MB STEP of 33 solids at 0.51 GB - and on
+# generated ones (tests/test_cad_import.py::test_measure). Below this much free memory the file is refused
+# before the machine starts to swap or the system kills the program.
+MEMORY_BASE = 350e6
+MEMORY_PER_BYTE = {"IGES": 7.0, "STEP": 10.0}
 BIG, SMALL = 1000.0, 100.0  # mm: parts without a name, a level or an assembly are grouped by their size
 GROUPS_IN_NOTE = 30  # the note counts the parts of this many groups, and says how many more there are
 SIZE_GROUPS = ("ชิ้นใหญ่ (ยาวกว่า 1 ม.)", "ชิ้นกลาง", "ชิ้นเล็ก (สลัก น็อต แหวน ขายึด)")
@@ -249,16 +252,12 @@ def _compound_of(o, shapes):
     return compound
 
 
-def _box_size(o, shapes, optimal: bool = False) -> tuple[float, float, float] | None:
-    """The size of the box around shapes, from their geometry (no mesh needed). `optimal`: exact, and slower;
-    else quick and a little generous - right for edges and wires, far too big for a trimmed face, whose surface
-    reaches beyond its border."""
+def _box_size(o, shapes) -> tuple[float, float, float] | None:
+    """The size of the box around shapes, from their geometry (no mesh needed): quick and a little generous.
+    Right for edges and wires; far too big for a trimmed face, whose surface reaches beyond its border."""
     box = o.Bnd_Box()
     for s in shapes:
-        if optimal:
-            o.BRepBndLib.AddOptimal_s(s, box, False, False)
-        else:
-            o.BRepBndLib.Add_s(s, box, False)
+        o.BRepBndLib.Add_s(s, box, False)
     if box.IsVoid():
         return None
     lo, hi = box.CornerMin(), box.CornerMax()
@@ -276,7 +275,8 @@ def _drop_small_loops(o, shape, hole_max: float) -> tuple[object, int, int]:
     A loop goes only together with everything behind it: when what lies across its edges is not small faces
     closed off by other small loops (a tube welded into the hole, a rim that runs out into the border), it all
     stays. No surface is computed: the faces are put together again from their own wires, so it costs
-    nothing and cannot fail. Returns the new shape (the old one when nothing was dropped), loops and faces dropped."""
+    nothing and cannot fail. Returns the new shape (the old one when nothing was dropped) and how many loops
+    and faces were dropped."""
     faces = _explore(o, shape, o.TopAbs_FACE)
     wires: list[list] = []  # per face: (wire, keys of its edges, size)
     edge_faces: dict[object, list[int]] = {}
@@ -296,11 +296,13 @@ def _drop_small_loops(o, shape, hole_max: float) -> tuple[object, int, int]:
                 if i not in seen:
                     seen.append(i)
         wires.append(mine)
-        whole = [max(s[a] for s in sizes) for a in range(3)] if sizes and all(sizes) else None  # about: wires share a place
+        # (the biggest wire stands for the face: the others lie inside it)
+        whole = [max(s[a] for s in sizes) for a in range(3)] if sizes and all(sizes) else None
         small.append(whole is not None and math.hypot(*whole) <= hole_max)
         if len(mine) > 1:
             outer = o.BRepTools.OuterWire_s(o.face(face))
-            limit = max((w[2] for w in mine if w[0].IsSame(outer)), default=0.0) / 2  # two rims of one tube are no hole
+            # a hole is small beside the face it is in: the two rims of a tube are no holes of its wall
+            limit = max((w[2] for w in mine if w[0].IsSame(outer)), default=0.0) / 2
             for n, (wire, keys, size) in enumerate(mine):
                 if size <= hole_max and size < limit and not wire.IsSame(outer):
                     for k in keys:
@@ -329,7 +331,7 @@ def _drop_small_loops(o, shape, hole_max: float) -> tuple[object, int, int]:
                         if (other, n) not in loops:
                             loops.add((other, n))
                             todo.append(("loop", (other, n)))
-                    elif small[other] and len(region) < 400:
+                    elif small[other] and len(region) < HOLE_REGION:
                         region.add(other)
                         todo.append(("face", other))
                     else:
@@ -459,7 +461,8 @@ def _iges_level_names(path: Path) -> dict[int, str]:
         f.seek(max(size - 200, 0))
         tail = [line for line in f.read().splitlines() if line.strip()]
         # the last line counts the lines of the others: "S      1G      4D  12346P   6789      …      T      1"
-        counts = re.match(rb"S\s*(\d+)G\s*(\d+)D\s*(\d+)P\s*(\d+)", tail[-1]) if tail and tail[-1][72:73] == b"T" else None
+        ends = bool(tail) and tail[-1][72:73] == b"T"
+        counts = re.match(rb"S\s*(\d+)G\s*(\d+)D\s*(\d+)P\s*(\d+)", tail[-1]) if ends else None
         lines = sum(int(v) for v in counts.groups()) + 1 if counts else 0
         if counts and width in (81, 82) and size in (lines * width, lines * width - (width - 80)):
             # lines of one length (as every writer makes them): the directory is one block, a parameter one seek
@@ -467,7 +470,8 @@ def _iges_level_names(path: Path) -> dict[int, str]:
             f.seek((start + glob) * width)
             block = np.frombuffer(f.read(directory * width), dtype=np.uint8)
             block = block[:len(block) // (2 * width) * 2 * width].reshape(-1, 2 * width)
-            hit = (block[:, 5:8] == np.frombuffer(b"406", dtype=np.uint8)).all(axis=1) & (block[:, width + 39] == ord("3"))
+            is_406 = (block[:, 5:8] == np.frombuffer(b"406", dtype=np.uint8)).all(axis=1)
+            hit = is_406 & (block[:, width + 39] == ord("3"))  # the form, right-justified in its field
             for row in block[hit]:
                 entry(row[:width].tobytes(), row[width:].tobytes())
             for _level, first, count in wanted:
@@ -609,6 +613,7 @@ class _Import:
         self._raw_spent = 0.0
         self._reader = None
         self._clock = time.perf_counter()
+        self._fraction = 0.0
         self.tree = False  # the file has an assembly tree
         self.skipped = 0  # things in the file without a surface (curves, points)
         self.unmeshed = 0  # faces OpenCascade could not mesh
@@ -616,6 +621,7 @@ class _Import:
     # ---- progress
     def say(self, stage: str, fraction: float) -> None:
         now = time.perf_counter()
+        fraction = self._fraction = max(fraction, self._fraction)  # a mesh tried again does not go backwards
         if stage != self.stage:
             if self.stage:
                 self.report.seconds[self.stage] = round(self.report.seconds.get(self.stage, 0.0) + now - self._clock, 2)
@@ -636,7 +642,7 @@ class _Import:
         if size == 0:
             raise CadImportError(f"ไฟล์ {path.name} ว่างเปล่า (0 ไบต์) – ดาวน์โหลดหรือส่งออกจาก CAD ใหม่")
         free = _free_memory()
-        need = size * MEMORY_PER_BYTE[self.report.kind]
+        need = MEMORY_BASE + size * MEMORY_PER_BYTE[self.report.kind]
         if free is not None and need > free:
             raise CadImportError(
                 f"ไฟล์ {path.name} ใหญ่ {size / 1e6:,.0f} MB ต้องใช้หน่วยความจำราว {need / 1e9:.1f} GB แต่เครื่องเหลือว่าง "
@@ -935,8 +941,9 @@ class _Import:
                 self.say("เย็บผิว", 0.66 + 0.1 * done / total)
             for place, leaf, leaf_name, parent, colour, layer in pool.uses:
                 for form, label, own_colour, own_layer, top, labels in groups:
-                    self.bodies.append(_Body(form, place, leaf, leaf_name or top, label, parent, own_colour or colour,
-                                             own_layer or layer, labels=labels))
+                    # (a face without a label of its own goes by the name of the top shape it is in)
+                    self.bodies.append(_Body(form, place, leaf, leaf_name or top, label or top, parent,
+                                             own_colour or colour, own_layer or layer, labels=labels))
             pool.faces = []
         self.pools = {}
         gc.collect()
@@ -959,7 +966,7 @@ class _Import:
         for col in (1, 2, 3, 4):
             seen = Counter(faces[i][col] for i in picked if faces[i][col])
             out.append(seen.most_common(1)[0][0] if seen else "")
-        return (*out, len({faces[i][1] for i in picked}))
+        return (*out, len({faces[i][1] or faces[i][4] for i in picked}))
 
     def _sewing(self, faces: list, picked: list[int], tol: float) -> tuple[list[tuple[object, list[int]]], list[int]]:
         """Sews the picked faces: the shells that come out (each with the faces it was made of) and the faces
@@ -1201,7 +1208,8 @@ class _Import:
         self.report.hole_max = round(hole_max, 1)
         self.simplified.append(
             f"ตัดรู ช่องเจาะ และลายนูนที่เล็กกว่า {hole_max:,.0f} มม. ออกจากตาข่าย {self.report.holes:,} จุด "
-            f"(ผิวข้างใน {self.report.hole_faces:,} ผิว) ใน {len(changed):,} ชิ้น ลดจาก {before:,} เหลือ {total:,} หน้า")
+            f"(ผิวข้างใน {self.report.hole_faces:,} ผิว) ใน {len(changed):,} ชิ้น ลดจาก {before:,} เหลือ {total:,} หน้า "
+            "– รูปร่างและขนาดของชิ้นคงเดิม")
         return total, {form.key for form in changed}
 
     def _box_small(self, total: int) -> int:
@@ -1218,7 +1226,8 @@ class _Import:
             biggest = max(biggest, body.form.extent[0])
             self.report.boxed += 1
         if self.report.boxed:
-            self.simplified.append(f"แสดงชิ้นเล็ก {self.report.boxed:,} ชิ้น (ยาวไม่เกิน {biggest:,.0f} มม. ที่มีหน้ามากที่สุด) เป็นกล่อง")
+            self.simplified.append(f"แสดงชิ้นเล็ก {self.report.boxed:,} ชิ้น (ยาวไม่เกิน {biggest:,.0f} มม. "
+                                   "ที่มีหน้ามากที่สุด) เป็นกล่อง")
         if total > self.max_faces * OVER_BUDGET:
             raise CadImportError(
                 f"โมเดลมี {len(self.bodies):,} ชิ้น ต้องใช้อย่างน้อย {total:,} หน้าแม้ตาข่ายหยาบสุด – เกินงบ {self.max_faces:,} หน้า"
@@ -1226,8 +1235,8 @@ class _Import:
                 "หรือส่งออกจาก CAD ทีละชุดประกอบย่อย")
         if total > self.max_faces:
             self.report.over_budget = True
-            self.simplified.append(f"ยังเกินงบ {self.max_faces:,} หน้า (ใช้ {total:,}) – ไม่ลดต่อ เพราะจะต้องทิ้งรูปทรงจริงของชิ้นใหญ่ "
-                                   "ภาพ 3 มิติจะหมุนช้าลง")
+            self.simplified.append(f"ยังเกินงบ {self.max_faces:,} หน้า (ใช้ {total:,}) – ไม่ลดต่อ "
+                                   "เพราะจะต้องทิ้งรูปทรงจริงของชิ้นใหญ่ ภาพ 3 มิติจะหมุนช้าลง")
         return total
 
     def _triangles(self, form: _Shape) -> None:
@@ -1415,7 +1424,8 @@ class _Import:
                     parts[i].size = _size_text(bodies[item[0]].form.extent)
 
     def _describe(self, model: a3.AssemblyModel, by_size: bool, empty: int, up: str, why: str) -> None:
-        """The report and the note of the model: file, unit, how the parts were found, the groups, what was simplified."""
+        """The report and the note of the model: file, unit, how the parts were found, the groups with their
+        parts and triangles, the axes, what was simplified."""
         report, parts = self.report, model.parts
         report.parts, report.groups = len(parts), len(model.groups())
         report.triangles = a3.face_count(model)
@@ -1486,9 +1496,9 @@ def _size_text(extent: tuple) -> str:
 
 def _guess_up(boxes: list) -> tuple[str, str]:
     """Which axis of the file points up, when nobody said: 'y' only when the file itself shows it - a big flat
-    plate (a floor: thin, most of the length and the width of the model, with the rest of the model above or
-    below it) lies across Y and none like it across Z. Else the file is taken as it is. Returns the axis and
-    the reason, for the note."""
+    plate (a floor: thin, at least 40 % of the model long and wide, with the rest of the model above or below
+    it) lies across Y, and twice the area of the plates that lie across Z (walls, gates). Else the file is
+    taken as it is. Returns the axis and the reason, for the note."""
     import numpy as np
 
     if not boxes:
@@ -1507,12 +1517,12 @@ def _guess_up(boxes: list) -> tuple[str, str]:
                 area[axis] += d[u] * d[v]
                 if best[axis] is None or d[u] * d[v] > best[axis][0] * best[axis][1]:
                     best[axis] = (d[u], d[v])
-    if area[1] > 0 and area[1] >= 3 * area[2]:
+    if area[1] > 0 and area[1] >= 2 * area[2]:
         return "y", (f"เดาอัตโนมัติ: พบแผ่นพื้นใหญ่ {best[1][0]:,.0f} × {best[1][1]:,.0f} มม. วางขวางแกน Y ของไฟล์ "
-                     "และไม่มีแผ่นแบบเดียวกันขวางแกน Z – ถ้าไม่ถูกให้ระบุ up=z หรือกดสลับแกนตั้งในโปรแกรม")
+                     "(ใหญ่กว่าแผ่นที่ขวางแกน Z เกินสองเท่า) – ถ้าไม่ถูกให้ระบุ up=z หรือกดปุ่ม Y↔Z ในแท็บประกอบ 3D")
     if area[2] > 0:
         return "z", "เดาอัตโนมัติ: แผ่นพื้นใหญ่วางขวางแกน Z อยู่แล้ว"
-    return "z", "เดาอัตโนมัติ: ไม่พบแผ่นพื้นใหญ่ที่บอกว่าเป็น Y ขึ้น – ถ้าโมเดลนอนตะแคงให้ระบุ up=y หรือกดสลับแกนตั้งในโปรแกรม"
+    return "z", "เดาอัตโนมัติ: ไม่พบแผ่นพื้นใหญ่ที่บอกว่าเป็น Y ขึ้น – ถ้าโมเดลนอนตะแคงให้ระบุ up=y หรือกดปุ่ม Y↔Z ในแท็บประกอบ 3D"
 
 
 def _closed(tris) -> tuple[bool, float]:
@@ -1590,7 +1600,8 @@ def _child(argv: list[str]) -> int:
         sys.stdout.flush()
 
     try:
-        model, report = read_cad_report(source, max_faces, lambda stage, fraction: tell("progress", stage=stage, fraction=fraction), up)
+        model, report = read_cad_report(source, max_faces,
+                                        lambda stage, fraction: tell("progress", stage=stage, fraction=fraction), up)
         model.save(target)
         tell("done", report=asdict(report))
         return 0
@@ -1599,7 +1610,8 @@ def _child(argv: list[str]) -> int:
         return 2
 
 
-def read_cad_isolated(path: str | Path, max_faces: int = MAX_FACES, progress=None, up: str | None = None) -> a3.AssemblyModel:
+def read_cad_isolated(path: str | Path, max_faces: int = MAX_FACES, progress=None,
+                      up: str | None = None) -> a3.AssemblyModel:
     """`read_cad` in a child process (for a worker thread of the window): the thread only waits, so the window
     stays alive, and a file that crashes OpenCascade or eats all memory ends the child, not the program.
     In a frozen build there is no interpreter to start: the file is read here."""

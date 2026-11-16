@@ -286,7 +286,8 @@ def test_step_leaf_with_several_solids_and_thai_in_a_windows_code_page(tmp_path)
     _check(model)
     # solids without a name in a product: called after it, numbered from the biggest, one name for the same item
     assert [p.name for p in model.parts] == ["โครงกันหัว 02", "โครงกันหัว 02", "โครงกันหัว 01"]
-    assert [(b.name, b.qty, b.size) for b in model.bom()] == [("โครงกันหัว 02", 2, "300×40×40"), ("โครงกันหัว 01", 1, "500×40×40")]
+    assert [(b.name, b.qty, b.size) for b in model.bom()] == [("โครงกันหัว 02", 2, "300×40×40"),
+                                                              ("โครงกันหัว 01", 1, "500×40×40")]
     assert model.groups() == ["โครงกันหัว"] and {p.color for p in model.parts} == {"#00FF00"}
     # the same file as a CAD program on Thai Windows may write it: the name in code page 874, not UTF-8
     data = path.read_bytes()
@@ -294,6 +295,36 @@ def test_step_leaf_with_several_solids_and_thai_in_a_windows_code_page(tmp_path)
     legacy = tmp_path / "frame874.step"
     legacy.write_bytes(data.replace("โครงกันหัว".encode("utf-8"), "โครงกันหัว".encode("cp874")))
     assert [p.name for p in ci.read_cad(legacy).parts] == [p.name for p in model.parts]
+
+
+def test_step_products_are_the_groups_and_nameless_solids_are_named_after_them(tmp_path):
+    d = _Doc()
+    root, kit, brackets = d.assembly("REAR LIGHTS"), d.assembly("ชุดไฟท้าย"), d.assembly("BRACKET KIT")
+    small, big = d.part(_box(0, 0, 0, 60, 40, 5)), d.part(_box(0, 0, 0, 300, 100, 80))
+    bolt = d.part(_cylinder(0, 0, 0, 5, 30), "BOLT M10")
+    for i in range(3):
+        d.place(kit, small, x=100 * i, z=200)
+    d.place(kit, big, y=200, z=200)
+    d.place(kit, bolt, y=400, z=200)
+    d.place(brackets, small)
+    d.place(brackets, d.part(_box(0, 0, 0, 500, 50, 50)), y=100)
+    d.place(root, kit)
+    d.place(root, brackets)
+    model, report = ci.read_cad_report(d.write_step(tmp_path / "kit.step"))
+    _check(model)
+    # a product is a group; the lower one is the first step though the file has it last
+    assert model.groups() == ["BRACKET KIT", "ชุดไฟท้าย"]
+    assert report.group_counts == [["BRACKET KIT", 2, 24], ["ชุดไฟท้าย", 5, 188]]
+    # a solid without a name is called after its product, from the biggest; the one that has a name keeps it
+    assert [(p.name, p.group, p.size) for p in model.parts] == [
+        ("BRACKET KIT 02", "BRACKET KIT", "60×40×5"), ("BRACKET KIT 01", "BRACKET KIT", "500×50×50"),
+        *[("ชุดไฟท้าย 02", "ชุดไฟท้าย", "60×40×5")] * 3, ("ชุดไฟท้าย 01", "ชุดไฟท้าย", "300×100×80"),
+        ("BOLT M10", "ชุดไฟท้าย", "30×10×10")]
+    assert [(b.name, b.qty) for b in model.bom()] == [("BRACKET KIT 02", 1), ("BRACKET KIT 01", 1), ("ชุดไฟท้าย 02", 3),
+                                                    ("ชุดไฟท้าย 01", 1), ("BOLT M10", 1)]
+    for word in ("STEP", "ไฟล์ kit.step", "โครงสร้างชุดประกอบ", "BRACKET KIT 2 ชิ้น 24 หน้า", "ชุดไฟท้าย 5 ชิ้น 188 หน้า",
+                 "Z ขึ้นตามไฟล์"):
+        assert word in model.note, word
 
 
 def test_text_repairs():
@@ -368,7 +399,8 @@ def test_unnamed_parts_on_levels_are_grouped_by_level(tmp_path):
     _check(model)
     assert [p.group for p in model.parts] == ["Layer 12", "Layer 12", "Layer 30"]  # a level without a name: its number
     assert [p.name for p in model.parts] == ["Layer 12 01", "Layer 12 01", "Layer 30 01"]
-    assert [(b.name, b.qty, b.size) for b in model.bom()] == [("Layer 12 01", 2, "100×50×20"), ("Layer 30 01", 1, "100×50×20")]
+    assert [(b.name, b.qty, b.size) for b in model.bom()] == [("Layer 12 01", 2, "100×50×20"),
+                                                              ("Layer 30 01", 1, "100×50×20")]
     assert [s.title for s in model.steps] == ["ประกอบกลุ่ม Layer 12", "ประกอบกลุ่ม Layer 30"]
 
 
@@ -413,6 +445,281 @@ def test_loose_surfaces_do_not_become_thousands_of_parts(tmp_path, monkeypatch):
     assert len(model.parts) == 30 and "ผิวเดี่ยว 30 ผิว เป็นชิ้นละผิว" in model.note
 
 
+# --------------------------------------------------------------------------- a real IGES: named levels, patterns, Y up
+def _name_levels(path, names: dict, encoding: str = "cp874", newline: bytes = b"\n") -> Path:
+    """What ZW3D writes for a level that has a name and OpenCascade's writer does not: a property entity
+    (type 406 form 3) on that level, with the name as bytes of the code page of the designer's Windows."""
+    lines = Path(path).read_bytes().splitlines()
+    start, glob, directory, params = ([line for line in lines if line[72:73] == k] for k in (b"S", b"G", b"D", b"P"))
+    for level, name in names.items():
+        raw = name.encode(encoding)
+        d_no, p_no = len(directory) + 1, len(params) + 1
+        params.append((b"406,2,0,%dH%s,0,0;" % (len(raw), raw)).ljust(64) + b" %7dP%7d" % (d_no, p_no))
+        directory.append(b"%8d%8d%8d%8d%8d%8d%8d%8d00000000D%7d" % (406, p_no, 0, 0, level, 0, 0, 0, d_no))
+        directory.append(b"%8d%8d%8d%8d%8d%24s%8dD%7d" % (406, 0, 0, 1, 3, b"", 0, d_no + 1))
+    end = (b"S%7dG%7dD%7dP%7d" % (len(start), len(glob), len(directory), len(params))).ljust(72) + b"T%7d" % 1
+    assert all(len(line) == 80 for line in directory + params + [end])
+    Path(path).write_bytes(newline.join(start + glob + directory + params + [end]) + newline)
+    return Path(path)
+
+
+def _label_surfaces(path, labels: dict) -> Path:
+    """Writes on every trimmed surface (type 144) of a level the label ZW3D gives the faces of one 'shape'."""
+    lines = Path(path).read_bytes().splitlines()
+    first = None
+    for n, line in enumerate(lines):
+        if line[72:73] != b"D":
+            continue
+        if first is None:
+            first = line
+        else:
+            label = labels.get(int(first[32:40])) if int(first[0:8]) == 144 else None
+            if label:
+                lines[n] = line[:56] + label.encode("ascii").rjust(8) + b" " * 8 + line[72:]  # (no subscript)
+            first = None
+    Path(path).write_bytes(b"\n".join(lines) + b"\n")
+    return Path(path)
+
+
+def _plate(x, y, z, lx, ly, t, holes=(), radius=5.0):
+    """A plate lx × ly × t, drilled through at `holes` [(hx, hy), …] from its corner."""
+    from OCP.BRepAlgoAPI import BRepAlgoAPI_Cut
+
+    plate = _box(x, y, z, lx, ly, t)
+    drills = _compound([_cylinder(x + hx, y + hy, z - 1, radius, t + 2) for hx, hy in holes])
+    return BRepAlgoAPI_Cut(plate, drills).Shape() if holes else plate
+
+
+def _chequered(x, y, z, lx, ly, t, bumps) -> object:
+    """A plate with raised blocks 12 × 8 × 2 on it, one solid: the embossed pattern of a chequered plate."""
+    from OCP.BRepAlgoAPI import BRepAlgoAPI_Fuse
+
+    shape = _box(x, y, z, lx, ly, t)
+    for bx, by in bumps:
+        shape = BRepAlgoAPI_Fuse(shape, _box(x + bx, y + by, z + t, 12, 8, 2)).Shape()
+    return shape
+
+
+GRID = [(50 + 100 * i, 50 + 100 * j) for i in range(6) for j in range(4)]  # 24 places on a plate 600 × 400
+
+
+def test_small_holes_and_patterns_are_left_out_of_a_shape():
+    o = ci._occ()
+
+    def mesh(shape) -> tuple[int, float, bool]:
+        """Triangles, volume and whether the skin closes, at a mesh as coarse as the importer's coarsest."""
+        from OCP.BRepMesh import BRepMesh_IncrementalMesh
+        from OCP.BRepTools import BRepTools
+
+        BRepTools.Clean_s(shape)
+        BRepMesh_IncrementalMesh(shape, 5.0, False, 1.2, False)
+        run = ci._Import("x.step", 1000, None)
+        form = ci._Shape(shape, "solid")
+        run._triangles(form)
+        closed, volume = ci._closed(form.tris)
+        return len(form.tris), abs(volume), closed
+
+    # a perforated plate: 24 holes of 10 mm and one opening of 120 mm
+    from OCP.BRepAlgoAPI import BRepAlgoAPI_Cut
+
+    plate = BRepAlgoAPI_Cut(_plate(0, 0, 0, 600, 400, 3, GRID), _cylinder(300, 200, -1, 60, 5)).Shape()
+    assert len(_faces(plate)) == 6 + 24 + 1
+    with_holes = mesh(plate)
+    shape, loops, faces = ci._drop_small_loops(o, plate, 30.0)
+    assert (loops, faces) == (48, 24) and len(_faces(shape)) == 7  # both rims and the wall of every small hole
+    without = mesh(shape)
+    assert with_holes[0] > 5 * without[0] and without[2]  # far fewer triangles, and the skin closes again
+    assert 720000 - 34000 < without[1] < 720000 - 28000  # filled where the holes were; the opening is there
+    assert ci._drop_small_loops(o, plate, 4.0) == (plate, 0, 0)  # nothing under 4 mm: the same shape back
+    shape, loops, faces = ci._drop_small_loops(o, plate, 200.0)
+    assert (loops, faces) == (50, 25)  # a threshold above the opening takes it too
+    # a chequered plate: every raised block is a loop on the top face and five faces above it
+    chequer = _chequered(0, 0, 0, 300, 200, 4, [(30 + 60 * i, 30 + 50 * j) for i in range(4) for j in range(3)])
+    shape, loops, faces = ci._drop_small_loops(o, chequer, 30.0)
+    assert (loops, faces) == (12, 60) and len(_faces(shape)) == 6
+    flat = mesh(shape)
+    assert flat[0] == 12 and flat[2] and abs(flat[1] - 300 * 200 * 4) < 1
+    # what is not a hole stays: a hole 10 mm wide and 100 mm deep has a wall that is no small face …
+    block = BRepAlgoAPI_Cut(_box(0, 0, 0, 200, 200, 100), _cylinder(100, 100, -1, 5, 102)).Shape()
+    assert ci._drop_small_loops(o, block, 30.0) == (block, 0, 0)
+    # … a small part is not eaten through its own hole (the rim is not small beside the face it is in) …
+    washer = BRepAlgoAPI_Cut(_cylinder(0, 0, 0, 10, 2), _cylinder(0, 0, -1, 6, 4)).Shape()
+    assert ci._drop_small_loops(o, washer, 30.0) == (washer, 0, 0)
+    # … and the two rims of a tube are no holes of its wall
+    tube = _faces(_cylinder(0, 0, 0, 8, 20))[0]
+    assert ci._drop_small_loops(o, tube, 30.0)[1:] == (0, 0)
+
+
+def _real_tray(tmp_path, name="tray.igs", y_up=True, levels=True) -> Path:
+    """A tray as ZW3D writes it, in small: trimmed surfaces only, on named levels, every surface labelled with the
+    'shape' it was drawn in ('S1' on the faces of unrelated parts), Y up. Level 3 floor (a chequered plate),
+    5 frame (two rails, three cross members), 6 a perforated headboard, 8 two side gates that stand on the floor -
+    and no name for level 8."""
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_Transform
+    from OCP.gp import gp_Ax1, gp_Dir, gp_Pnt, gp_Trsf, gp_Vec
+
+    def rotated(shape, axis, angle, shift=(0, 0, 0)):
+        turn, move = gp_Trsf(), gp_Trsf()
+        turn.SetRotation(gp_Ax1(gp_Pnt(0, 0, 0), gp_Dir(*axis)), angle)
+        move.SetTranslation(gp_Vec(*shift))
+        return BRepBuilderAPI_Transform(shape, move.Multiplied(turn), True).Shape()
+
+    def turned(shape):  # drawn Z up here, written Y up: (x, y, z) → (x, z, -y)
+        return rotated(shape, (1, 0, 0), -1.5707963267948966) if y_up else shape
+
+    # the headboard: a plate 500 × 1000 × 6 with 9 holes of 8 mm, stood up across the front
+    headboard = rotated(_plate(0, 0, 0, 500, 1000, 6, [(250, 100 + 100 * i) for i in range(9)], 4.0), (0, 1, 0),
+                        1.5707963267948966, (0, 0, 650))
+
+    d = _Doc()
+    grey, blue, green = (0.5, 0.5, 0.5), (0, 0.5, 1), (0, 1, 0)
+    for i in range(3):  # written first, though they are fitted after the rails
+        d.part(turned(_box(200 + 600 * i, 0, 100, 60, 1000, 50)), "", blue, "5")
+    for y in (150, 800):
+        d.part(turned(_box(0, y, 0, 1600, 50, 100)), "", blue, "5")
+    d.part(turned(headboard), "", grey, "6")
+    bumps = [(100 + 150 * i, 100 + 200 * j) for i in range(10) for j in range(4)]
+    d.part(turned(_chequered(0, 0, 150, 1600, 1000, 3, bumps)), "", grey, "3")
+    for y in (0, 980):
+        d.part(turned(_box(6, y, 153, 1594, 20, 250)), "", green, "8")
+    path = _label_surfaces(d.write_iges(tmp_path / name), {3: "S1", 5: "S2", 6: "S1", 8: "S1"})
+    return _name_levels(path, {3: "พื้น", 5: "โครงตัวล่าง", 6: "ตะแกรงมีลาย", 7: "บานพับหลัง"}) if levels else path
+
+
+def test_iges_level_names_are_read_from_the_text_of_the_file(tmp_path):
+    plain = _real_tray(tmp_path, "plain.igs", levels=False)
+    assert ci._iges_level_names(plain) == {}
+    names = {3: "พื้น", 5: "โครงตัวล่าง", 12: "Layer0001"}
+    for encoding in ("cp874", "utf-8"):  # Thai Windows · a newer CAD program
+        path = tmp_path / f"{encoding}.igs"
+        path.write_bytes(plain.read_bytes())
+        _name_levels(path, names, encoding)
+        assert ci._iges_level_names(path) == names
+        if encoding == "cp874":
+            assert "พื้น".encode("cp874") in path.read_bytes() and "พื้น".encode("utf-8") not in path.read_bytes()
+    # Windows line ends; and lines that are not all 80 long (a file that went through an editor): read line by line
+    crlf = tmp_path / "crlf.igs"
+    crlf.write_bytes(b"\r\n".join(path.read_bytes().splitlines()) + b"\r\n")
+    ragged = tmp_path / "ragged.igs"
+    lines = path.read_bytes().splitlines()
+    ragged.write_bytes(b"\n".join(line + b"  " * (n % 3 == 0) for n, line in enumerate(lines)) + b"\n")
+    assert ci._iges_level_names(crlf) == names and ci._iges_level_names(ragged) == names
+    assert ci._iges_text("พื้น".encode("cp874")) == ci._iges_text("พื้น".encode("utf-8")) == "พื้น"
+
+
+def test_iges_levels_are_the_groups_and_parts_are_named_after_them(tmp_path):
+    path = _real_tray(tmp_path)
+    model, report = ci.read_cad_report(path, up="y")
+    _check(model)
+    # the groups are the levels under their Thai names, the level without a name keeps its number; bottom-up
+    assert model.groups() == ["โครงตัวล่าง", "พื้น", "Layer 8", "ตะแกรงมีลาย"] and report.groups == 4
+    assert [s.title for s in model.steps] == [f"ประกอบกลุ่ม {g}" for g in model.groups()]
+    assert [p.step for p in model.parts] == [1] * 5 + [2] + [3] * 2 + [4]
+    assert report.levels == {3: "พื้น", 5: "โครงตัวล่าง", 6: "ตะแกรงมีลาย", 7: "บานพับหลัง"}
+    # sewn level by level: the gates stand on the floor and the headboard against them - still 9 parts, none merged
+    assert len(model.parts) == report.parts == 9 and "แยกตาม level ของ IGES 4 level" in model.note
+    # no part is called S1 or S2: named after its group, from the biggest, the same item under one name
+    assert [p.name for p in model.parts] == [*["โครงตัวล่าง 02"] * 3, *["โครงตัวล่าง 01"] * 2, "พื้น 01", "Layer 8 01",
+                                             "Layer 8 01", "ตะแกรงมีลาย 01"]
+    assert [(b.name, b.qty, b.size) for b in model.bom()] == [
+        ("โครงตัวล่าง 02", 3, "1000×60×50"), ("โครงตัวล่าง 01", 2, "1600×100×50"), ("พื้น 01", 1, "1600×1000×5"),
+        ("Layer 8 01", 2, "1594×250×20"), ("ตะแกรงมีลาย 01", 1, "1000×500×6")]
+    assert "ป้ายบนผิว" in model.note and not any(p.name.startswith("S") for p in model.parts)
+    # the note: file, unit, how the parts were found, the groups with their parts and triangles, the axes
+    for word in ("ไฟล์ tray.igs", "หน่วยในไฟล์: มม.", "เย็บผิวอิสระ", "กลุ่ม = level ของ IGES", "โครงตัวล่าง 5 ชิ้น 60 หน้า",
+                 "พื้น 1 ชิ้น", "ตะแกรงมีลาย 1 ชิ้น", "Layer 8 2 ชิ้น 24 หน้า", "ต่ำสุดขึ้นไป", "Y ขึ้น เป็น Z ขึ้น (กำหนดเอง)",
+                 "การลดรายละเอียด: ตาข่ายระดับ 1/4"):
+        assert word in model.note, word
+    assert report.group_counts[0] == ["โครงตัวล่าง", 5, 60] and sum(c[2] for c in report.group_counts) == report.triangles
+    # with the default budget nothing is left out: the holes of the headboard and the chequers of the floor are there
+    assert report.holes == 0 and not report.boxed and report.triangles > 1500
+    floor = next(p for p in model.parts if p.group == "พื้น")
+    assert len(floor.mesh) > 400 and floor.cull
+    # Z is up now: the frame under the floor, the gates and the headboard above it
+    assert report.bounds == [[0, 0, 0], [1600, 1000, 650]] and report.up == "y" and not report.up_guessed
+    assert _box_of(floor) == ((0, 0, 150), (1600, 1000, 155))
+    assert _box_of(model.parts[3]) == ((0, 150, 0), (1600, 200, 100))
+    # labels that do name the parts (one label a part, the same label only on the same item) are kept as names
+    d = _Doc()
+    for i, name in enumerate(("BOLT", "BOLT", "PLATE")):
+        d.part(_box(100 * i, 0, 0, 50 + 100 * (name == "PLATE"), 20, 20), name, (1, 0, 0), "4")
+    named = _name_levels(d.write_iges(tmp_path / "named_levels.igs"), {4: "ชุดน็อต"})
+    model = ci.read_cad(named)
+    assert [(p.name, p.group) for p in model.parts] == [("BOLT", "ชุดน็อต"), ("BOLT", "ชุดน็อต"), ("PLATE", "ชุดน็อต")]
+    assert "ป้ายบนผิว" not in model.note
+
+
+def test_up_axis_given_or_guessed(tmp_path):
+    y_up, z_up = _real_tray(tmp_path, "y_up.igs"), _real_tray(tmp_path, "z_up.igs", y_up=False)
+    as_drawn = ci.read_cad_report(z_up, up="z")
+    assert as_drawn[1].bounds == [[0, 0, 0], [1600, 1000, 650]] and "Z ขึ้นตามไฟล์ (กำหนดเอง)" in as_drawn[0].note
+    # not said: the floor - a big thin plate with the rest of the model above and below it - tells which way is up
+    guessed, report = ci.read_cad_report(y_up)
+    assert report.up == "y" and report.up_guessed and report.bounds == as_drawn[1].bounds
+    assert "เดาอัตโนมัติ" in guessed.note and "แผ่นพื้นใหญ่ 1,600 × 1,000 มม." in guessed.note and "up=z" in guessed.note
+    assert [(p.name, _box_of(p)) for p in guessed.parts] == [(p.name, _box_of(p)) for p in as_drawn[0].parts]
+    assert [p.cull for p in guessed.parts] == [p.cull for p in as_drawn[0].parts]
+    assert sum(p.cull for p in guessed.parts) == 8
+    for p, q in zip(guessed.parts, as_drawn[0].parts):  # turned, not mirrored: the outside is still the outside
+        assert _volume(p) == pytest.approx(_volume(q), rel=1e-3) and _volume(q) > 0
+    same, report = ci.read_cad_report(z_up)
+    assert report.up == "z" and report.up_guessed and report.bounds == as_drawn[1].bounds
+    assert "ขวางแกน Z อยู่แล้ว" in same.note
+    # said: done, whatever the model looks like; and the model lies on its side when the file was Y up and 'z' was said
+    turned, report = ci.read_cad_report(y_up, up="Z")
+    assert report.up == "z" and not report.up_guessed and report.bounds == [[0, 0, -1000], [1600, 650, 0]]
+    # nothing to go by (a part alone, a gate that may stand or lie): the file is taken as it is, and the note says so
+    alone, report = ci.read_cad_report(_write_step(tmp_path / "gate.step", _box(0, 0, 0, 1500, 20, 300)))
+    assert report.up == "z" and report.up_guessed and report.bounds == [[0, 0, 0], [1500, 20, 300]]
+    assert "up=y" in alone.note and "Y↔Z" in alone.note
+    with pytest.raises(ci.CadImportError, match="แกนตั้ง"):
+        ci.read_cad(y_up, up="x")
+    assert ci.read_cad_isolated(y_up, up="z").to_dict() == turned.to_dict()  # the child process is told too
+
+
+def test_a_tight_budget_takes_the_patterns_first_then_boxes_small_parts_never_big_ones(tmp_path):
+    path = _real_tray(tmp_path)
+    full, report = ci.read_cad_report(path, up="y")
+    assert report.level == 0 and report.triangles > 2000
+    seen = []
+    coarse, report = ci.read_cad_report(path, 1500, lambda stage, fraction: seen.append(fraction), "y")
+    assert report.level == 2 and report.holes == 0 and 1000 < report.triangles <= 1500  # a coarser mesh will do
+    assert seen == sorted(seen) and seen[-1] == 1.0  # the coarsest mesh was tried first: the bar never goes back
+    # 1. under what the coarsest mesh needs: the 9 holes of the headboard and the 40 chequers of the floor go,
+    #    and every part keeps its shape
+    model, report = ci.read_cad_report(path, max_faces=400, up="y")
+    _check(model, 400)
+    assert report.holes == 18 + 40 and report.hole_faces == 9 + 200 and report.hole_max == pytest.approx(20.0, abs=0.1)
+    assert len(model.parts) == 9 and report.boxed == 0
+    assert all(p.shape == "mesh" and p.cull for p in model.parts)  # closed skins again, the headboard too
+    assert report.triangles == 9 * 12 < a3.face_count(coarse) and not report.over_budget
+    for word in ("ตัดรู ช่องเจาะ และลายนูนที่เล็กกว่า 20 มม.", "58 จุด", "ผิวข้างใน 209 ผิว", "ใน 2 ชิ้น", "เหลือ 108 หน้า"):
+        assert word in model.note, word
+    # names, sizes and places are those of the full model: the size is the true one, with the chequers
+    assert [(p.name, p.size, p.group) for p in model.parts] == [(p.name, p.size, p.group) for p in full.parts]
+    assert all(_close(a.bounds(), b.bounds(), 2.01) for a, b in zip(model.parts, full.parts))
+    # 2. a budget no honest mesh fits in: nothing here is small enough to be a box - given as it is, and said
+    model, report = ci.read_cad_report(path, max_faces=60, up="y")
+    assert len(model.parts) == 9 and report.boxed == 0 and report.over_budget and report.triangles == 108
+    assert "ยังเกินงบ 60 หน้า (ใช้ 108)" in model.note and all(p.shape == "mesh" for p in model.parts)
+    # … and one the model is more than four times over: refused
+    with pytest.raises(ci.CadImportError, match="9 ชิ้น.*108 หน้า.*--max-faces 10,000"):
+        ci.read_cad(path, max_faces=20, up="y")
+    # 3. small parts with many faces are the first to be boxes; a plain small part stays what it is
+    d = _Doc()
+    d.part(_box(0, 0, 0, 800, 400, 20), "BASE", (0.5, 0.5, 0.5), "1")
+    holes = [(8 + 8 * i, 8 + 8 * j) for i in range(4) for j in range(4)]
+    d.part(_plate(100, 100, 20, 40, 40, 10, holes, 1.5), "LOCK", (1, 0, 0), "1")
+    d.part(_box(300, 100, 20, 30, 30, 5), "SHIM", (0, 1, 0), "1")
+    model, report = ci.read_cad_report(d.write_iges(tmp_path / "lock.igs"), max_faces=100)
+    _check(model, 100)
+    assert report.holes == 0  # (its holes of 3 mm go 10 mm deep: more than the 1 % of the model a hole may be)
+    assert {p.name: p.shape for p in model.parts} == {"BASE": "mesh", "LOCK": "box", "SHIM": "mesh"}
+    lock = next(p for p in model.parts if p.name == "LOCK")
+    assert report.boxed == 1 and "แสดงชิ้นเล็ก 1 ชิ้น" in model.note and "กล่อง" in lock.note
+    assert lock.dims == [40.0, 40.0, 10.0] and lock.size == "40×40×10"
+
+
 # --------------------------------------------------------------------------- units
 def test_inch_and_metre_files_come_out_in_mm(tmp_path):
     inch, report = ci.read_cad_report(_write_iges(tmp_path / "inch.igs", _four_shapes(), unit="IN"))
@@ -441,8 +748,9 @@ def test_face_budget_meshes_coarser_then_boxes_only_small_parts_and_drops_nothin
     path = _spheres(tmp_path)
     fine, report = ci.read_cad_report(path, max_faces=10 ** 6)
     _check(fine, 10 ** 6)
-    assert len(fine.parts) == 60 and report.level == 0 and report.boxed == 0 and 60000 < report.triangles <= ci.MAX_FACES
-    assert ci.read_cad(path).to_dict()["parts"] == fine.to_dict()["parts"]  # the budget of the program holds it as it is
+    assert len(fine.parts) == 60 and report.level == 0 and report.boxed == 0
+    assert 60000 < report.triangles <= ci.MAX_FACES
+    assert ci.read_cad(path).to_dict()["parts"] == fine.to_dict()["parts"]  # the budget of the program holds it
     # 1. a smaller budget: the same parts, a coarser mesh - and the room that is left goes to the biggest
     model, report = ci.read_cad_report(path, max_faces=60000)
     _check(model)
@@ -464,16 +772,19 @@ def test_face_budget_meshes_coarser_then_boxes_only_small_parts_and_drops_nothin
     model, report = ci.read_cad_report(path, max_faces=budget)
     _check(model, budget)
     boxes = [p for p in model.parts if p.shape == "box"]
-    assert len(model.parts) == 60 and report.level == 3 and 0 < len(boxes) == report.boxed <= 4 and not report.over_budget
+    assert len(model.parts) == 60 and report.level == 3 and 0 < len(boxes) == report.boxed <= 4
+    assert not report.over_budget
     assert f"แสดงชิ้นเล็ก {len(boxes)} ชิ้น" in model.note and "เป็นกล่อง" in model.note and all("กล่อง" in p.note for p in boxes)
-    assert all(abs(p.dims[0] - p.dims[1]) < 2 and 19 < p.dims[0] <= ci.BOX_MAX for p in boxes)  # where the sphere was, as big as it was
+    # where the sphere was, as big as it was
+    assert all(abs(p.dims[0] - p.dims[1]) < 2 and 19 < p.dims[0] <= ci.BOX_MAX for p in boxes)
     assert sorted(p.name for p in model.parts) == sorted(p.name for p in fine.parts)  # nothing dropped
     # 4. half of it: every sphere up to 45 mm is a box, no bigger one ever is - the model is over its budget and says so
     budget = coarsest // 2
     model, report = ci.read_cad_report(path, max_faces=budget)
     boxes = [p for p in model.parts if p.shape == "box"]
     small = [p for p in fine.parts if p.bounds()[1][0] - p.bounds()[0][0] <= ci.BOX_MAX]
-    assert len(model.parts) == 60 and len(boxes) == report.boxed == len(small) == 13 and max(p.dims[0] for p in boxes) <= ci.BOX_MAX
+    assert len(model.parts) == 60 and len(boxes) == report.boxed == len(small) == 13
+    assert max(p.dims[0] for p in boxes) <= ci.BOX_MAX
     assert report.over_budget and budget < report.triangles + 12 * len(boxes) < coarsest and "ยังเกินงบ" in model.note
     assert all(p.shape == "mesh" and len(p.mesh) >= 40 for p in model.parts if p not in boxes)
     # 5. a budget the model is many times over: refused with the number to ask for, not a model nobody can turn
@@ -593,6 +904,16 @@ def test_command_line_tool(tmp_path):
     for word in ("9 ชิ้น ใน 2 กลุ่ม", "งบ 300", "มม. → โมเดลเป็น มม.", "2,600 × 1,800 × 330", "โครงสร้างชุดประกอบ", "วินาที", "MB", "tray.rrsasm"):
         assert word in done.stdout, word
     assert "1%  อ่านไฟล์" in done.stderr and "100%" in done.stderr and "%  " not in done.stdout  # progress apart from the summary
+    # an IGES file with levels, drawn Y up: the groups in the order of the steps, the axis, the budget of the program
+    tray = str(_real_tray(tmp_path, "y_up.igs"))
+    done = subprocess.run([*tool, tray, str(out), "--up", "y"], capture_output=True, text=True, encoding="utf-8")
+    assert done.returncode == 0, done.stderr
+    for word in ("9 ชิ้น ใน 4 กลุ่ม", f"งบ {ci.MAX_FACES:,}", "Y ของไฟล์ → หมุนเป็น Z ขึ้น (กำหนดเอง)", "1. โครงตัวล่าง",
+                 "2. พื้น", "3. Layer 8", "4. ตะแกรงมีลาย", "1,600 × 1,000 × 650", "level ของ IGES"):
+        assert word in done.stdout, word
+    assert a3.AssemblyModel.load(out).groups() == ["โครงตัวล่าง", "พื้น", "Layer 8", "ตะแกรงมีลาย"]
+    done = subprocess.run([*tool, tray, str(out), "--max-faces", "400"], capture_output=True, text=True, encoding="utf-8")
+    assert done.returncode == 0 and "(เดาอัตโนมัติ)" in done.stdout and "ตัดรู/ลายนูนเล็กกว่า 20 มม. 58 จุด" in done.stdout
     (tmp_path / "bad.igs").write_bytes(b"junk")
     done = subprocess.run([*tool, str(tmp_path / "bad.igs"), str(tmp_path / "bad.rrsasm")], capture_output=True, text=True, encoding="utf-8")
     assert done.returncode == 1 and "นำเข้าไม่ได้" in done.stderr and not (tmp_path / "bad.rrsasm").exists()
@@ -803,4 +1124,4 @@ def test_measure(tmp_path, kind):
     print(f"\n=== {kind}: {parts} parts, {path.stat().st_size / 1e6:.1f} MB IGES (made in {made:.0f} s)\n{done.stdout}{done.stderr[-600:]}")
     assert done.returncode == 0
     model = a3.AssemblyModel.load(out)
-    assert len(model.parts) == parts and a3.face_count(model) <= 60000
+    assert len(model.parts) == parts and a3.face_count(model) <= ci.MAX_FACES

@@ -33,6 +33,8 @@ the descriptor of a long name). A component record starts with five length-prefi
 name or "" for this file, object name, instance name again, "") and integers of which the fourth is the root-record
 id of the object that owns the component (-1: not part of an assembly, e.g. a part shown in a drawing view).
 
+Names are in the Windows code page given on text line 2 (874 = Thai); a few layer names are UTF-8 instead.
+
 What is NOT read: geometry, placements, user attributes (class 302 holds name/value pairs such as "Material", but
 which object a list of them belongs to could not be established), per-object layers (only the layer names of the
 whole file are listed), suppressed / excluded-from-BOM flags of components.

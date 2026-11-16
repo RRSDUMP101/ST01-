@@ -31,7 +31,7 @@ from partlist_studio.core import z3_reader as z3
 
 TOOL = Path(__file__).resolve().parents[1] / "tools" / "z3_list.py"
 CP = "cp874"
-LONG = "โครงชิ้นล่าง เหล็กตัว C ขนาด 4 นิ้ว (ชิ้นข้างซ้าย) 2400 mm"  # 32+ bytes: stored apart from its record
+LONG = "แผ่นเหล็กเสริมมุมด้านหลังฝั่งซ้าย หนา 3 มม. รุ่นทดสอบ"  # 32+ bytes: stored apart from its record
 N31, N32 = "ก" * 31, "ข" * 32  # the longest name kept in place, the shortest stored apart
 
 
@@ -142,12 +142,12 @@ class Z3Builder:
         if len(raw) < 32:
             return raw
         sid = self.string(name, rid)
-        return struct.pack("<HHIQIIQ", 0, 3, len(raw), 0x2D5E33FC0, sid, len(raw) + 1, 0)
+        return struct.pack("<HHIQIIQ", 0, 3, len(raw), 0x1F2E3D4C5B0, sid, len(raw) + 1, 0)
 
     def obj3d(self, name: str, listed: bool = True, string_id: int | None = None) -> int:
         pk = Packer(0x1D)
         pk.string(self.name_field(name, string_id))
-        for v in (204614, 556405, 28113, -1, -1, 0, 1):
+        for v in (100001, 300003, 20002, -1, -1, 0, 1):
             pk.integer(v)
         rid = self.record(z3.CLS_OBJECT3D, pk.data(), 0x0A)
         if listed:
@@ -166,7 +166,7 @@ class Z3Builder:
             for text in (inst, file, target, inst, ""):
                 pk.string(self.name_field(text))
             self.uid += 3
-            for v in (self.uid, 556405, 28113, owner, self.next_id + 12, -1, -1, 0, 0, 4):
+            for v in (self.uid, 300003, 20002, owner, self.next_id + 12, -1, -1, 0, 0, 4):
                 pk.integer(v)
             self.record(z3.CLS_COMPONENT, pk.data(), 0x0A)
 
@@ -185,7 +185,7 @@ class Z3Builder:
             "Z3",
             f"@,{self.author},Mon Nov 16 09:30:05 2026,1794821405 Z3({self.build_id})",
             "ZWSOFT,V1,WindowsNT,6.2,686,7,874,0,0",
-            f"{self.fmt},0,,0,8,123513:cac40fb91b0,@150257:54118a9add63" + (f",HQR={hqr}" if hqr is not None else ""),
+            f"{self.fmt},0,,0,8,101010:0123456789a,@202020:ba9876543210" + (f",HQR={hqr}" if hqr is not None else ""),
         ]
         out = b"".join(line.encode(CP).ljust(127, b"*") + b"\n" for line in lines)
         return out + b"*" * 255 + b"\n"
@@ -210,7 +210,7 @@ class Z3Builder:
             offset += len(blob)
             last = rid
         a = 0x390 + 2 * c + len(data)
-        head = b"\x9f\x54\x23\x87" * 4 + struct.pack("<QQ", a, len(index)) + hashlib.md5(index).digest()
+        head = b"\x5a\xa5\x3c\xc3" * 4 + struct.pack("<QQ", a, len(index)) + hashlib.md5(index).digest()
         head += struct.pack("<I", c) + hashlib.md5(table).digest() + b"\0" * 4
         body = head * 2 + table * 2 + data + index + b"\0" * 64
         return self.text(0x300 + len(body) if hqr is not None else None) + body + (hqr or b"")
@@ -248,7 +248,7 @@ def model() -> Z3Builder:
 
 
 def lamp_file() -> bytes:
-    b = Z3Builder(fmt=2900, build="ZWSim,5.0,18645:a23c1e4400cf", author="WORKSHOP")
+    b = Z3Builder(fmt=2900, build="ZWSim,5.0,11111:0a0b0c0d0e0f", author="WORKSHOP")
     lamp = b.obj3d("โคมไฟท้าย")
     b.obj3d("หลอดไฟ")
     b.obj3d("ฝาครอบ")
@@ -312,8 +312,8 @@ def test_components_are_grouped_with_counts(main_file):
         (2, "ชุดเสา", ""),
         (4, "น็อต M16", ""),
         (1, "แผ่นพื้น", ""),
-        (1, "โคมไฟท้าย", "ชุดไฟ.Z3"),
         (1, LONG, ""),
+        (1, "โคมไฟท้าย", "ชุดไฟ.Z3"),
     ]
     assert [(u.count, u.name) for u in post.components] == [(3, "น็อต M16"), (1, LONG)]
     assert top.components[1].instances == ["ชุดเสา_1", "ชุดเสา_2"]
@@ -337,9 +337,9 @@ def test_file_without_preview_or_3d_objects(tmp_path):
 
 
 def test_appended_hqr_container_is_checked_but_not_listed(tmp_path):
-    back = Z3Builder(fmt=2900, build="ZWSim,5.0,18645:a23c1e4400cf")
+    back = Z3Builder(fmt=2900, build="ZWSim,5.0,11111:0a0b0c0d0e0f")
     for n in range(12):
-        back.backup_entry(f"HQR_BAK_{n}_20293_979580_{76809 + n}")
+        back.backup_entry(f"HQR_BAK_{n}_1111_2222_{3333 + n}")
     f = z3.read_z3(write(tmp_path, model().build(hqr=back.build())))
     assert f.ok and len(f.objects) == 9
     assert f.embedded.entries == 12 and f.embedded.header.format_version == 2900
@@ -511,7 +511,7 @@ def test_damage_in_the_data_area_is_not_noticed(tmp_path):
 
 def test_damaged_hqr_part_fails_the_whole_file(tmp_path):
     back = Z3Builder()
-    back.backup_entry("HQR_MAP_4080_10_10_10")
+    back.backup_entry("HQR_MAP_1234_10_10_10")
     good = model().build(hqr=back.build())
     f = z3.read_z3(write(tmp_path, flip(good, len(good) - 80)), strict=False)
     assert f.status == "damaged" and [c.key for c in f.failed_checks] == ["hqr.md5_index"] and "HQR" in f.message

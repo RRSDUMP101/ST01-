@@ -278,3 +278,70 @@ def test_a_long_import_note_stays_short(window):
     assert "ข้อที่ 2" in shown and "ข้อที่ 3" not in shown and "ชี้เมาส์" in shown
     assert "ไม่มีชิ้นส่วน" in shown  # what is wrong with the steps is never cut away
     assert "ข้อที่ 8" in tab.note.toolTip()
+
+
+def test_steps_can_be_added_removed_and_moved():
+    model = a3.build_for_job(_job())
+    titles = [s.title for s in model.steps]
+    floor = [p.id for p in model.parts_of_step(6)]
+    assert a3.insert_step(model, 3, a3.Step("ตรวจระดับ")) == {n: n + 1 for n in range(3, 10)}
+    assert [s.title for s in model.steps] == [*titles[:2], "ตรวจระดับ", *titles[2:]] and model.parts_of_step(3) == []
+    assert [p.id for p in model.parts_of_step(7)] == floor and len(model.problems()) == 1  # the new step is empty
+    assert a3.move_step(model, 7, -1) == {7: 6, 6: 7}
+    assert [p.id for p in model.parts_of_step(6)] == floor and model.steps[5].title == "ปูพื้นกระบะ"
+    assert a3.move_step(model, 1, -1) == {} and a3.move_step(model, 10, 1) == {} and a3.move_step(model, 2, 3) == {}
+    assert a3.remove_step(model, 3)[3] is None and [s.title for s in model.steps][:3] == titles[:3]
+    bolts = len(model.parts_of_step(3))
+    rails = len(model.parts_of_step(2))
+    moved = a3.remove_step(model, 3)  # the bolts join the rails
+    assert moved == {3: None, **{n: n - 1 for n in range(4, 10)}} and len(model.parts_of_step(2)) == rails + bolts
+    pads = len(model.parts_of_step(1))
+    a3.remove_step(model, 1)  # the first step: its parts join what is now the first
+    assert len(model.parts_of_step(1)) == pads + rails + bolts and model.problems() == []
+    one = a3.AssemblyModel("x", [a3.Part3D("a", "a", "g", step=1)], [a3.Step("เดียว")])
+    assert a3.remove_step(one, 1) == {} and len(one.steps) == 1  # the last step stays
+    a3.set_explode(one.parts, "ไปทางขวา (−Y)", 250)
+    assert one.parts[0].explode == [0.0, -250.0, 0.0]
+
+
+def test_tab_tools_for_many_parts_and_steps(window, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+
+    page = window.pages["install"]
+    tab = page.assembly
+    model = tab.model
+    rows = [r for r in range(tab.parts.rowCount()) if tab.parts.item(r, 1).text() == "คานขวาง"]
+    for r in rows:
+        tab.select_part_row(r, more=True)
+    assert tab.chosen.text() == "เลือก 6 ชิ้น" and len(tab.view.marked) == 6
+    assert tab.move_selected_to_step() == 0  # the overview is no step
+    tab.go(5, animate=False)
+    assert tab.move_selected_to_step() == 6 and tab.model.source == "file"
+    assert sum(1 for p in model.parts_of_step(5) if p.name == "คานขวาง") == 6 and "ขั้นที่ 4" in tab.note.text()
+    assert len(tab.selected_parts()) == 6  # the selection stays for the next action
+    assert tab.set_group_selected("กรอบพื้น") == 6 and "คานขวาง" not in model.groups()
+    tab.explode_dir.setCurrentText("ลง (−Z)")
+    tab.explode_dist.setValue(300)
+    assert tab.set_explode_selected() == 6 and tab.selected_parts()[0].explode == [0.0, 0.0, -300.0]
+    assert tab.explode.value() == 100
+    # the fields of a step
+    tab.edit_btn.setChecked(True)
+    assert tab.editor.isVisibleTo(tab) and not tab.step_info.isVisibleTo(tab)
+    tab.step_fields["torque"].setText("M10 เกรด 8.8: 41–55 Nm")
+    tab.step_fields["check"].setText("ระยะทแยงมุมเท่ากัน ±2 มม.")
+    tab._step_fields_edited()
+    assert model.steps[4].torque == "M10 เกรด 8.8: 41–55 Nm" and model.steps[4].check.startswith("ระยะทแยงมุม")
+    # steps added, moved, removed; the done marks follow their steps
+    tab.done.setChecked(True)
+    assert page.job.record["asm:5"]["done"]
+    assert tab.shift_step(-1) and tab.step == 4 and model.steps[3].torque.startswith("M10")
+    assert page.job.record["asm:4"]["done"] and "asm:5" not in page.job.record
+    assert tab.add_step(after=False) == 4 and model.steps[3].title == "ขั้นตอนใหม่" and len(model.steps) == 10
+    assert page.job.record["asm:5"]["done"] and tab.bom.rowCount() == 0
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.Yes)
+    assert tab.delete_step() and len(model.steps) == 9 and page.job.record["asm:4"]["done"]
+    tab.go(4, animate=False)
+    assert tab.done.isChecked() and tab.step_fields["torque"].text().startswith("M10")
+    assert not tab.shift_step(9)
+    pdf_note = a3.render_steps_html(model, {}, "SO-9", tab.done_steps())
+    assert "41–55 Nm" in pdf_note and "ระยะทแยงมุม" in pdf_note

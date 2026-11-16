@@ -166,6 +166,7 @@ class Assembly3DView(QWidget):
         self.hidden_groups: set[str] = set()
         self.hidden_parts: set[str] = set()
         self.selected = ""
+        self.marked: set[str] = set()  # more parts chosen in the table: tinted like the selected one
         self._anim = 0.0  # 1 → 0 while the parts of the step fly in
         self._meshes: dict[str, _Mesh] = {}
         self._drawn: list[tuple] = []  # (corners of a face, or the triangles of a mesh as an array; part id)
@@ -337,7 +338,7 @@ class Assembly3DView(QWidget):
             mesh = self._meshes[p.id]
             off = self._offset(p, state)
             base = QColor(CURRENT) if state == "current" else QColor(p.color)
-            if p.id == self.selected and mesh.pieces[0].tri is not None:  # a mesh has no outline to make thicker
+            if (p.id == self.selected or p.id in self.marked) and mesh.pieces[0].tri is not None:  # a mesh has no outline to make thicker
                 base = QColor((base.red() + 2 * SELECTED.red()) // 3, (base.green() + 2 * SELECTED.green()) // 3,
                               (base.blue() + 2 * SELECTED.blue()) // 3)
             alpha = 70 if state == "ghost" else 120 if state == "ref" else 255
@@ -381,7 +382,7 @@ class Assembly3DView(QWidget):
                 painter.setBrush(color)
                 painter.drawPolygon(QPolygonF([QPointF(x, y) for x, y in corners]))
                 if lines:
-                    painter.setPen(sel_pen if part_id == self.selected else edge_pen)
+                    painter.setPen(sel_pen if (part_id == self.selected or part_id in self.marked) else edge_pen)
                     edges = piece.edges[i]
                     for j in range(n):
                         if edges[j]:

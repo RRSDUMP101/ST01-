@@ -245,6 +245,58 @@ def auto_explode(model: AssemblyModel, factor: float = 0.6, least: float = 150.0
         p.explode = [round(x * scale, 1) for x in v]
 
 
+# --------------------------------------------------------------------------- editing the steps
+EXPLODE_DIRECTIONS = {"ขึ้น (+Z)": (0, 0, 1), "ลง (−Z)": (0, 0, -1), "ไปท้ายรถ (+X)": (1, 0, 0), "ไปหน้ารถ (−X)": (-1, 0, 0),
+                      "ไปทางซ้าย (+Y)": (0, 1, 0), "ไปทางขวา (−Y)": (0, -1, 0)}
+
+
+def insert_step(model: AssemblyModel, at: int, step: Step | None = None) -> dict[int, int]:
+    """A new, empty step at position `at` (1 … number of steps + 1); the steps from there on move one later.
+    Returns {old number: new number} of the steps that moved (for what is kept by step number, like done marks)."""
+    at = min(max(at, 1), len(model.steps) + 1)
+    moved = {n: n + 1 for n in range(at, len(model.steps) + 1)}
+    model.steps.insert(at - 1, step or Step("ขั้นตอนใหม่"))
+    for p in model.parts:
+        p.step = moved.get(p.step, p.step)
+    return moved
+
+
+def remove_step(model: AssemblyModel, n: int) -> dict[int, int | None]:
+    """Step `n` goes; its parts join the step before it (the first step's parts join the next). The last
+    remaining step cannot be removed. Returns {old number: new number, n: None}."""
+    if not 1 <= n <= len(model.steps) or len(model.steps) < 2:
+        return {}
+    moved: dict[int, int | None] = {k: k - 1 for k in range(n + 1, len(model.steps) + 1)}
+    moved[n] = None
+    heir = n - 1 if n > 1 else 1  # counted after the removal
+    del model.steps[n - 1]
+    for p in model.parts:
+        if p.step == n:
+            p.step = heir
+        elif p.step > n:
+            p.step -= 1
+    return moved
+
+
+def move_step(model: AssemblyModel, n: int, delta: int) -> dict[int, int]:
+    """Step `n` changes places with its neighbour (delta −1 = earlier, +1 = later), with its parts."""
+    m = n + delta
+    if delta not in (-1, 1) or not (1 <= n <= len(model.steps) and 1 <= m <= len(model.steps)):
+        return {}
+    model.steps[n - 1], model.steps[m - 1] = model.steps[m - 1], model.steps[n - 1]
+    swap = {n: m, m: n}
+    for p in model.parts:
+        p.step = swap.get(p.step, p.step)
+    return swap
+
+
+def set_explode(parts: list[Part3D], direction: str, distance: float) -> None:
+    """Where the parts wait before they are fitted: `distance` mm along one of EXPLODE_DIRECTIONS."""
+    d = EXPLODE_DIRECTIONS[direction]
+    for p in parts:
+        p.explode = [float(c * distance) for c in d]
+
+
 def _clean_name(text: str, fallback: str) -> str:
     return re.sub(r"\s+", " ", text).strip() or fallback
 

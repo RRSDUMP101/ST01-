@@ -8,7 +8,8 @@ from pathlib import Path
 from struct import error as struct_error
 
 from PySide6.QtCore import QObject, Qt, QTimer, QUrl, Signal
-from PySide6.QtWidgets import (QCheckBox, QComboBox, QFileDialog, QHBoxLayout, QLabel, QLineEdit, QMessageBox,
+from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComboBox, QFileDialog, QFormLayout, QHBoxLayout,
+                               QInputDialog, QLabel, QLineEdit, QMessageBox, QSpinBox,
                                QPlainTextEdit, QSlider, QSplitter, QTableWidgetItem, QVBoxLayout, QWidget)
 
 from ...core import assembly3d as a3
@@ -16,7 +17,7 @@ from ...core import cad_import
 from ...core import install_manual as im
 from ..assembly_view import Assembly3DView
 from ..state import AppState
-from ..widgets import button, fill, run_async, table
+from ..widgets import FlowLayout, button, fill, run_async, table
 
 PART_HEADERS = ["แสดง", "ชิ้นส่วน", "กลุ่ม", "ขั้น", "ขนาด", "Part No."]
 C_SHOW, C_NAME, C_GROUP, C_STEP, C_SIZE, C_PN = range(6)
@@ -100,7 +101,35 @@ class AssemblyTab(QWidget):
         self.parts = table(PART_HEADERS, [44, 150, 90, 40, 110, 80], editable=True)
         self.parts.itemChanged.connect(self._part_edited)
         self.parts.itemSelectionChanged.connect(self._part_row_selected)
+        self.parts.setSelectionMode(QAbstractItemView.ExtendedSelection)
         lay.addWidget(self.parts, 1)
+        row = QHBoxLayout()
+        self.chosen = QLabel("เลือก 0 ชิ้น")
+        self.chosen.setToolTip("เลือกหลายชิ้น: Shift / Ctrl + คลิกในตาราง หรือ Ctrl + คลิกชิ้นในภาพ")
+        row.addWidget(self.chosen, 1)
+        for text, slot, tip in (("ย้ายมาขั้นนี้", lambda: self.move_selected_to_step(), "ชิ้นที่เลือกทั้งหมดมาอยู่ในขั้นที่กำลังแสดง"),
+                                ("ตั้งกลุ่ม…", lambda: self.set_group_selected(), "ตั้งชื่อกลุ่มของชิ้นที่เลือกทั้งหมด")):
+            b = button(text, tooltip=tip)
+            b.clicked.connect(slot)
+            row.addWidget(b)
+        lay.addLayout(row)
+        row = QHBoxLayout()
+        row.addWidget(QLabel("ทิศแยกชิ้น"))
+        self.explode_dir = QComboBox()
+        self.explode_dir.addItems(list(a3.EXPLODE_DIRECTIONS))
+        self.explode_dir.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self.explode_dir.setMinimumContentsLength(9)
+        self.explode_dir.setToolTip("ทิศที่ชิ้นรออยู่ก่อนประกอบ = ทิศตรงข้ามกับที่ชิ้นเลื่อนเข้าตำแหน่งในการสาธิต")
+        self.explode_dist = QSpinBox()
+        self.explode_dist.setRange(20, 5000)
+        self.explode_dist.setSingleStep(50)
+        self.explode_dist.setValue(400)
+        self.explode_dist.setSuffix(" มม.")
+        apply = button("ตั้ง", tooltip="ตั้งทิศและระยะแยกชิ้นของชิ้นที่เลือก")
+        apply.clicked.connect(lambda: self.set_explode_selected())
+        for w2 in (self.explode_dir, self.explode_dist, apply):
+            row.addWidget(w2)
+        lay.addLayout(row)
         self.part_info = QLabel("คลิกชิ้นส่วนในภาพหรือในตารางเพื่อดูรายละเอียด · ดับเบิลคลิกในภาพเพื่อซูมเข้า")
         self.part_info.setObjectName("Hint")
         self.part_info.setWordWrap(True)
@@ -114,7 +143,8 @@ class AssemblyTab(QWidget):
         self.view = Assembly3DView()
         self.view.part_clicked.connect(self._part_clicked)
         self.view.animation_done.connect(self._animation_done)
-        bar = QHBoxLayout()
+        bar_box = QWidget()
+        bar = FlowLayout(bar_box, h_spacing=6)  # wraps on a narrow window instead of making the page wider
         for text, name in (("ISO", "iso"), ("ISO 2", "iso2"), ("บน", "top"), ("หน้า", "front"), ("ท้าย", "rear"), ("ข้าง", "side")):
             b = button(text, tooltip=f"มุมมอง {text}")
             b.clicked.connect(lambda _c=False, n=name: self.view.set_view(n))
@@ -126,8 +156,7 @@ class AssemblyTab(QWidget):
             b = button(text, tooltip=tip)
             b.clicked.connect(slot)
             bar.addWidget(b)
-        bar.addStretch(1)
-        lay.addLayout(bar)
+        lay.addWidget(bar_box)
         lay.addWidget(self.view, 1)
         bar = QHBoxLayout()
         bar.addWidget(QLabel("แยกชิ้น"))
@@ -144,9 +173,12 @@ class AssemblyTab(QWidget):
         self.vehicle = QCheckBox("รถ (อ้างอิง)")
         self.vehicle.setChecked(True)
         self.vehicle.toggled.connect(self._options_changed)
-        for c in (self.labels, self.ghost, self.vehicle):
-            bar.addWidget(c)
         lay.addLayout(bar)
+        opt_box = QWidget()
+        opts = FlowLayout(opt_box, h_spacing=12)
+        for c in (self.labels, self.ghost, self.vehicle):
+            opts.addWidget(c)
+        lay.addWidget(opt_box)
         hint = QLabel("ลากซ้าย = หมุน · ลากขวา / Shift+ลาก = เลื่อน · ล้อเมาส์ = ซูม · ดับเบิลคลิกชิ้น = ซูมเข้า")
         hint.setObjectName("Hint")
         lay.addWidget(hint)
@@ -172,6 +204,33 @@ class AssemblyTab(QWidget):
         self.step_info.setWordWrap(True)
         self.step_info.setTextFormat(Qt.RichText)
         lay.addWidget(self.step_info)
+        self.edit_btn = button("✎ แก้ไขขั้นตอน", tooltip="แก้แรงขัน เครื่องมือ จุดตรวจ คำเตือน · เพิ่ม ลบ เลื่อนลำดับขั้น")
+        self.edit_btn.setCheckable(True)
+        self.edit_btn.toggled.connect(self._edit_toggled)
+        lay.addWidget(self.edit_btn)
+        self.editor = QWidget()
+        form = QFormLayout(self.editor)
+        form.setContentsMargins(0, 0, 0, 0)
+        self.step_fields: dict[str, QLineEdit] = {}
+        for key, label in (("torque", "แรงขัน"), ("tools", "เครื่องมือ"), ("check", "จุดตรวจ"), ("warning", "คำเตือน"),
+                           ("ref", "อ้างอิง BEMM")):
+            edit = QLineEdit()
+            edit.editingFinished.connect(self._step_fields_edited)
+            self.step_fields[key] = edit
+            form.addRow(label, edit)
+        row_box = QWidget()
+        row = FlowLayout(row_box, h_spacing=6)
+        for text, slot, tip in (("+ ก่อน", lambda: self.add_step(False), "เพิ่มขั้นว่างก่อนขั้นนี้"),
+                                ("+ หลัง", lambda: self.add_step(True), "เพิ่มขั้นว่างหลังขั้นนี้"),
+                                ("▲", lambda: self.shift_step(-1), "เลื่อนขั้นนี้ขึ้น (ทำก่อน)"),
+                                ("▼", lambda: self.shift_step(1), "เลื่อนขั้นนี้ลง (ทำทีหลัง)"),
+                                ("ลบขั้น", lambda: self.delete_step(), "ลบขั้นนี้ – ชิ้นส่วนย้ายไปขั้นก่อนหน้า")):
+            b = button(text, tooltip=tip)
+            b.clicked.connect(slot)
+            row.addWidget(b)
+        form.addRow(row_box)
+        self.editor.setVisible(False)
+        lay.addWidget(self.editor)
         self.bom = table(BOM_HEADERS, [30, 150, 100, 70, 50])
         lay.addWidget(self.bom, 1)
         self.done = QCheckBox("ประกอบขั้นนี้เสร็จ และตรวจแล้ว")
@@ -297,25 +356,99 @@ class AssemblyTab(QWidget):
         self._show_step()
         self.view.update()
 
+    def selected_parts(self) -> list[a3.Part3D]:
+        rows = sorted({i.row() for i in self.parts.selectedIndexes()})
+        return [p for p in (self._part_at(r) for r in rows) if p is not None]
+
     def _part_row_selected(self) -> None:
-        rows = {i.row() for i in self.parts.selectedIndexes()}
-        part = self._part_at(min(rows)) if rows else None
-        if part and self.view.selected != part.id:
+        chosen = self.selected_parts()
+        self.chosen.setText(f"เลือก {len(chosen)} ชิ้น")
+        self.view.marked = {p.id for p in chosen}
+        part = chosen[0] if chosen else None
+        if part and self.view.selected not in self.view.marked:
             self.view.selected = part.id
-            self.view.update()
             self._describe(part)
+        self.view.update()
 
     def _part_clicked(self, part_id: str) -> None:
         part = self.model.part(part_id) if self.model else None
         self._describe(part)
         if part is None:
             return
+        more = bool(QApplication.keyboardModifiers() & Qt.ControlModifier)  # Ctrl + click: one more part
         for r in range(self.parts.rowCount()):
             if self.parts.item(r, 0).data(Qt.UserRole) == part_id:
-                self.parts.blockSignals(True)
-                self.parts.selectRow(r)
-                self.parts.blockSignals(False)
+                self.select_part_row(r, more)
                 break
+
+    def select_part_row(self, row: int, more: bool = False) -> None:
+        model = self.parts.selectionModel()
+        index = self.parts.model().index(row, 0)
+        model.select(index, (model.SelectionFlag.Toggle if more else model.SelectionFlag.ClearAndSelect)
+                     | model.SelectionFlag.Rows)
+        self.parts.scrollToItem(self.parts.item(row, 0))
+
+    # ---- the chosen parts ---------------------------------------------------
+    def _edited(self, keep_rows: bool = True) -> None:
+        """The model was changed by hand: it stops following the job, and the table and the picture show it."""
+        ids = {p.id for p in self.selected_parts()} if keep_rows else set()
+        self.model.source = "file"
+        self._fill_groups()
+        self._fill_parts()
+        selection = self.parts.selectionModel()
+        selection.clearSelection()  # the rows were written again: choose the same parts once more
+        for r in range(self.parts.rowCount()):
+            if self.parts.item(r, 0).data(Qt.UserRole) in ids:
+                selection.select(self.parts.model().index(r, 0), selection.SelectionFlag.Select | selection.SelectionFlag.Rows)
+        self._show_note(self.model.note, self.model.problems())
+        self.view.set_step(self.step or None, animate=False)
+        self._show_step()
+
+    def move_selected_to_step(self, step: int | None = None) -> int:
+        parts, step = self.selected_parts(), self.step if step is None else step
+        if not self.model or not parts:
+            self.state.notify("เลือกชิ้นส่วนในตารางก่อน (Shift / Ctrl + คลิก เพื่อเลือกหลายชิ้น)")
+            return 0
+        if not 1 <= step <= len(self.model.steps):
+            self.state.notify("ไปที่ขั้นที่ต้องการก่อน (ถัดไป ▶) แล้วกด ย้ายมาขั้นนี้")
+            return 0
+        for p in parts:
+            p.step = step
+        self._edited()
+        self.state.notify(f"ย้าย {len(parts)} ชิ้นมาขั้นที่ {step} “{self.model.steps[step - 1].title}”")
+        return len(parts)
+
+    def set_group_selected(self, name: str | None = None) -> int:
+        parts = self.selected_parts()
+        if not self.model or not parts:
+            self.state.notify("เลือกชิ้นส่วนในตารางก่อน")
+            return 0
+        if name is None:
+            name, ok = QInputDialog.getItem(self, "ตั้งกลุ่ม", f"กลุ่มของ {len(parts)} ชิ้นที่เลือก",
+                                            [g for g in self.model.groups() if g != a3.REF_GROUP], 0, True)
+            if not ok:
+                return 0
+        name = name.strip()
+        if not name or name == a3.REF_GROUP:
+            return 0
+        for p in parts:
+            p.group = name
+        self._edited()
+        self.state.notify(f"ตั้งกลุ่ม “{name}” ให้ {len(parts)} ชิ้น")
+        return len(parts)
+
+    def set_explode_selected(self) -> int:
+        parts = self.selected_parts()
+        if not self.model or not parts:
+            self.state.notify("เลือกชิ้นส่วนในตารางก่อน")
+            return 0
+        a3.set_explode(parts, self.explode_dir.currentText(), float(self.explode_dist.value()))
+        self.model.source = "file"
+        if self.explode.value() < 50:  # show what was set
+            self.explode.setValue(100)
+        self.view.update()
+        self.state.notify(f"ตั้งทิศแยกชิ้น {self.explode_dir.currentText()} {self.explode_dist.value()} มม. ให้ {len(parts)} ชิ้น")
+        return len(parts)
 
     def _describe(self, part: a3.Part3D | None) -> None:
         if part is None:
@@ -383,6 +516,10 @@ class AssemblyTab(QWidget):
             info += [f"<span style='color:#D64545'><b>⚠ {step.warning}</b></span>"] if step.warning else []
             info += [f"<span style='color:#6B7A90'>BEMM {step.ref}</span>"] if step.ref else []
         self.step_info.setText("<br>".join(info))
+        self.step_info.setVisible(not self.edit_btn.isChecked())
+        self.editor.setEnabled(step is not None)
+        for key, edit in self.step_fields.items():
+            edit.setText(getattr(step, key) if step else "")
         lines = model.bom(n if step else None) if model else []
         fill(self.bom, [[b.no, b.name, b.size, b.part_no, b.qty] for b in lines])
         done = self.done_steps()
@@ -399,6 +536,71 @@ class AssemblyTab(QWidget):
         if (title, detail) != (step.title, step.detail):
             step.title, step.detail = title or step.title, detail
             self.model.source = "file"
+
+    def _edit_toggled(self, on: bool) -> None:
+        self.editor.setVisible(on)
+        self.step_info.setVisible(not on)
+        if on and self.model and self.step == 0 and self.model.steps:
+            self.go(1, animate=False)
+
+    def _step_fields_edited(self) -> None:
+        if self._loading or not self.model or not 0 < self.step <= len(self.model.steps):
+            return
+        step, changed = self.model.steps[self.step - 1], False
+        for key, edit in self.step_fields.items():
+            if getattr(step, key) != edit.text().strip():
+                setattr(step, key, edit.text().strip())
+                changed = True
+        if changed:
+            self.model.source = "file"
+            self._show_step()
+
+    def _remap_done(self, moved: dict) -> None:
+        """The done marks are kept by step number: they follow their steps when the order changes."""
+        record = self.get_job().record
+        old = {int(k[4:]): record.pop(k) for k in [k for k in record if k.startswith("asm:") and k[4:].isdigit()]}
+        for n, mark in old.items():
+            new = moved.get(n, n)
+            if new is not None:
+                record[self._record_key(new)] = mark
+
+    def add_step(self, after: bool) -> int:
+        if not self.model:
+            return 0
+        at = (self.step + 1 if after else max(self.step, 1)) if self.step else len(self.model.steps) + 1
+        self._remap_done(a3.insert_step(self.model, at))
+        self.step = at
+        self._edited(keep_rows=True)
+        self.step_title.setFocus()
+        self.step_title.selectAll()
+        return at
+
+    def delete_step(self, ask: bool = True) -> bool:
+        if not self.model or not 0 < self.step <= len(self.model.steps):
+            return False
+        if len(self.model.steps) < 2:
+            self.state.notify("ต้องมีอย่างน้อย 1 ขั้น")
+            return False
+        n, parts = self.step, len(self.model.parts_of_step(self.step))
+        heir = n - 1 if n > 1 else 2
+        if ask and QMessageBox.question(self, "ลบขั้น", f"ลบขั้นที่ {n} “{self.model.steps[n - 1].title}” ?\n"
+                                        f"ชิ้นส่วน {parts} ชิ้นจะย้ายไปขั้นที่ {heir}") != QMessageBox.Yes:
+            return False
+        self._remap_done(a3.remove_step(self.model, n))
+        self.step = max(1, n - 1)
+        self._edited()
+        return True
+
+    def shift_step(self, delta: int) -> bool:
+        if not self.model:
+            return False
+        moved = a3.move_step(self.model, self.step, delta)
+        if not moved:
+            return False
+        self._remap_done(moved)
+        self.step += delta
+        self._edited()
+        return True
 
     def _done_toggled(self, checked: bool) -> None:
         if self._loading or not self.step:

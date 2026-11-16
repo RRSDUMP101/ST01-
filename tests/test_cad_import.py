@@ -284,8 +284,9 @@ def test_step_leaf_with_several_solids_and_thai_in_a_windows_code_page(tmp_path)
     path = d.write_step(tmp_path / "frame.step")
     model = ci.read_cad(path)
     _check(model)
-    # two forms in one leaf: numbered; the same form twice would have kept one name
-    assert [p.name for p in model.parts] == ["โครงกันหัว.1", "โครงกันหัว.2", "โครงกันหัว.3"]
+    # solids without a name in a product: called after it, numbered from the biggest, one name for the same item
+    assert [p.name for p in model.parts] == ["โครงกันหัว 02", "โครงกันหัว 02", "โครงกันหัว 01"]
+    assert [(b.name, b.qty, b.size) for b in model.bom()] == [("โครงกันหัว 02", 2, "300×40×40"), ("โครงกันหัว 01", 1, "500×40×40")]
     assert model.groups() == ["โครงกันหัว"] and {p.color for p in model.parts} == {"#00FF00"}
     # the same file as a CAD program on Thai Windows may write it: the name in code page 874, not UTF-8
     data = path.read_bytes()
@@ -365,8 +366,10 @@ def test_unnamed_parts_on_levels_are_grouped_by_level(tmp_path):
         d.part(_box(200 * i, 0, 0, 100, 50, 20), colour=(0.5, 0.5, 0.5), layer="12" if i < 2 else "30")
     model = ci.read_cad(d.write_iges(tmp_path / "levels.igs"))
     _check(model)
-    assert [p.group for p in model.parts] == ["เลเยอร์ 12", "เลเยอร์ 12", "เลเยอร์ 30"]
-    assert [s.title for s in model.steps] == ["ประกอบกลุ่ม เลเยอร์ 12", "ประกอบกลุ่ม เลเยอร์ 30"]
+    assert [p.group for p in model.parts] == ["Layer 12", "Layer 12", "Layer 30"]  # a level without a name: its number
+    assert [p.name for p in model.parts] == ["Layer 12 01", "Layer 12 01", "Layer 30 01"]
+    assert [(b.name, b.qty, b.size) for b in model.bom()] == [("Layer 12 01", 2, "100×50×20"), ("Layer 30 01", 1, "100×50×20")]
+    assert [s.title for s in model.steps] == ["ประกอบกลุ่ม Layer 12", "ประกอบกลุ่ม Layer 30"]
 
 
 def _gapped(tmp_path, gap: float, describe=None) -> Path:
@@ -390,13 +393,14 @@ def test_loose_surfaces_do_not_become_thousands_of_parts(tmp_path, monkeypatch):
     _check(model)
     assert len(model.parts) == 5 and "รวมผิวที่ขอบต่อกัน 30 ผิว เป็น 5 ชิ้น" in model.note
     assert all(len(p.mesh) == 12 and not p.cull for p in model.parts)  # open: drawn from both sides
-    # 3. … and when that still leaves too many: by IGES level, else by colour
+    # 3. … and when that still leaves too many: every IGES level is taken by itself anyway, then by colour
     monkeypatch.setattr(ci, "LOOSE_MAX", 2)
     monkeypatch.setattr(ci, "LINK_GRID", 0.01)  # nothing links
     model = ci.read_cad(_gapped(tmp_path, 0.45, lambda i: {"layer": "5" if i < 3 else "8", "colour": (0, 1, 0)}))
     _check(model)
-    assert len(model.parts) == 2 and "รวมผิวตาม level ของ IGES 30 ผิว เป็น 2 ชิ้น" in model.note
-    assert sorted(len(p.mesh) for p in model.parts) == [24, 36] and model.groups() == ["เลเยอร์ 5", "เลเยอร์ 8"]
+    assert len(model.parts) == 2 and "แยกตาม level ของ IGES 2 level" in model.note
+    assert "รวมผิวเดี่ยวที่เหลือเป็นชิ้นเดียว 30 ผิว เป็น 2 ชิ้น" in model.note
+    assert sorted(len(p.mesh) for p in model.parts) == [24, 36] and model.groups() == ["Layer 5", "Layer 8"]
     model = ci.read_cad(_gapped(tmp_path, 0.45, lambda i: {"colour": (1, 0, 0) if i < 1 else (0, 0, 1)}))
     assert sorted((p.color, len(p.mesh)) for p in model.parts) == [("#0000FF", 48), ("#FF0000", 12)] and "รวมผิวตามสี" in model.note
     # 4. nothing to tell them apart: one part of all the single faces - none is dropped
@@ -433,18 +437,19 @@ def _spheres(tmp_path, count=60) -> Path:
     return _write_iges(tmp_path / "spheres.igs", balls)
 
 
-def test_face_budget_meshes_coarser_then_boxes_the_smallest_and_drops_nothing(tmp_path):
+def test_face_budget_meshes_coarser_then_boxes_only_small_parts_and_drops_nothing(tmp_path):
     path = _spheres(tmp_path)
     fine, report = ci.read_cad_report(path, max_faces=10 ** 6)
     _check(fine, 10 ** 6)
-    assert len(fine.parts) == 60 and report.level == 0 and report.boxed == 0 and report.triangles > 60000
-    # 1. the budget of the program: the same parts, a coarser mesh - and the room that is left goes to the biggest
-    model, report = ci.read_cad_report(path)
+    assert len(fine.parts) == 60 and report.level == 0 and report.boxed == 0 and 60000 < report.triangles <= ci.MAX_FACES
+    assert ci.read_cad(path).to_dict()["parts"] == fine.to_dict()["parts"]  # the budget of the program holds it as it is
+    # 1. a smaller budget: the same parts, a coarser mesh - and the room that is left goes to the biggest
+    model, report = ci.read_cad_report(path, max_faces=60000)
     _check(model)
     assert len(model.parts) == 60 and report.level == 1 and report.boxed == 0 and 40000 < report.triangles <= 60000
-    assert "ระดับ 2/4" in model.note and "ละเอียดขึ้นหนึ่งระดับ" in model.note
+    assert "ระดับ 2/4" in model.note and "ละเอียดขึ้นหนึ่งระดับ" in model.note and "งบ 60,000" in model.note
     sizes = sorted((p.bounds()[1][2], len(p.mesh)) for p in model.parts)
-    assert sizes[-1][1] > 3 * sizes[0][1]  # the big sphere has the finer mesh, the small one the coarser
+    assert sizes[-1][1] > 2 * sizes[0][1]  # the big sphere has the finer mesh, the small one the coarser
     # 2. a small budget: the coarsest mesh there is - still spheres, not blobs
     model, report = ci.read_cad_report(path, max_faces=4500)
     _check(model, 4500)
@@ -452,18 +457,27 @@ def test_face_budget_meshes_coarser_then_boxes_the_smallest_and_drops_nothing(tm
     assert all(p.shape == "mesh" and p.cull and len(p.mesh) >= 40 for p in model.parts) and "ระดับ 4/4 (หยาบสุด)" in model.note
     ball = min(model.parts, key=lambda p: p.bounds()[1][2])  # the smallest, 10 mm: its size kept, most of its volume
     assert 0.6 < _volume(ball) / (4 / 3 * 3.14159 * 1000) <= 1.0 and _close(ball.bounds(), ((-10, -10, -10), (10, 10, 10)), 1.5)
-    # 3. under what the coarsest mesh needs: the smallest are shown as their boxes, and the note says how many
-    budget = report.triangles // 2
+    assert ball.size == "20×20×20"  # the true size, not that of the coarse mesh
+    coarsest = report.triangles
+    # 3. a little under what the coarsest mesh needs: small parts are shown as their boxes, as few as will do
+    budget = coarsest - 150
     model, report = ci.read_cad_report(path, max_faces=budget)
     _check(model, budget)
     boxes = [p for p in model.parts if p.shape == "box"]
-    assert len(model.parts) == 60 and report.level == 3 and 0 < len(boxes) == report.boxed < 60
+    assert len(model.parts) == 60 and report.level == 3 and 0 < len(boxes) == report.boxed <= 4 and not report.over_budget
     assert f"แสดงชิ้นเล็ก {len(boxes)} ชิ้น" in model.note and "เป็นกล่อง" in model.note and all("กล่อง" in p.note for p in boxes)
-    assert max(p.dims[0] for p in boxes) < min(p.bounds()[1][0] - p.bounds()[0][0] for p in model.parts if p.shape == "mesh")
-    assert all(abs(p.dims[0] - p.dims[1]) < 2 and 19 < p.dims[0] < 140 for p in boxes)  # where the sphere was, as big as it was
+    assert all(abs(p.dims[0] - p.dims[1]) < 2 and 19 < p.dims[0] <= ci.BOX_MAX for p in boxes)  # where the sphere was, as big as it was
     assert sorted(p.name for p in model.parts) == sorted(p.name for p in fine.parts)  # nothing dropped
-    # 4. a budget that not even boxes fit in: refused with the number to ask for, not a model with parts missing
-    with pytest.raises(ci.CadImportError, match="60 ชิ้น.*720 หน้า"):
+    # 4. half of it: every sphere up to 45 mm is a box, no bigger one ever is - the model is over its budget and says so
+    budget = coarsest // 2
+    model, report = ci.read_cad_report(path, max_faces=budget)
+    boxes = [p for p in model.parts if p.shape == "box"]
+    small = [p for p in fine.parts if p.bounds()[1][0] - p.bounds()[0][0] <= ci.BOX_MAX]
+    assert len(model.parts) == 60 and len(boxes) == report.boxed == len(small) == 13 and max(p.dims[0] for p in boxes) <= ci.BOX_MAX
+    assert report.over_budget and budget < report.triangles + 12 * len(boxes) < coarsest and "ยังเกินงบ" in model.note
+    assert all(p.shape == "mesh" and len(p.mesh) >= 40 for p in model.parts if p not in boxes)
+    # 5. a budget the model is many times over: refused with the number to ask for, not a model nobody can turn
+    with pytest.raises(ci.CadImportError, match="60 ชิ้น.*เกินงบ 500 หน้า.*--max-faces"):
         ci.read_cad(path, max_faces=500)
 
 

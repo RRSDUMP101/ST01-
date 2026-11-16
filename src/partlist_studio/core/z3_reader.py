@@ -68,7 +68,7 @@ _KEEP = (CLS_TABLE, CLS_STRING, CLS_PREVIEW, CLS_LAYER, CLS_COMPONENT, CLS_OBJEC
 
 KIND_TH = {"part": "ชิ้นส่วน", "assembly": "ชุดประกอบ", "drawing": "แบบ 2 มิติ", "other": "ไม่ทราบชนิด"}
 
-_MONTHS = {m: i + 1 for i, m in enumerate("Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec".split())}
+_MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
 
 
 class Z3Error(Exception):
@@ -252,7 +252,6 @@ _LEVELS = 6
 class _Index:
     records: int = 0
     consumed: int = 0
-    tail_zero: bool = True
     data_end: int = -1
     gaps: list[tuple[int, int, int]] = field(default_factory=list)  # (record number, expected offset, offset)
     n_gaps: int = 0
@@ -323,7 +322,8 @@ def _walk_index(mm, start: int, size: int, keep_ids: np.ndarray) -> _Index:
                 both[1::2] = jump[level][starts]
                 starts = both
             stop_at = int(starts[-1])  # the first position that is not a record start (or the end of the zone)
-            starts = starts[:-1][good[starts[:-1]]] if stop_at < n else starts[good[np.minimum(starts, n - 1)] & (starts < n)]
+            starts = starts[starts < n]
+            starts = starts[good[starts]]  # drops the repeats of the stopping position
             del jump, far, both
             m = len(starts)
             if m:
@@ -369,12 +369,10 @@ def _walk_index(mm, start: int, size: int, keep_ids: np.ndarray) -> _Index:
                 cur_id = int(ids[-1])
                 out.records += m
             del a, ctrl_at
-            if stop_at < zone or stop_at == 0:
-                pos += stop_at
-                break
             pos += stop_at
+            if stop_at < zone:  # not a record start: the index ends here (or is damaged)
+                break
         out.consumed = pos
-        out.tail_zero = not idx[pos:].any()
         out.data_end = cur_off
     finally:
         del idx
@@ -467,7 +465,7 @@ def _parse_header(text: bytes) -> Z3Header:
         d = re.match(r"^\w{3} (\w{3}) +(\d+) (\d+):(\d+):(\d+) (\d{4})$", h.saved_text)
         if d and d.group(1) in _MONTHS:
             try:
-                h.saved = datetime(int(d[6]), _MONTHS[d[1]], int(d[2]), int(d[3]), int(d[4]), int(d[5]))
+                h.saved = datetime(int(d[6]), _MONTHS.index(d[1]) + 1, int(d[2]), int(d[3]), int(d[4]), int(d[5]))
             except ValueError:
                 h.saved = None
     h.platform = lines[2]
@@ -545,9 +543,7 @@ def _read_container(mm, base: int, end: int, tag: str = "") -> _Container:
     want = np.unique(np.array([rid for _n, rid in box.entries], dtype=np.int64))
     ix = _walk_index(mm, base + a, b, want)
     box.index = ix
-    check(
-        "index", "อ่านดัชนีระเบียนได้ครบ", ix.consumed == b or (ix.tail_zero and ix.records > 0), f"{ix.consumed} / {b} ไบต์"
-    )
+    check("index", "อ่านดัชนีระเบียนได้ครบ", ix.consumed == b and ix.records > 0, f"{ix.consumed} / {b} ไบต์")
     check("index_codes", "รหัสในดัชนีเป็นแบบที่รู้จัก", ix.unknown_codes == 0, f"ไม่รู้จัก {ix.unknown_codes} จุด")
     # the first record is the table itself; its second copy is the one hole in the data area
     one_hole = ix.gaps == [(1, _TABLE_AT + c, _TABLE_AT + 2 * c)] or (ix.records == 1 and not ix.gaps)
@@ -558,8 +554,19 @@ def _read_container(mm, base: int, end: int, tag: str = "") -> _Container:
     return box
 
 
+def _decode(raw: bytes, code_page: str) -> str:
+    """Names are in the Windows code page of the author's computer, but some (layer names that came from a .zwlyr
+    file) are UTF-8. Thai text in cp874 is practically never valid UTF-8, so UTF-8 is tried first."""
+    if not raw.isascii():
+        try:
+            return raw.decode("utf-8")
+        except UnicodeDecodeError:
+            pass
+    return raw.decode(code_page, "replace")
+
+
 def _text(raw: bytes, code_page: str) -> str:
-    return raw.split(b"\0")[0].decode(code_page, "replace")
+    return _decode(raw.split(b"\0")[0], code_page)
 
 
 def _record(mm, base: int, ix: _Index, i: int) -> bytes:
@@ -574,7 +581,7 @@ def _long_name(mm, base: int, ix: _Index, length: int, sid: int, code_page: str)
     raw = _record(mm, base, ix, i)
     if raw[-1] != 0 or 0 in raw[:-1]:
         return None
-    return raw[:-1].decode(code_page, "replace")
+    return _decode(raw[:-1], code_page)
 
 
 def _bmp_to_png(bmp: bytes) -> bytes | None:
@@ -600,7 +607,8 @@ def _bmp_to_png(bmp: bytes) -> bytes | None:
         return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", zlib.crc32(tag + data))
 
     ihdr = struct.pack(">IIBBBBB", w, rows, 8, 2, 0, 0, 0)
-    return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr) + chunk(b"IDAT", zlib.compress(raw.tobytes(), 6)) + chunk(b"IEND", b"")
+    body = chunk(b"IHDR", ihdr) + chunk(b"IDAT", zlib.compress(raw.tobytes(), 6)) + chunk(b"IEND", b"")
+    return b"\x89PNG\r\n\x1a\n" + body
 
 
 def _preview(mm, base: int, ix: _Index) -> bytes | None:
@@ -711,7 +719,7 @@ def _read_into(result: Z3File, mm) -> None:
         if obj.kind == "part":  # the root record of a 3D object starts with its name: must agree with the table
             try:
                 s = _Packed(_record(mm, 0, ix, ix.lookup(obj.root_id))).string()
-                own = _long_name(mm, 0, ix, s[0], s[1], cp) if isinstance(s, tuple) else s.decode(cp, "replace")
+                own = _long_name(mm, 0, ix, s[0], s[1], cp) if isinstance(s, tuple) else _decode(s, cp)
             except (ValueError, IndexError, struct.error):
                 own = None
             renamed += own != obj.name
@@ -743,7 +751,7 @@ def _read_into(result: Z3File, mm) -> None:
                         raise ValueError(f"long name {s[1]} not found")
                     names.append(long)
                 else:
-                    names.append(s.decode(cp, "replace"))
+                    names.append(_decode(s, cp))
             owner = [pk.integer() for _ in range(4)][3]
         except (ValueError, IndexError, struct.error) as exc:
             broken.append(f"ระเบียน {rid}: {exc}")
@@ -784,7 +792,8 @@ def _read_into(result: Z3File, mm) -> None:
     result.preview_png = _preview(mm, 0, ix)
     if header.format_version not in KNOWN_FORMATS:
         result.warnings.append(
-            f"รูปแบบไฟล์รุ่น {header.format_version} ยังไม่เคยทดสอบ (ทดสอบแล้ว: {', '.join(map(str, KNOWN_FORMATS))}) – ผ่านการตรวจทุกข้อ แต่ควรสุ่มตรวจรายการ"
+            f"รูปแบบไฟล์รุ่น {header.format_version} ยังไม่เคยทดสอบ (ทดสอบแล้ว: {', '.join(map(str, KNOWN_FORMATS))})"
+            " – ผ่านการตรวจทุกข้อ แต่ควรสุ่มตรวจรายการ"
         )
     names = [_fold(o.name) for o in result.objects if o.kind != "drawing"]
     if len(set(names)) != len(names):
@@ -829,7 +838,8 @@ class Bom:
 
 
 class Z3Library:
-    """Reads the files that assemblies refer to, once each; they are looked for next to the file that names them."""
+    """Reads the files that assemblies refer to, once each. A file is looked for next to the file that names it,
+    then one folder up (a project keeps shared parts above the folder of one body)."""
 
     def __init__(self) -> None:
         self._files: dict[Path, Z3File] = {}
@@ -839,6 +849,9 @@ class Z3Library:
         self._files[z3.path.resolve()] = z3
 
     def locate(self, folder: Path, name: str) -> Path | None:
+        return self._in(folder, name) or (self._in(folder.parent, name) if folder.parent != folder else None)
+
+    def _in(self, folder: Path, name: str) -> Path | None:
         listing = self._folders.get(folder)
         if listing is None:
             listing = {}
@@ -905,7 +918,7 @@ def find_top(z3: Z3File) -> Z3Object | None:
 def bom(z3: Z3File, root: Z3Object | str | None = None, resolve: bool = True, library: Z3Library | None = None) -> Bom:
     """The tree under `root` (default: find_top) with counts multiplied through, the flat parts list, and the 3D
     objects of the file that the tree's file leaves unused. With resolve=True components that live in another file
-    are followed into that file when it is in the same folder; files that are not there are listed as missing."""
+    are followed into that file when it is in the same folder (or the one above); the others are listed as missing."""
     out = Bom()
     if not z3.ok:
         raise Z3Error(z3.message or "ไฟล์นี้อ่านไม่ได้", z3.status, z3.checks)
@@ -958,7 +971,7 @@ def bom(z3: Z3File, root: Z3Object | str | None = None, resolve: bool = True, li
                 continue
             shown = use.name or Path(use.file).stem
             if not resolve:
-                node.children.append(leaf(shown, "external", n, t, use.file, "อยู่ในไฟล์อื่น (ไม่ได้เปิดดู)"))
+                node.children.append(leaf(shown, "external", n, t, use.file, "อยู่ในไฟล์อื่น ไม่ได้เปิดดู"))
                 continue
             where = library.locate(src.path.resolve().parent, use.file)
             if where is None:

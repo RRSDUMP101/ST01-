@@ -3,7 +3,7 @@
 ไม่ใช้ Qt. OpenCascade is an optional dependency: it is imported when a file is read, so the program (and
 `partlist_studio.core`) imports and runs without it. หน่วยของผลลัพธ์ = มม. เสมอ ไม่ว่าไฟล์จะเป็นนิ้ว เมตร หรือ มม.
 
-* `read_cad(path, max_faces, progress)` – the file → `AssemblyModel` whose parts are the real parts
+* `read_cad(path, max_faces, progress, up)` – the file → `AssemblyModel` whose parts are the real parts
 * `read_cad_report(...)` – the same, with what was done (`CadReport`: unit, how the parts were found, time)
 * `read_cad_isolated(...)` – the same in a child process: OpenCascade keeps Python's lock while it works, so a
   thread alone would still freeze the window; and a crash or out-of-memory there does not take the program down
@@ -14,13 +14,27 @@ What is a part
        part of a solid;
     3. faces that belong to no shell (IGES trimmed surfaces, type 144) are sewn (`SEW_TOL`), and every connected
        shell that comes out is a part; when more than `LOOSE_MAX` faces stay alone they are sewn again more
-       loosely (`SEW_RETRY_TOL`), then linked by the edges they share (`LINK_GRID`), then put together by IGES
-       level or by colour - so that a file of 5,000 loose surfaces does not become 5,000 "parts".
+       loosely (`SEW_RETRY_TOL`), then linked by the edges they share (`LINK_GRID`), then put together by
+       colour - so that a file of 5,000 loose surfaces does not become 5,000 "parts".
+    The surfaces of an IGES file are sewn level by level: what the designer drew on two levels is two parts.
 `AssemblyModel.note` tells which of these were used.
 
-The view is a software renderer and a .rrsasm is JSON, so the whole model keeps within `max_faces` triangles:
-the parts are meshed finer or coarser as a whole (`LEVELS`), and when the coarsest mesh is still too much the
-smallest parts (bolts, washers) are shown as their bounding boxes. No part is dropped.
+Groups and names
+    An IGES level is a group, under the name the CAD program gave it (property 406 form 3, read from the text of
+    the file: OpenCascade passes on the number only); a STEP product (sub-assembly) is a group. A part keeps the
+    name the file gives it. One without a name is called after its group, "<group> 01" from the biggest, and
+    parts of one size and one number of faces share a name, so that the parts table counts them. The labels a
+    CAD program hangs on single surfaces ("S1" of ZW3D, on the faces of a hundred unrelated parts) are no names.
+
+The view is a software renderer and a .rrsasm is JSON, so the whole model keeps within `max_faces` triangles,
+in this order: the parts are meshed coarser as a whole (`LEVELS`: a deflection in proportion to the part); then
+the holes, cut-outs and embossed patterns too small to show in a picture of the whole (`HOLE_SHARE`) are left
+out - a chequered plate is 10,000 triangles with its pattern and 100 without; then the small parts with the most
+triangles (`BOX_MAX`: a lock, a threaded bolt) are shown as their bounding boxes. No part is dropped, nothing
+bigger becomes a box: a model that still does not fit is given as it is, and the note says so.
+
+Axes: the program has Z up and X along the vehicle. `up="y"` turns a model drawn with Y up, (x, y, z) → (x, -z, y);
+without it the importer turns the model only when a big flat plate (a floor) says so, and the note tells.
 """
 
 from __future__ import annotations
@@ -50,6 +64,17 @@ SEW_RETRY_TOL = 0.5  # mm: the second try, for the faces the first left alone (s
 LINK_GRID = 2.0  # mm: two loose faces whose edges end and bend at the same places (to this) are one part
 LOOSE_MAX = 200  # more single faces than this after sewing: they are grouped instead of being a part each
 BOX_FACES = 12  # what a part shown as its bounding box costs
+BOX_MAX = 45.0  # mm: only a part no longer than this ("about 40 mm": a bolt, a nut, a lock) may be shown as a box
+# The view draws about 100,000 triangles a second: a still picture of a model at the budget takes about 1.2 s,
+# half of that when its parts are closed skins (the back faces are skipped), and while it is turned the big
+# parts are boxes. Twice the 60,000 of the sample models, because a real tray of 300 parts and 31,000 surfaces
+# needs about 110,000 at the coarsest mesh that still shows round tubes and the diamonds of a grating.
+MAX_FACES = 120000
+OVER_BUDGET = 4  # a model that needs more than this many times its budget is refused, not given
+HOLE_SHARE = 0.01  # of the diagonal of the model: holes and patterns under this do not show in a picture of the whole
+HOLE_MAX = 40.0  # mm: … and never a hole bigger than this
+HOLE_REGION = 400  # faces: what lies behind one hole (its wall, a countersink); more is no hole
+SAME_SIZE = 0.5  # mm: two nameless parts whose three sizes differ by less (and with as many faces) are one item
 RAW_NAME_SECONDS = 20.0  # the most time spent on looking up IGES names that came through spoiled
 # how fine the mesh is: (deflection as a share of the part's size, the most it may be in mm, angle in radians).
 # The last one is the floor: a 50 mm bracket keeps its form (a hole is still six-sided), nothing coarser is tried.
@@ -59,6 +84,7 @@ MIN_DEFLECTION = 0.02
 # this much free memory the file is refused before the machine starts to swap or the system kills the program
 MEMORY_PER_BYTE = {"IGES": 6.0, "STEP": 6.0}
 BIG, SMALL = 1000.0, 100.0  # mm: parts without a name, a level or an assembly are grouped by their size
+GROUPS_IN_NOTE = 30  # the note counts the parts of this many groups, and says how many more there are
 SIZE_GROUPS = ("ชิ้นใหญ่ (ยาวกว่า 1 ม.)", "ชิ้นกลาง", "ชิ้นเล็ก (สลัก น็อต แหวน ขายึด)")
 _IGES_UNITS = {1: "นิ้ว", 2: "มม.", 4: "ฟุต", 5: "ไมล์", 6: "เมตร", 7: "กม.", 8: "mil (0.001 นิ้ว)", 9: "ไมครอน", 10: "ซม.",
                11: "ไมโครนิ้ว"}
@@ -84,6 +110,15 @@ class CadReport:
     triangles: int = 0
     boxed: int = 0  # small parts shown as their bounding box
     level: int = 0  # index in LEVELS of the mesh that was kept
+    holes: int = 0  # small inner loops (holes, cut-outs, patterns) left out of the mesh
+    hole_faces: int = 0  # faces behind them (the wall of a hole, the top of a chequer) left out
+    hole_max: float = 0.0  # mm: the size under which they were left out
+    budget: int = 0  # max_faces
+    over_budget: bool = False  # the model has more triangles than the budget: nothing more could honestly go
+    up: str = "z"  # the axis of the file that points up: 'y' = the model was turned
+    up_guessed: bool = False
+    levels: dict = field(default_factory=dict)  # IGES: level number → name, as written in the file
+    group_counts: list = field(default_factory=list)  # [group, parts, triangles] in the order of the steps
     faces_in_file: int = 0  # B-rep faces
     loose_faces: int = 0  # of them, faces that were in no shell
     bounds: list = field(default_factory=list)  # [[x0, y0, z0], [x1, y1, z1]] mm
@@ -393,6 +428,87 @@ def _scan_step(path: Path) -> tuple[str, bool]:
     return " + ".join(named or units) or "ไม่ระบุ (ถือเป็น มม.)", legacy
 
 
+def _iges_text(raw: bytes) -> str:
+    """Text of an IGES file is bytes: UTF-8 when it is, else Thai of Windows (code page 874, which holds TIS-620)."""
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return raw.decode("cp874", "replace")
+
+
+def _iges_level_names(path: Path) -> dict[int, str]:
+    """IGES level number → the name the CAD program gave it. A level is only a number on every entity; its name
+    is a property entity of its own (type 406 form 3, 'level function': "406,2,0,6Hfloor,0,0;") that sits on
+    that level. OpenCascade reads the numbers and drops the names, so they are taken from the text of the file:
+    the directory section (two lines of ten 8-column fields per entity) tells where the parameters are."""
+    import numpy as np
+
+    wanted: list[tuple[int, int, int]] = []  # (level, first parameter line, lines)
+
+    def entry(first: bytes, second: bytes) -> None:
+        try:
+            if int(first[0:8]) == 406 and int(second[32:40] or 0) == 3 and int(first[32:40] or 0) > 0:
+                wanted.append((int(first[32:40]), int(first[8:16]), int(second[24:32] or 1)))
+        except ValueError:
+            pass
+
+    params: dict[int, bytes] = {}
+    with open(path, "rb") as f:
+        width = len(f.readline())
+        size = os.fstat(f.fileno()).st_size
+        f.seek(max(size - 200, 0))
+        tail = [line for line in f.read().splitlines() if line.strip()]
+        # the last line counts the lines of the others: "S      1G      4D  12346P   6789      …      T      1"
+        counts = re.match(rb"S\s*(\d+)G\s*(\d+)D\s*(\d+)P\s*(\d+)", tail[-1]) if tail and tail[-1][72:73] == b"T" else None
+        lines = sum(int(v) for v in counts.groups()) + 1 if counts else 0
+        if counts and width in (81, 82) and size in (lines * width, lines * width - (width - 80)):
+            # lines of one length (as every writer makes them): the directory is one block, a parameter one seek
+            start, glob, directory, _p = (int(v) for v in counts.groups())
+            f.seek((start + glob) * width)
+            block = np.frombuffer(f.read(directory * width), dtype=np.uint8)
+            block = block[:len(block) // (2 * width) * 2 * width].reshape(-1, 2 * width)
+            hit = (block[:, 5:8] == np.frombuffer(b"406", dtype=np.uint8)).all(axis=1) & (block[:, width + 39] == ord("3"))
+            for row in block[hit]:
+                entry(row[:width].tobytes(), row[width:].tobytes())
+            for _level, first, count in wanted:
+                f.seek((start + glob + directory + first - 1) * width)
+                for n, line in enumerate(f.read(count * width).splitlines()):
+                    params[first + n] = line
+        else:  # lines of any length: read through, the directory comes before the parameters
+            f.seek(0)
+            held = None
+            need: set[int] = set()
+            for raw in f:
+                line = raw.rstrip(b"\r\n")
+                kind = line[72:73]
+                if kind == b"D":
+                    if held is None:
+                        held = line
+                    else:
+                        entry(held, line)
+                        held = None
+                elif kind == b"P":
+                    if not need:
+                        need = {first + n for _level, first, count in wanted for n in range(count)}
+                        if not need:
+                            break
+                    try:
+                        number = int(line[73:80])
+                    except ValueError:
+                        continue
+                    if number in need:
+                        params[number] = line
+    names: dict[int, str] = {}
+    for level, first, count in wanted:
+        data = b"".join(params.get(first + n, b"")[:64] for n in range(count))
+        m = re.match(rb"\s*406\s*,[^,]*,[^,]*,\s*(\d+)H", data)
+        if m:
+            name = _clean(_iges_text(data[m.end():m.end() + int(m.group(1))]))
+            if name:
+                names.setdefault(level, name)
+    return names
+
+
 def _free_memory() -> int | None:
     """Bytes of memory that can still be used without swapping; None where it cannot be asked."""
     try:
@@ -436,13 +552,14 @@ class _Shape:
     how: str  # solid · shell · sewn · face · linked · level · colour · rest
     key: object = None  # its TShape: two instances of one form have the same
     diag: float = 0.0
-    faces: int = 0
+    faces: int = 0  # as the file has them (before small holes are left out)
     count: int = 0  # triangles at the level that is meshed now
     tris: object = None  # (n, 3, 3) array in its own frame
     cull: bool = False
-    extent: tuple = (0.0, 0.0, 0.0)
+    box: tuple | None = None  # its true corners (lo, hi) in its own frame
+    extent: tuple = (0.0, 0.0, 0.0)  # its true size, the longest side first
     uses: int = 0
-    no: int = 0  # 'ชิ้นที่ N' when it has no name
+    no: int = 0  # 'ชิ้นที่ N' when it has no name and no group to be called after
 
 
 @dataclass
@@ -458,27 +575,34 @@ class _Body:
     color: str = ""
     layer: str = ""
     boxed: bool = False
+    labels: int = -1  # sewn from loose faces: how many different labels they had (-1: no faces, a solid or shell)
 
 
 @dataclass
 class _Pool:
     """Faces of one leaf that are in no shell: sewn together once, placed for every instance of the leaf."""
 
-    faces: list = field(default_factory=list)  # (face, name, colour, layer)
+    faces: list = field(default_factory=list)  # (face, its label, colour, layer, name of the top shape it is in)
     uses: list = field(default_factory=list)  # (place, leaf id, leaf name, parent, colour, layer)
 
 
 class _Import:
-    def __init__(self, path: str | Path, max_faces: int, progress):
+    def __init__(self, path: str | Path, max_faces: int, progress, up: str | None = None):
         self.path = Path(path)
         self.max_faces = max(int(max_faces), BOX_FACES)
         self.progress = progress
+        self.up = (up or "").strip().lower() or None  # 'y' · 'z' · None = guessed
+        if self.up not in (None, "y", "z"):
+            raise CadImportError(f"แกนตั้ง (up) ต้องเป็น y หรือ z – ได้รับ “{up}”")
+        self.level_names: dict[int, str] = {}  # IGES: level → its name in the file
+        self.model_diag = 0.0
         self.o = _occ()
-        self.report = CadReport(str(self.path))
+        self.report = CadReport(str(self.path), budget=self.max_faces)
         self.bodies: list[_Body] = []
         self.forms: dict[object, _Shape] = {}
         self.pools: dict[str, _Pool] = {}
         self.notes: list[str] = []
+        self.simplified: list[str] = []  # what was done to keep within the budget, for the note
         self.stage = ""
         self._leaf_cache: dict[str, list] = {}
         self._raw_names: dict[object, str] = {}
@@ -544,6 +668,11 @@ class _Import:
             self._reader = reader
             if kind == "IGES":
                 self.report.unit = self._iges_unit(reader)
+                try:
+                    self.level_names = _iges_level_names(self.path)
+                except (OSError, ValueError):  # the names are a help, not a need
+                    self.level_names = {}
+                self.report.levels = dict(self.level_names)
             self.say("แปลงรูปทรง", 0.3)
             doc = None
             try:
@@ -777,7 +906,7 @@ class _Import:
             pool = self.pools.setdefault(pool_key, _Pool())
             for face in loose:
                 name, colour, layer = subs.get(face.TShape(), ("", "", ""))
-                pool.faces.append((face, name or own[0], colour or own[1], layer or own[2]))
+                pool.faces.append((face, name, colour or own[1], layer or own[2], own[0]))
             found = True
         if not items and not found:
             self.skipped += 1
@@ -792,35 +921,45 @@ class _Import:
         self.say("เย็บผิว", 0.66)
         counts = Counter()
         done = 0
+        levels: set[str] = set()
         for key, pool in self.pools.items():
-            groups = self._sew_faces(pool.faces, counts)
+            # level by level: two parts that touch are two parts when the designer drew them on two levels
+            by_level: dict[str, list[int]] = {}
+            for i, face in enumerate(pool.faces):
+                by_level.setdefault(face[3], []).append(i)
+            levels.update(k for k in by_level if k)
+            groups = []
+            for level in sorted(by_level, key=lambda k: (len(k), k)):  # '2' before '10'
+                groups += self._sew_faces(pool.faces, by_level[level], counts)
+                done += len(by_level[level])
+                self.say("เย็บผิว", 0.66 + 0.1 * done / total)
             for place, leaf, leaf_name, parent, colour, layer in pool.uses:
-                for form, name, own_colour, own_layer in groups:
-                    self.bodies.append(_Body(form, place, leaf, leaf_name, name, parent, own_colour or colour,
-                                             own_layer or layer))
-            done += len(pool.faces)
-            self.say("เย็บผิว", 0.66 + 0.1 * done / total)
+                for form, label, own_colour, own_layer, top, labels in groups:
+                    self.bodies.append(_Body(form, place, leaf, leaf_name or top, label, parent, own_colour or colour,
+                                             own_layer or layer, labels=labels))
             pool.faces = []
         self.pools = {}
         gc.collect()
         said = [f"เย็บผิวอิสระ {total:,} ผิว (ค่าเผื่อ {SEW_TOL:g} มม.) ได้ {counts['sewn']:,} เปลือก"]
+        if len(levels) > 1:
+            said[0] = said[0].replace("เย็บผิวอิสระ", f"เย็บผิวอิสระแยกตาม level ของ IGES {len(levels):,} level รวม")
         if counts["retry"]:
             said.append(f"เย็บซ้ำแบบหลวม ({SEW_RETRY_TOL:g} มม.) ได้อีก {counts['retry']:,} เปลือก")
-        for how, text in (("linked", "รวมผิวที่ขอบต่อกัน"), ("level", "รวมผิวตาม level ของ IGES"), ("colour", "รวมผิวตามสี"),
-                          ("rest", "รวมผิวเดี่ยวที่เหลือเป็นชิ้นเดียว")):
+        for how, text in (("linked", "รวมผิวที่ขอบต่อกัน"), ("colour", "รวมผิวตามสี"), ("rest", "รวมผิวเดี่ยวที่เหลือเป็นชิ้นเดียว")):
             if counts[how]:
                 said.append(f"{text} {counts[how + '_faces']:,} ผิว เป็น {counts[how]:,} ชิ้น")
         if counts["face"]:
             said.append(f"ผิวเดี่ยว {counts['face']:,} ผิว เป็นชิ้นละผิว")
         self.report.methods.append(" → ".join(said))
 
-    def _attrs(self, faces: list, picked: list[int]) -> tuple[str, str, str]:
-        """Name, colour and level of a group of faces: what most of them say."""
+    def _attrs(self, faces: list, picked: list[int]) -> tuple[str, str, str, str, int]:
+        """Label, colour, level and top shape of a group of faces: what most of them say; and how many
+        different labels they had."""
         out = []
-        for col in (1, 2, 3):
+        for col in (1, 2, 3, 4):
             seen = Counter(faces[i][col] for i in picked if faces[i][col])
             out.append(seen.most_common(1)[0][0] if seen else "")
-        return tuple(out)
+        return (*out, len({faces[i][1] for i in picked}))
 
     def _sewing(self, faces: list, picked: list[int], tol: float) -> tuple[list[tuple[object, list[int]]], list[int]]:
         """Sews the picked faces: the shells that come out (each with the faces it was made of) and the faces
@@ -848,10 +987,10 @@ class _Import:
             used.update(members)
         return shells, [i for i in picked if i not in used]
 
-    def _sew_faces(self, faces: list, counts: Counter) -> list[tuple[_Shape, str, str, str]]:
-        """The loose faces of one pool → forms with their name, colour and level."""
+    def _sew_faces(self, faces: list, picked: list[int], counts: Counter) -> list[tuple]:
+        """Loose faces of one pool (those of one level) → (form, label, colour, level, top shape, number of labels)."""
         out = []
-        alone = list(range(len(faces)))
+        alone = list(picked)
         for tol, how in ((SEW_TOL, "sewn"), (SEW_RETRY_TOL, "retry")):
             if len(alone) < 2 or (how == "retry" and len(alone) <= LOOSE_MAX):
                 break
@@ -863,11 +1002,9 @@ class _Import:
             groups = self._linked(faces, alone)
             how = "linked"
             if len(groups) > LOOSE_MAX:
-                for col, by in ((3, "level"), (2, "colour")):
-                    keys = {faces[i][col] for i in alone}
-                    if len(keys) > 1:
-                        groups, how = [[i for i in alone if faces[i][col] == k] for k in sorted(keys)], by
-                        break
+                keys = {faces[i][2] for i in alone}
+                if len(keys) > 1:
+                    groups, how = [[i for i in alone if faces[i][2] == k] for k in sorted(keys)], "colour"
                 else:  # nothing tells them apart: the groups that hold together stay, the single faces are one part
                     single = [g[0] for g in groups if len(g) == 1]
                     groups = [g for g in groups if len(g) > 1]
@@ -882,18 +1019,12 @@ class _Import:
             counts[how + "_faces"] += sum(len(g) for g in groups)
         else:
             for i in alone:
-                out.append((self._form(faces[i][0], "face"), *faces[i][1:]))
+                out.append((self._form(faces[i][0], "face"), *faces[i][1:], 1))  # (its four columns are in that order)
             counts["face"] += len(alone)
         return out
 
     def _compound(self, shapes: list, how: str) -> _Shape:
-        o = self.o
-        compound = o.TopoDS_Compound()
-        builder = o.BRep_Builder()
-        builder.MakeCompound(compound)
-        for s in shapes:
-            builder.Add(compound, s)
-        return self._form(compound, how)
+        return self._form(_compound_of(self.o, shapes), how)
 
     def _linked(self, faces: list, picked: list[int]) -> list[list[int]]:
         """Faces that share an edge - the same two ends and the same middle, to `LINK_GRID` - are one group.
@@ -930,22 +1061,41 @@ class _Import:
 
     # ---- 4. mesh within the budget
     def measure(self) -> None:
+        """The true size of every form and of the whole model. From the geometry, exactly: the quick box of a
+        trimmed surface is that of the whole surface under it (metres, for a bracket), and a size read off a
+        coarse mesh makes a 50 mm tube 43 mm wide."""
+        import numpy as np
+
         o = self.o
+        self.say("วัดขนาด", 0.765)
         for body in self.bodies:
             body.form.uses += 1
         number = 0
-        for form in self.forms.values():
-            if not form.uses:
-                continue
+        used = [f for f in self.forms.values() if f.uses]
+        for n, form in enumerate(used):
             box = o.Bnd_Box()
-            o.BRepBndLib.Add_s(form.shape, box, False)
+            try:
+                o.BRepBndLib.AddOptimal_s(form.shape, box, False, False)
+            except Exception:  # noqa: BLE001 - a surface it cannot work out: the quick box, too big rather than none
+                box = o.Bnd_Box()
+                o.BRepBndLib.Add_s(form.shape, box, False)
             if not box.IsVoid():
                 lo, hi = box.CornerMin(), box.CornerMax()
-                form.diag = math.dist((lo.X(), lo.Y(), lo.Z()), (hi.X(), hi.Y(), hi.Z()))
+                form.box = ((lo.X(), lo.Y(), lo.Z()), (hi.X(), hi.Y(), hi.Z()))
+                form.diag = math.dist(*form.box)
+                form.extent = tuple(sorted((b - a for a, b in zip(*form.box)), reverse=True))
             form.faces = len(_explore(o, form.shape, o.TopAbs_FACE))
             number += 1
             form.no = number
-        self.report.faces_in_file = sum(f.faces for f in self.forms.values() if f.uses)
+            if n % 50 == 49:
+                self.say("วัดขนาด", 0.765 + 0.015 * n / len(used))
+        self.report.faces_in_file = sum(f.faces for f in used)
+        lo, hi = np.full(3, np.inf), np.full(3, -np.inf)
+        for body in self.bodies:
+            corners = self._box_corners(body.form, _matrix(body.place))
+            if corners is not None:
+                lo, hi = np.minimum(lo, corners.min(axis=0)), np.maximum(hi, corners.max(axis=0))
+        self.model_diag = float(np.linalg.norm(hi - lo)) if np.isfinite(lo).all() else 0.0
 
     def _mesh(self, level: int, clean: bool, only: list | None = None) -> int:
         """Meshes every form (or `only` some) at a level; forms of about one size go in together, so that the
@@ -961,16 +1111,12 @@ class _Import:
             batches.setdefault(deflection, []).append(form)
         done, count = 0, sum(len(b) for b in batches.values())
         for deflection, forms in sorted(batches.items()):
-            compound = o.TopoDS_Compound()
-            builder = o.BRep_Builder()
-            builder.MakeCompound(compound)
-            for form in forms:
-                builder.Add(compound, form.shape)
+            compound = _compound_of(o, [form.shape for form in forms])
             if clean:
                 o.BRepTools.Clean_s(compound)  # or the finer mesh, good enough for the coarser one, would be kept
             o.BRepMesh_IncrementalMesh(compound, deflection, False, angle, True)
             done += len(forms)
-            self.say(f"สร้างตาข่าย (ระดับ {level + 1}/{len(LEVELS)})", 0.78 + 0.04 * level + 0.04 * done / count)
+            self.say(f"สร้างตาข่าย (ระดับ {level + 1}/{len(LEVELS)})", 0.78 + 0.04 * level + 0.04 * done / max(count, 1))
         still = o.TopLoc_Location()
         for form in chosen:
             form.count = 0
@@ -982,56 +1128,106 @@ class _Import:
     def mesh(self) -> None:
         self.say(f"สร้างตาข่าย (ระดับ 1/{len(LEVELS)})", 0.78)
         last = len(LEVELS) - 1
-        instances = sum(f.faces * f.uses for f in self.forms.values())
-        # two triangles a face is the least there can be: when even that is over the budget, only the floor is tried
-        level = last if 2 * instances > self.max_faces else 0
-        clean, finer = False, None
+        used = [f for f in self.forms.values() if f.uses]
+        instances = sum(f.faces * f.uses for f in used)
+        level, clean, finer, total = 0, False, None, None
+        if 2 * instances > self.max_faces:  # two triangles a face is the least there can be: only the floor is tried
+            level = last
+        elif 8 * instances > self.max_faces:  # most likely too much: the coarsest mesh is quick, and tells
+            total, clean = self._mesh(last, False), True
+            if total > self.max_faces:
+                level = last
+            else:
+                total = None
         while True:
-            total = self._mesh(level, clean)
+            if total is None:
+                total = self._mesh(level, clean)
             if total <= self.max_faces or level == last:
                 break
             finer = {key: form.count for key, form in self.forms.items()}  # what the level that was too much cost
-            level, clean = level + 1, True
+            level, clean, total = level + 1, True, None
         self.report.level = level
-        better = []
+        text = f"ตาข่ายระดับ {level + 1}/{len(LEVELS)}" + (" (หยาบสุด)" if level == last else "")
+        if total > self.max_faces:
+            total, changed = self._drop_holes(total)
+            if finer and changed and total <= self.max_faces:  # what a finer mesh of them would cost now: a guess
+                same = [f for f in used if f.key not in changed]
+                ratio = max(sum(finer[f.key] for f in same) / max(sum(f.count for f in same), 1), 1.0)
+                for key in changed:
+                    finer[key] = int(self.forms[key].count * ratio)
         if total > self.max_faces:
             total = self._box_small(total)
         elif finer:  # room is left: the biggest parts, which fill the picture, get the finer mesh back
-            spare = self.max_faces - total
-            for form in sorted((f for f in self.forms.values() if f.uses), key=lambda f: -f.diag):
+            better, spare = [], self.max_faces - total
+            for form in sorted(used, key=lambda f: -f.diag):
                 extra = (finer[form.key] - form.count) * form.uses
                 if 0 < extra <= spare:
                     better.append(form)
                     spare -= extra
+            if better and self._mesh(level - 1, True, better) > self.max_faces:  # the guess was too low: back
+                self._mesh(level, True, better)
+                better = []
             if better:
-                self._mesh(level - 1, True, better)
+                text += f" ชิ้นใหญ่ {len(better):,} แบบละเอียดขึ้นหนึ่งระดับ"
+        self.simplified.insert(0, text)
         self.say("เก็บตาข่าย", 0.94)
+        for form in used:
+            self._triangles(form)
+
+    def _drop_holes(self, total: int) -> tuple[int, set]:
+        """Over the budget at the coarsest mesh: the small holes, cut-outs and embossed patterns are left out
+        (see `_drop_small_loops`) and the forms that had them are meshed again."""
+        o = self.o
+        last = len(LEVELS) - 1
+        self.say("ลดรายละเอียด (รู ลายนูน)", 0.9)
+        hole_max = min(HOLE_SHARE * self.model_diag, HOLE_MAX)
+        changed = []
         for form in self.forms.values():
-            if form.uses:
-                self._triangles(form)
-        text = f"ตาข่ายระดับ {level + 1}/{len(LEVELS)}" + (" (หยาบสุด)" if level == last else "")
-        self.notes.append(text + (f" ชิ้นใหญ่ {len(better):,} แบบละเอียดขึ้นหนึ่งระดับ" if better else ""))
+            if not form.uses or form.faces < 2:
+                continue
+            try:
+                shape, loops, faces = _drop_small_loops(o, form.shape, hole_max)
+            except Exception:  # noqa: BLE001 - a broken face: the form stays as it is
+                continue
+            if loops:
+                o.BRepTools.Clean_s(form.shape)
+                form.shape = shape
+                changed.append(form)
+                self.report.holes += loops * form.uses
+                self.report.hole_faces += faces * form.uses
+        if not changed:
+            return total, set()
+        before, total = total, self._mesh(last, True, changed)
+        self.report.hole_max = round(hole_max, 1)
+        self.simplified.append(
+            f"ตัดรู ช่องเจาะ และลายนูนที่เล็กกว่า {hole_max:,.0f} มม. ออกจากตาข่าย {self.report.holes:,} จุด "
+            f"(ผิวข้างใน {self.report.hole_faces:,} ผิว) ใน {len(changed):,} ชิ้น ลดจาก {before:,} เหลือ {total:,} หน้า")
+        return total, {form.key for form in changed}
 
     def _box_small(self, total: int) -> int:
-        """Still over the budget at the coarsest mesh: the smallest parts become their bounding boxes."""
-        least = len(self.bodies) * BOX_FACES
-        if least > self.max_faces:
-            raise CadImportError(
-                f"โมเดลมี {len(self.bodies):,} ชิ้น – แม้แสดงทุกชิ้นเป็นกล่องก็ต้องใช้ {least:,} หน้า เกินงบ {self.max_faces:,} หน้า · "
-                f"เพิ่มงบ (tools/cad_to_rrsasm.py --max-faces {least * 2:,}) หรือส่งออกจาก CAD ทีละชุดประกอบย่อย")
+        """Still over the budget: small parts (no longer than `BOX_MAX`) become their bounding boxes, those
+        with the most triangles first - a lock of 1,400 faces before a plain washer - so that few do. A part
+        that is bigger is never a box: when that is not enough the model stays over its budget, and says so."""
+        small = [b for b in self.bodies if b.form.count > BOX_FACES and 0 < b.form.extent[0] <= BOX_MAX]
         biggest = 0.0
-        for body in sorted(self.bodies, key=lambda b: b.form.diag):
+        for body in sorted(small, key=lambda b: (-b.form.count, b.form.diag)):
             if total <= self.max_faces:
                 break
-            if body.form.count > BOX_FACES:
-                body.boxed = True
-                total -= body.form.count - BOX_FACES
-                biggest = max(biggest, body.form.diag)
-                self.report.boxed += 1
-        if total > self.max_faces:  # the parts that were left are those a box does not make cheaper
-            raise CadImportError(f"ลดจำนวนหน้าให้อยู่ในงบ {self.max_faces:,} หน้าไม่ได้ – เพิ่มงบ --max-faces")
-        self.notes.append(f"เกินงบ {self.max_faces:,} หน้าแม้ตาข่ายหยาบสุด: แสดงชิ้นเล็ก {self.report.boxed:,} ชิ้น "
-                          f"(ไม่เกิน {biggest:,.0f} มม.) เป็นกล่อง")
+            body.boxed = True
+            total -= body.form.count - BOX_FACES
+            biggest = max(biggest, body.form.extent[0])
+            self.report.boxed += 1
+        if self.report.boxed:
+            self.simplified.append(f"แสดงชิ้นเล็ก {self.report.boxed:,} ชิ้น (ยาวไม่เกิน {biggest:,.0f} มม. ที่มีหน้ามากที่สุด) เป็นกล่อง")
+        if total > self.max_faces * OVER_BUDGET:
+            raise CadImportError(
+                f"โมเดลมี {len(self.bodies):,} ชิ้น ต้องใช้อย่างน้อย {total:,} หน้าแม้ตาข่ายหยาบสุด – เกินงบ {self.max_faces:,} หน้า"
+                f"ไปกว่า {OVER_BUDGET} เท่า · เพิ่มงบ (tools/cad_to_rrsasm.py --max-faces {-(-total // 10000) * 10000:,}) "
+                "หรือส่งออกจาก CAD ทีละชุดประกอบย่อย")
+        if total > self.max_faces:
+            self.report.over_budget = True
+            self.simplified.append(f"ยังเกินงบ {self.max_faces:,} หน้า (ใช้ {total:,}) – ไม่ลดต่อ เพราะจะต้องทิ้งรูปทรงจริงของชิ้นใหญ่ "
+                                   "ภาพ 3 มิติจะหมุนช้าลง")
         return total
 
     def _triangles(self, form: _Shape) -> None:
@@ -1059,8 +1255,9 @@ class _Import:
             parts.append(pts[idx[:, ::-1] if flip else idx])
         tris = np.concatenate(parts) if parts else np.zeros((0, 3, 3))
         if len(tris):
-            lo, hi = tris.reshape(-1, 3).min(axis=0), tris.reshape(-1, 3).max(axis=0)
-            form.extent = tuple(sorted((float(v) for v in hi - lo), reverse=True))
+            if not any(form.extent):  # no box from the geometry: that of the mesh
+                lo, hi = tris.reshape(-1, 3).min(axis=0), tris.reshape(-1, 3).max(axis=0)
+                form.extent = tuple(sorted((float(v) for v in hi - lo), reverse=True))
             closed, volume = _closed(tris)
             if closed and volume < 0:  # a solid written inside out (IGES does that): turned
                 tris = tris[:, ::-1]
@@ -1069,16 +1266,38 @@ class _Import:
         o.BRepTools.Clean_s(form.shape)
 
     # ---- 5. the model
+    def _level_group(self, layer: str) -> str:
+        """The group of an IGES level: its name in the file, 'Layer N' when it has none."""
+        if layer.isdigit():
+            return self.level_names.get(int(layer)) or f"Layer {int(layer)}"
+        return layer
+
+    def _labels_are_names(self) -> bool:
+        """Do the labels on the loose faces name the parts? They do when every part sewn of them has one label
+        and the parts under one label are one item (the same part drawn several times). ZW3D writes the label of
+        a 'shape' on every surface of it - 'S1' on ten thousand faces of a hundred parts: those are no names."""
+        seen: dict[str, _Shape] = {}
+        for body in self.bodies:
+            if body.labels < 0 or not body.name:
+                continue
+            first = seen.setdefault(body.name, body.form)
+            if body.labels != 1 or not _same_item(first, body.form):
+                return False
+        return True
+
     def build(self) -> a3.AssemblyModel:
         import numpy as np
 
         self.say("จัดกลุ่มชิ้นส่วน", 0.96)
-        names = self._names()
+        if not self._labels_are_names():
+            self.notes.append("ป้ายบนผิว (เช่น S1 ของ ZW3D) ใช้ร่วมกันหลายชิ้น จึงไม่ใช้เป็นชื่อชิ้นส่วน")
+            for body in self.bodies:
+                if body.labels >= 0:
+                    body.name = ""
         layers = {b.layer for b in self.bodies if b.layer}
-        parts: list[a3.Part3D] = []
-        by_size = False
-        empty = 0
-        for body, name in zip(self.bodies, names):
+        # 1. where every part is, and which way is up
+        placed, boxes = [], []
+        for body in self.bodies:
             form = body.form
             m = _matrix(body.place)
             tris = form.tris
@@ -1086,23 +1305,41 @@ class _Import:
                 tris = tris @ m[0].T + m[1]
                 if np.linalg.det(m[0]) < 0:  # a mirrored instance: the same faces seen from the other side
                     tris = tris[:, ::-1]
-            if name:
+            failed = not len(tris)
+            if failed:  # OpenCascade made no triangle of it: its bounding box, so that it is not lost
+                corners = self._box_corners(form, m)
+                tris = corners if corners is not None else tris
+            placed.append((tris, failed))
+            if len(tris):
+                pts = tris.reshape(-1, 3)
+                boxes.append((pts.min(axis=0), pts.max(axis=0)))
+        up, why = (self.up, "กำหนดเอง") if self.up else _guess_up(boxes)
+        self.report.up, self.report.up_guessed = up, not self.up
+        # 2. the parts
+        parts: list[a3.Part3D] = []
+        kept: list[_Body] = []
+        by_size = False
+        empty = 0
+        for body, (tris, failed) in zip(self.bodies, placed):
+            form = body.form
+            if not len(tris):
+                empty += 1
+                continue
+            if up == "y":  # (x, y, z) → (x, -z, y): a turn, so the faces keep their front
+                tris = np.stack([tris[..., 0], -tris[..., 2], tris[..., 1]], axis=-1)
+            name = body.name or body.leaf_name
+            if body.layer and (self.level_names or (not name and len(layers) > 1)):
+                group = self._level_group(body.layer)  # the levels have names: the designer's own grouping
+            elif name:
                 group = body.parent or a3._group_of(name)
-            elif body.layer and len(layers) > 1:
-                group = f"เลเยอร์ {body.layer}"
             elif body.parent:
                 group = body.parent
             else:
                 group = SIZE_GROUPS[0 if form.diag >= BIG else 1 if form.diag >= SMALL else 2]
                 by_size = True
-            part = a3.Part3D(f"c{len(parts) + 1}", name or f"ชิ้นที่ {form.no}", group, "mesh", color=body.color or a3.STEEL,
-                             size="×".join(f"{v:.0f}" for v in form.extent) if any(form.extent) else "")
-            if not len(tris):  # OpenCascade made no triangle of it: its bounding box, so that it is not lost
-                corners = self._box_corners(form, m)
-                if corners is None:
-                    empty += 1
-                    continue
-                tris, body.boxed = corners, True
+            part = a3.Part3D("", "", group, "mesh", color=body.color or a3.STEEL)
+            if failed:
+                body.boxed = True
                 part.note = "สร้างตาข่ายไม่ได้ – แสดงเป็นกล่อง"
             if body.boxed:
                 pts = tris.reshape(-1, 3)
@@ -1120,16 +1357,66 @@ class _Import:
                     empty += 1
                     continue
             parts.append(part)
+            kept.append(body)
         if not parts:
             raise CadImportError(f"สร้างตาข่ายจากไฟล์ {self.path.name} ไม่ได้เลย – รูปทรงในไฟล์เสีย")
-        if by_size:  # big parts first: the frame is fitted before its bolts
-            parts.sort(key=lambda p: SIZE_GROUPS.index(p.group) if p.group in SIZE_GROUPS else -1)
-            for i, p in enumerate(parts, 1):
-                p.id = f"c{i}"
+        self._name_parts(parts, kept)
+        # 3. the order: a step per group, from the bottom up - a first draft of the assembly order
+        if by_size:  # no groups in the file: big parts first, the frame is fitted before its bolts
+            order = {g: (SIZE_GROUPS.index(g) if g in SIZE_GROUPS else -1) for g in {p.group for p in parts}}
+        else:
+            height: dict[str, list[float]] = {}
+            for p in parts:
+                lo, hi = p.bounds()
+                weight = math.dist(lo, hi) + 1.0  # a big part says more about where its group is than a bolt
+                h = height.setdefault(p.group, [0.0, 0.0])
+                h[0] += weight * (lo[2] + hi[2]) / 2
+                h[1] += weight
+            order = {g: round(h[0] / h[1]) for g, h in height.items()}
+        parts.sort(key=lambda p: order[p.group])  # stable: inside a group the order of the file
+        for i, p in enumerate(parts, 1):
+            p.id = f"c{i}"
         model = a3.AssemblyModel(self.path.stem, parts, source="file")
         a3.auto_steps(model)
         a3.auto_explode(model)
-        report = self.report
+        self._describe(model, by_size, empty, up, why)
+        return model
+
+    def _name_parts(self, parts: list, bodies: list) -> None:
+        """Name and size of every part: the name the file gives, else '<leaf or group> 01' … from the biggest,
+        one name for the parts that are one item (see `_same_item`) so that the parts table counts them."""
+        nameless: dict[str, list[int]] = {}
+        for i, (part, body) in enumerate(zip(parts, bodies)):
+            if body.name:
+                part.name, part.size = body.name, _size_text(body.form.extent)
+                continue
+            leveled = bool(body.layer) and part.group == self._level_group(body.layer)
+            base = (body.leaf_name if not leveled else "") or ("" if part.group in SIZE_GROUPS else part.group)
+            nameless.setdefault(base, []).append(i)
+        for base, members in nameless.items():
+            if not base:
+                for i in members:
+                    parts[i].name, parts[i].size = f"ชิ้นที่ {bodies[i].form.no}", _size_text(bodies[i].form.extent)
+                continue
+            items: list[list[int]] = []  # parts that are one item, the biggest item first
+            for i in sorted(members, key=lambda i: (bodies[i].form.extent, bodies[i].form.faces), reverse=True):
+                for item in items:
+                    if _same_item(bodies[item[0]].form, bodies[i].form):
+                        item.append(i)
+                        break
+                else:
+                    items.append([i])
+            # the name of a leaf with one form in it is the name of that form; a group is not the name of a part
+            bare = len(items) == 1 and all(bodies[i].leaf_name == base for i in members)
+            digits = max(2, len(str(len(items))))
+            for n, item in enumerate(items, 1):
+                for i in item:
+                    parts[i].name = base if bare else f"{base} {n:0{digits}d}"
+                    parts[i].size = _size_text(bodies[item[0]].form.extent)
+
+    def _describe(self, model: a3.AssemblyModel, by_size: bool, empty: int, up: str, why: str) -> None:
+        """The report and the note of the model: file, unit, how the parts were found, the groups, what was simplified."""
+        report, parts = self.report, model.parts
         report.parts, report.groups = len(parts), len(model.groups())
         report.triangles = a3.face_count(model)
         report.bounds = [[round(float(v), 2) for v in corner] for corner in model.bounds()]
@@ -1139,48 +1426,93 @@ class _Import:
         if self.tree:
             how.insert(0, "ตามโครงสร้างชุดประกอบในไฟล์")
         report.methods[:0] = how
-        if by_size:
-            self.notes.append("ชิ้นที่ไม่มีชื่อจัดกลุ่มตามขนาด")
+        counts: dict[str, list[int]] = {}
+        for p in parts:
+            c = counts.setdefault(p.group, [0, 0])
+            c[0] += 1
+            c[1] += len(p.mesh) if p.shape == "mesh" else BOX_FACES
+        report.group_counts = [[g, *c] for g, c in counts.items()]
+        shown = [f"{g} {n:,} ชิ้น {t:,} หน้า" for g, n, t in report.group_counts[:GROUPS_IN_NOTE]]
+        if len(counts) > GROUPS_IN_NOTE:
+            shown.append(f"… และอีก {len(counts) - GROUPS_IN_NOTE:,} กลุ่ม")
+        if self.level_names:
+            grouped = f"กลุ่ม = level ของ IGES ตามชื่อในไฟล์ ({len(self.level_names):,} level มีชื่อ)"
+        elif by_size:
+            grouped = "ชิ้นที่ไม่มีชื่อจัดกลุ่มตามขนาด"
+        else:
+            grouped = "กลุ่มตามชื่อ/ชุดประกอบย่อย/level ในไฟล์"
+        lo, hi = report.bounds
+        if up == "y":
+            axis = f"แกนตั้ง: หมุนโมเดลจาก Y ขึ้น เป็น Z ขึ้น ({why})"
+        else:
+            axis = f"แกนตั้ง: Z ขึ้นตามไฟล์ ({why})"
         if self.skipped:
             self.notes.append(f"ข้ามเส้น/จุดที่ไม่มีผิว {self.skipped:,} รายการ")
         if self.unmeshed:
             self.notes.append(f"ผิวที่สร้างตาข่ายไม่ได้ {self.unmeshed:,} ผิว")
         if empty:
             self.notes.append(f"ชิ้นที่ไม่มีรูปทรงให้แสดง {empty:,} ชิ้นถูกข้าม")
-        model.note = " · ".join([f"นำเข้าจาก {report.kind} ({report.reader}) หน่วยในไฟล์: {report.unit} → มม.",
-                                 f"แยกชิ้น: {report.method()}",
-                                 f"{report.parts:,} ชิ้น {report.triangles:,} หน้า", *self.notes])
-        return model
+        model.note = " · ".join([
+            f"นำเข้าจาก {report.kind} ({report.reader}) ไฟล์ {self.path.name} หน่วยในไฟล์: {report.unit} → มม.",
+            f"แยกชิ้น: {report.method()}",
+            f"{report.parts:,} ชิ้น {report.triangles:,} หน้า (งบ {self.max_faces:,}) ขนาดรวม "
+            + " × ".join(f"{b - a:,.0f}" for a, b in zip(lo, hi)) + " มม.",
+            f"{grouped}: " + ", ".join(shown),
+            "ขั้นประกอบ: กลุ่มละขั้น " + ("เรียงจากชิ้นใหญ่ไปเล็ก" if by_size else "เรียงจากกลุ่มที่อยู่ต่ำสุดขึ้นไป") + " (ร่างแรก แก้ลำดับได้)",
+            axis,
+            "การลดรายละเอียด: " + "; ".join(self.simplified),
+            *self.notes])
 
     def _box_corners(self, form: _Shape, m):
+        """The eight corners of the true box of a form, where a body with the placement `m` has it."""
         import numpy as np
 
-        box = self.o.Bnd_Box()
-        self.o.BRepBndLib.Add_s(form.shape, box, False)
-        if box.IsVoid():
+        if form.box is None:
             return None
-        lo, hi = box.CornerMin(), box.CornerMax()
-        pts = np.array([[x, y, z] for x in (lo.X(), hi.X()) for y in (lo.Y(), hi.Y()) for z in (lo.Z(), hi.Z())])
+        lo, hi = form.box
+        pts = np.array([[x, y, z] for x in (lo[0], hi[0]) for y in (lo[1], hi[1]) for z in (lo[2], hi[2])])
         return pts if m is None else pts @ m[0].T + m[1]
 
-    def _names(self) -> list[str]:
-        """The name of every body: its own, or that of its leaf - numbered when the leaf holds several different
-        forms ('FRAME.1', 'FRAME.2'), the same for the same form so that the parts table counts them."""
-        inside: dict[str, list] = {}
-        for body in self.bodies:
-            if not body.name:
-                forms = inside.setdefault(body.leaf, [])
-                if body.form.key not in forms:
-                    forms.append(body.form.key)
-        out = []
-        for body in self.bodies:
-            if body.name or not body.leaf_name:
-                out.append(body.name)
-            elif len(inside[body.leaf]) == 1:
-                out.append(body.leaf_name)
-            else:
-                out.append(f"{body.leaf_name}.{inside[body.leaf].index(body.form.key) + 1}")
-        return out
+
+def _same_item(a: _Shape, b: _Shape) -> bool:
+    """One item of the parts table: the same form, or as many faces and the same three sizes (to `SAME_SIZE`)."""
+    return a is b or (a.faces == b.faces and all(abs(x - y) <= SAME_SIZE for x, y in zip(a.extent, b.extent)))
+
+
+def _size_text(extent: tuple) -> str:
+    """'2600×100×50': length × width × height in mm, the longest first."""
+    return "×".join(f"{v:.0f}" for v in extent) if any(extent) else ""
+
+
+def _guess_up(boxes: list) -> tuple[str, str]:
+    """Which axis of the file points up, when nobody said: 'y' only when the file itself shows it - a big flat
+    plate (a floor: thin, most of the length and the width of the model, with the rest of the model above or
+    below it) lies across Y and none like it across Z. Else the file is taken as it is. Returns the axis and
+    the reason, for the note."""
+    import numpy as np
+
+    if not boxes:
+        return "z", "เดา: ไม่มีชิ้นส่วนให้ดู"
+    lo = np.min([b[0] for b in boxes], axis=0)
+    hi = np.max([b[1] for b in boxes], axis=0)
+    size = np.maximum(hi - lo, 1e-9)
+    area = {1: 0.0, 2: 0.0}
+    best = {1: None, 2: None}
+    for a, b in boxes:
+        d = b - a
+        for axis in (1, 2):
+            u, v = [i for i in range(3) if i != axis]
+            if (d[axis] <= 0.1 * min(d[u], d[v]) and d[axis] <= 0.05 * size[axis]
+                    and d[u] >= 0.4 * size[u] and d[v] >= 0.4 * size[v]):
+                area[axis] += d[u] * d[v]
+                if best[axis] is None or d[u] * d[v] > best[axis][0] * best[axis][1]:
+                    best[axis] = (d[u], d[v])
+    if area[1] > 0 and area[1] >= 3 * area[2]:
+        return "y", (f"เดาอัตโนมัติ: พบแผ่นพื้นใหญ่ {best[1][0]:,.0f} × {best[1][1]:,.0f} มม. วางขวางแกน Y ของไฟล์ "
+                     "และไม่มีแผ่นแบบเดียวกันขวางแกน Z – ถ้าไม่ถูกให้ระบุ up=z หรือกดสลับแกนตั้งในโปรแกรม")
+    if area[2] > 0:
+        return "z", "เดาอัตโนมัติ: แผ่นพื้นใหญ่วางขวางแกน Z อยู่แล้ว"
+    return "z", "เดาอัตโนมัติ: ไม่พบแผ่นพื้นใหญ่ที่บอกว่าเป็น Y ขึ้น – ถ้าโมเดลนอนตะแคงให้ระบุ up=y หรือกดสลับแกนตั้งในโปรแกรม"
 
 
 def _closed(tris) -> tuple[bool, float]:
@@ -1205,13 +1537,15 @@ def _closed(tris) -> tuple[bool, float]:
 
 
 # --------------------------------------------------------------------------- the calls
-def read_cad_report(path: str | Path, max_faces: int = 60000, progress=None) -> tuple[a3.AssemblyModel, CadReport]:
+def read_cad_report(path: str | Path, max_faces: int = MAX_FACES, progress=None,
+                    up: str | None = None) -> tuple[a3.AssemblyModel, CadReport]:
     """An IGES or STEP file → the model (mm) and the report of what was done. `progress(stage, fraction)` is
-    called with a Thai stage text and 0 … 1. Raises `CadImportError` with a message for the user."""
+    called with a Thai stage text and 0 … 1. `up`: the axis of the file that points up, 'y' or 'z' (None: guessed,
+    see `_guess_up`). Raises `CadImportError` with a message for the user."""
     start = time.perf_counter()
     run = None
     try:
-        run = _Import(path, max_faces, progress)
+        run = _Import(path, max_faces, progress, up)
         run.check_file()
         run.read()
         run.sew()
@@ -1234,10 +1568,11 @@ def read_cad_report(path: str | Path, max_faces: int = 60000, progress=None) -> 
     return model, run.report
 
 
-def read_cad(path: str | Path, max_faces: int = 60000, progress=None) -> a3.AssemblyModel:
-    """An IGES or STEP file exported from CAD → `AssemblyModel` in mm, at most `max_faces` triangles, with a step
-    per group and an exploded position per part (see the top of this module for what a part is)."""
-    return read_cad_report(path, max_faces, progress)[0]
+def read_cad(path: str | Path, max_faces: int = MAX_FACES, progress=None, up: str | None = None) -> a3.AssemblyModel:
+    """An IGES or STEP file exported from CAD → `AssemblyModel` in mm, Z up, within `max_faces` triangles where
+    that can honestly be done, with a step per group from the bottom up and an exploded position per part
+    (see the top of this module for what a part and a group are)."""
+    return read_cad_report(path, max_faces, progress, up)[0]
 
 
 _MARK = "@@rrs-cad "
@@ -1248,13 +1583,14 @@ _CHILD = ("import sys; sys.path[0] = sys.argv.pop(1); from partlist_studio.core.
 def _child(argv: list[str]) -> int:
     """The other end of `read_cad_isolated`: progress and the outcome as marked lines of JSON on standard output."""
     source, target, max_faces = argv[0], argv[1], int(argv[2])
+    up = argv[3] if len(argv) > 3 and argv[3] else None
 
     def tell(kind: str, **data) -> None:
         sys.stdout.write(_MARK + json.dumps({"kind": kind, **data}) + "\n")  # ASCII: no code page in the way
         sys.stdout.flush()
 
     try:
-        model, report = read_cad_report(source, max_faces, lambda stage, fraction: tell("progress", stage=stage, fraction=fraction))
+        model, report = read_cad_report(source, max_faces, lambda stage, fraction: tell("progress", stage=stage, fraction=fraction), up)
         model.save(target)
         tell("done", report=asdict(report))
         return 0
@@ -1263,18 +1599,18 @@ def _child(argv: list[str]) -> int:
         return 2
 
 
-def read_cad_isolated(path: str | Path, max_faces: int = 60000, progress=None) -> a3.AssemblyModel:
+def read_cad_isolated(path: str | Path, max_faces: int = MAX_FACES, progress=None, up: str | None = None) -> a3.AssemblyModel:
     """`read_cad` in a child process (for a worker thread of the window): the thread only waits, so the window
     stays alive, and a file that crashes OpenCascade or eats all memory ends the child, not the program.
     In a frozen build there is no interpreter to start: the file is read here."""
     if getattr(sys, "frozen", False):
-        return read_cad(path, max_faces, progress)
+        return read_cad(path, max_faces, progress, up)
     if not have_ocp():
         raise CadImportError(INSTALL_HINT)
     handle, target = tempfile.mkstemp(prefix="rrs_cad_", suffix=".rrsasm")
     os.close(handle)
     root = str(Path(__file__).resolve().parents[2])
-    command = [sys.executable, "-c", _CHILD, root, str(Path(path).resolve()), target, str(int(max_faces))]
+    command = [sys.executable, "-c", _CHILD, root, str(Path(path).resolve()), target, str(int(max_faces)), up or ""]
     flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     outcome, tail = None, []
     try:

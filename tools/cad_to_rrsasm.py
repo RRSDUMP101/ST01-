@@ -1,11 +1,14 @@
 """IGES / STEP จาก CAD → ไฟล์คู่มือประกอบ 3 มิติ (.rrsasm) โดยไม่ต้องเปิดโปรแกรม – สำหรับไฟล์ใหญ่ที่ใช้เวลาอ่านนาน.
 
-    python tools/cad_to_rrsasm.py <in.igs|in.step> <out.rrsasm> [--max-faces 60000]
+    python tools/cad_to_rrsasm.py <in.igs|in.step> <out.rrsasm> [--max-faces 120000] [--up y|z]
+
+--up y  โมเดลที่วาดให้แกน Y ชี้ขึ้น (เช่น ZW3D) จะถูกหมุนเป็น Z ขึ้นแบบของโปรแกรม · ไม่ระบุ = ให้โปรแกรมเดาเอง (ดูหมายเหตุ)
 
 แล้วเปิดไฟล์ .rrsasm ในแท็บ ประกอบ 3D → เปิด… · ต้องติดตั้ง OpenCascade ก่อน: pip install -r requirements-cad.txt
 
-Progress goes to standard error, the summary (parts, groups, triangles, bounding box, unit, how the parts were
-found, time, peak memory) to standard output. Exit code 0 = written, 1 = the file could not be imported.
+Progress goes to standard error, the summary (parts, groups with their parts and triangles, bounding box, unit,
+how the parts were found, what was simplified, time, peak memory) to standard output.
+Exit code 0 = written, 1 = the file could not be imported.
 """
 
 from __future__ import annotations
@@ -25,8 +28,11 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="IGES / STEP → .rrsasm (คู่มือประกอบ 3 มิติ ของ RRS Part List Studio)")
     parser.add_argument("source", help="ไฟล์ CAD: .igs .iges .step .stp")
     parser.add_argument("target", help="ไฟล์ผลลัพธ์ .rrsasm")
-    parser.add_argument("--max-faces", type=int, default=60000,
-                        help="จำนวนสามเหลี่ยมมากสุดของทั้งโมเดล (ค่าเริ่มต้น 60000 – ภาพ 3 มิติของโปรแกรมวาดด้วยซอฟต์แวร์)")
+    parser.add_argument("--max-faces", type=int, default=cad_import.MAX_FACES,
+                        help=f"งบจำนวนสามเหลี่ยมของทั้งโมเดล (ค่าเริ่มต้น {cad_import.MAX_FACES} – ภาพ 3 มิติของโปรแกรมวาดด้วย"
+                             "ซอฟต์แวร์ ราว 100,000 หน้าต่อวินาที)")
+    parser.add_argument("--up", choices=("y", "z"), default=None,
+                        help="แกนของไฟล์ที่ชี้ขึ้น: y = หมุนโมเดลเป็น Z ขึ้น · z = คงตามไฟล์ · ไม่ระบุ = เดาอัตโนมัติ")
     args = parser.parse_args(argv)
     for stream in (sys.stdout, sys.stderr):  # Thai on a Windows console of another code page
         if hasattr(stream, "reconfigure"):
@@ -41,7 +47,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"[{time.perf_counter() - start:7.1f} s] {now[1]:3d}%  {stage}", file=sys.stderr, flush=True)
 
     try:
-        model, report = cad_import.read_cad_report(args.source, args.max_faces, progress)
+        model, report = cad_import.read_cad_report(args.source, args.max_faces, progress, args.up)
     except cad_import.CadImportError as e:
         print(f"นำเข้าไม่ได้: {e}", file=sys.stderr)
         return 1
@@ -55,8 +61,12 @@ def main(argv: list[str] | None = None) -> int:
         ("หน่วยในไฟล์", f"{report.unit} → โมเดลเป็น มม."),
         ("ชิ้นส่วน", f"{report.parts:,} ชิ้น ใน {report.groups:,} กลุ่ม (= {len(model.steps):,} ขั้นประกอบ) · "
                      f"รายการไม่ซ้ำ {len(model.bom()):,} รายการ"),
-        ("สามเหลี่ยม", f"{report.triangles:,} (งบ {args.max_faces:,}) · ตาข่ายระดับ {report.level + 1}/{len(cad_import.LEVELS)}"
+        ("สามเหลี่ยม", f"{report.triangles:,} (งบ {args.max_faces:,}{' – เกินงบ' if report.over_budget else ''}) · "
+                       f"ตาข่ายระดับ {report.level + 1}/{len(cad_import.LEVELS)}"
+                       + (f" · ตัดรู/ลายนูนเล็กกว่า {report.hole_max:g} มม. {report.holes:,} จุด" if report.holes else "")
                        + (f" · แสดงเป็นกล่อง {report.boxed:,} ชิ้น" if report.boxed else "")),
+        ("แกนตั้ง", ("Y ของไฟล์ → หมุนเป็น Z ขึ้น" if report.up == "y" else "Z ขึ้นตามไฟล์")
+                    + (" (เดาอัตโนมัติ)" if report.up_guessed else " (กำหนดเอง)")),
         ("ผิวในไฟล์", f"{report.faces_in_file:,} ผิว (ผิวอิสระที่ต้องเย็บ {report.loose_faces:,})"),
         ("ขอบเขต (มม.)", f"X {lo[0]:,.1f} … {hi[0]:,.1f} · Y {lo[1]:,.1f} … {hi[1]:,.1f} · Z {lo[2]:,.1f} … {hi[2]:,.1f}  "
                          f"= {hi[0] - lo[0]:,.0f} × {hi[1] - lo[1]:,.0f} × {hi[2] - lo[2]:,.0f}"),
@@ -67,6 +77,9 @@ def main(argv: list[str] | None = None) -> int:
     ]
     for key, value in lines:
         print(f"{key:<18} {value}")
+    print("กลุ่ม (เรียงตามขั้นประกอบ จากล่างขึ้นบน)")
+    for n, (group, parts, triangles) in enumerate(report.group_counts, 1):
+        print(f"  {n:>3}. {group:<28} {parts:>5,} ชิ้น {triangles:>9,} หน้า")
     if model.note:
         print(f"{'หมายเหตุ':<18} {model.note}")
     return 0

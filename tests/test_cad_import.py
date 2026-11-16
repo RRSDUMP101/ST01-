@@ -327,6 +327,31 @@ def test_step_products_are_the_groups_and_nameless_solids_are_named_after_them(t
         assert word in model.note, word
 
 
+def test_step_from_zw3d_a_named_product_with_nameless_bodies_is_one_part(tmp_path):
+    d = _Doc()
+    root = d.assembly("พื้นเรียบ")
+    hook = d.assembly("ตะขอผ้าไบ")  # a part as ZW3D writes it: a named product whose bodies have no name
+    d.place(hook, d.part(_box(0, 0, 0, 40, 10, 10)))
+    d.place(hook, d.part(_cylinder(0, 0, 20, 5, 30)))
+    beam = d.assembly("เต่าที่1")
+    d.place(beam, d.part(_box(0, 0, 0, 70, 50, 170)))
+    kit = d.assembly("Part004")  # a sub-assembly: its children are parts with names
+    bolt = d.assembly("Hex head screw M12")
+    d.place(bolt, d.part(_cylinder(0, 0, 0, 6, 65)))
+    for x in (0, 500):
+        d.place(kit, bolt, x=x)
+        d.place(root, hook, x=x, y=900)
+    d.place(root, beam, x=-600, y=-630)
+    d.place(root, kit, y=-950, z=280)
+    model, report = ci.read_cad_report(d.write_step(tmp_path / "zw.step"))
+    _check(model)
+    # the bodies carry the name of their part, not 'Layer0000 017'; a part of one body has the name as it is
+    assert sorted((p.name, p.group) for p in model.parts) == [
+        ("Hex head screw M12", "Part004"), ("Hex head screw M12", "Part004"), ("ตะขอผ้าไบ 01", "ตะขอผ้าไบ"),
+        ("ตะขอผ้าไบ 01", "ตะขอผ้าไบ"), ("ตะขอผ้าไบ 02", "ตะขอผ้าไบ"), ("ตะขอผ้าไบ 02", "ตะขอผ้าไบ"), ("เต่าที่1", "เต่าที่")]
+    assert report.group_counts == [["ตะขอผ้าไบ", 4, 304], ["เต่าที่", 1, 12], ["Part004", 2, 280]]
+
+
 def test_text_repairs():
     assert ci._fix_text("คาน") == "คาน" and ci._fix_text("RAIL_1") == "RAIL_1" and ci._fix_text("") == ""
     assert ci._fix_text("คาน".encode("cp874").decode("latin-1")) == "คาน"

@@ -301,25 +301,60 @@ def set_explode(parts: list[Part3D], direction: str, distance: float) -> None:
 
 # --------------------------------------------------------------------------- the 13 steps of a flat tray
 # The factory's order of work for กระบะพื้นเรียบ, as RRS gave it (16 Nov 2026): the body is welded complete on the
-# jig, lifted onto the chassis and bolted, and the rest is fitted on the vehicle. Each rule: (step number, words that
-# may be in the name of a group). Rules are tried in this order, so 'ขาป้ายทะเบียน' is a welded bracket and not the
-# plate itself, and 'กรอบพื้น' a frame and not a floor.
+# jig, lifted onto the chassis and bolted, and the rest is fitted on the vehicle. Each rule: (the group the technician
+# reads, step number, words that may be in a name). Rules are tried in this order, so 'ขาป้ายทะเบียน' is a welded
+# bracket and not the plate itself, and 'กรอบพื้น' a frame and not a floor. Words are kept as they are misspelt in
+# the customer's CAD files too ('บังโครน', 'ฝาทัง', 'ขาบ้าย', 'พิ้น'): a file whose names were corrected sorts the same.
 TRAY_PHASES = ("งานบนจิ๊ก", "ยกขึ้นรถ", "งานบนรถ")
-TRAY_RULES = [
-    (4, ("รองขาเต่า", "บานพับ", "ตะขอ", "ขาป้าย", "ขาบ้าย", "hinge", "hook")),
-    (12, ("กล่องหลัง", "กล่องท้าย", "ไฟ", "ป้าย", "กล้อง", "lamp", "light", "licen", "camera")),
-    (9, ("โรบา",)),
-    (8, ("ฝาข้าง", "ฝาท้าย", "side", "tail")),
-    (7, ("ตะแกรง", "กันหัว", "head")),
-    (2, ("โครงตัวบน", "กรอบพื้น")),
-    (3, ("พื้น", "พิ้น", "floor")),  # 'พิ้น': as the level is spelt in the customer's file
-    (1, ("โครงตัวล่าง", "ซับเฟรม", "คานขวาง", "subframe", "sub-frame")),
-    (6, ("สลัก", "น็อต", "แหวน", "bolt", "nut", "washer")),
-    (5, ("แท่นยึด",)),
-    (10, ("บังโคลน", "บังโครน", "fender")),
-    (11, ("ฝาถัง", "ฝาทัง", "คอเติม", "คอถัง", "น้ำมัน", "fuel")),  # 'ฝาทังนำ้ม้น': as named in the customer's file
+# 1. parts RRS sorts by their own name: this wins over the level the part is drawn on
+TRAY_NAMED = [
+    ("บานพับ", 4, ("บานพับ", "hinge")),
+    ("ตะขอผ้าใบ", 4, ("ตะขอ", "hook")),
+    ("รองขาเต้า", 4, ("เต้า", "เต่า")),  # ขาเต้า (a bracket); the CAD file writes เต่า
+    ("ขาป้ายทะเบียน", 4, ("ขาป้าย", "ขาบ้าย", "ท้ายป้าย")),
+    ("ราวท่อข้าง", 4, ("ราวท่อ",)),  # below the floor at the side; not yet confirmed what it is (guard rail or step)
+    ("รางพับฝาข้าง", 8, ("รางข้าง", "รางท้าย", "รางพับ", "jnspn")),
+    ("บังโคลน", 10, ("บังโคลน", "บังโครน", "fender")),
+    ("คอเติมน้ำมัน", 11, ("ฝาถัง", "ฝาทัง", "คอเติม", "คอถัง", "น้ำมัน", "fuel")),
+    ("ชุดกล้องถอย", 12, ("rvc kit", "กล้องถอย", "camera")),
 ]
-TRAY_OTHER = 4  # groups no rule knows (Layer0000 …) wait with the small welded parts until someone sorts them
+# 2. the words of a level or group
+TRAY_RULES = [
+    *TRAY_NAMED,
+    ("กล่องหลัง", 12, ("กล่องหลัง", "กล่องท้าย")),
+    ("ชุดไฟท้าย", 12, ("ไฟ", "ป้าย", "กล้อง", "lamp", "light", "licen")),
+    ("โรบาหลัง", 9, ("โรบา",)),
+    ("ฝาข้าง", 8, ("ฝาข้าง", "ฝาท้าย", "ฝาหน้า", "side", "tail")),
+    ("ตะแกรงกันหัว", 7, ("ตะแกรง", "กันหัว", "เขาบน", "head")),
+    ("โครงตัวบน", 2, ("โครงตัวบน", "กรอบพื้น")),
+    ("พื้น", 3, ("พื้น", "พิ้น", "floor")),
+    ("โครงตัวล่าง", 1, ("โครงตัวล่าง", "โครงล่าง", "ซับเฟรม", "คานขวาง", "subframe", "sub-frame")),
+    ("สลักแท่นยึด", 6, ("สลัก", "น็อต", "แหวน", "bolt", "nut", "washer")),
+    ("แท่นยึด", 5, ("แท่นยึด",)),
+]
+TRAY_OTHER = 4  # what no rule knows waits with the small welded parts until someone sorts it
+UNSORTED_GROUP = "ยังไม่จัดกลุ่ม"
+FORD_GROUP = "ชุดไฟท้าย Ford"
+FORD_PART = re.compile(r"(?i)^(di-p\d+|rsd |n1wj|[a-z0-9]{4}-[a-z0-9]{4,7}-[a-z]|w\d{6}-)")  # the vehicle maker's own parts
+FASTENER = re.compile(r"(?i)screw|bolt|\bnut\b|hexagon|washer|\bpin\b|rivet|สกรู|น็อต|แหวนรอง|หมุด")
+FASTENER_GROUPS = {6: "สลักแท่นยึด", 7: "สลักตะแกรงกันหัว", 8: "สลักฝาข้าง / รางพับ"}
+DEFAULT_NAME = re.compile(r"(?i)^(layer|part|ชิ้นที่)[\s_]*\d*([\s_]+\d+)?(_mirror(_\d+)?)?$")  # a name nobody gave
+MIRROR = re.compile(r"(?i)_mirror(_\d+)?")  # ZW3D's name for the copy on the other side
+# names as they are misspelt in the customer's files → what the technician should read
+TRAY_SPELLING = [
+    ("ตะขอผ้าไบ", "ตะขอผ้าใบ"),
+    ("บังโครน ใหม่", "บังโคลน"),
+    ("บังโครน", "บังโคลน"),
+    ("ฝาทังนำ้ม้น", "ฝาถังน้ำมัน"),
+    ("ขาบ้ายะเบียน", "ขาป้ายทะเบียน"),
+    ("duratray ตะแกรงห้นา1", "ตะแกรงหน้า (กันหัว)"),
+    ("ตะแกรงห้นา", "ตะแกรงหน้า"),
+    ("รองขาเต่า", "รองขาเต้า"),
+    ("เต่าที่1", "ขาเต้า"),
+    ("ขาเต่า", "ขาเต้า"),
+    ("พื้นเรีบบ", "พื้นเรียบ"),
+    ("พิ้น", "พื้น"),
+]
 
 
 def tray_sequence(job=None, width: float | None = None) -> list[Step]:
@@ -340,7 +375,7 @@ def tray_sequence(job=None, width: float | None = None) -> list[Step]:
              check=f"ผิวบนอยู่ระนาบเดียวกัน{wide}", tools="ระดับน้ำ ปากกาจับ C เครื่องเชื่อม", ref="1.11.1 J", phase=jig),
         Step("ปูและเชื่อมแผ่นพื้น", "ปูแผ่นพื้นบนโครงตัวบน กดให้แนบ แล้วเชื่อม ตรวจตำแหน่งช่องตะขอ",
              check="แนบสนิท ไม่กระดก ช่องตะขอ 8 จุดตรงตำแหน่ง", tools="ปากกาจับ เครื่องเชื่อม", phase=jig),
-        Step("ติดชิ้นเชื่อมย่อยใต้โครง", "เชื่อมรองขาเต่า บานพับ ตะขอผ้าใบ และขาป้ายทะเบียนตามตำแหน่งในภาพ ทาสีกันสนิมรอยเชื่อม",
+        Step("ติดชิ้นเชื่อมย่อยใต้โครง", "เชื่อมรองขาเต้า บานพับ ตะขอผ้าใบ และขาป้ายทะเบียนตามตำแหน่งในภาพ ทาสีกันสนิมรอยเชื่อม",
              check="ตำแหน่งบานพับข้างละ 3 จุด ห่าง 900 มม.", tools="ตลับเมตร เครื่องเชื่อม สีกันสนิม", ref="5.5", phase=jig),
         Step("ตรวจแท่นยึดบนแชสซี แล้วยกโครงวาง",
              "ทำความสะอาดหน้าแท่นยึดบนแชสซีทุกจุด ตรวจแนวท่อ DEF และสายไฟใต้รางแชสซี แล้วยกโครงวางให้นั่งบนแท่นยึด"
@@ -374,32 +409,193 @@ def tray_sequence(job=None, width: float | None = None) -> list[Step]:
     ]
 
 
+def _own_words(text: str) -> str:
+    """A name without what ZW3D adds to it: 'Part5^พื้นเรีบบ champ' is Part5 of that file, not a floor."""
+    return text.split("^")[0].strip().lower()
+
+
+def _rule(rules: list, text: str) -> tuple[str, int] | None:
+    """(group, step) of the first rule with a word in `text`. A name nobody gave says nothing."""
+    name = _own_words(text)
+    if not name or DEFAULT_NAME.match(name):
+        return None
+    for group, step, words in rules:
+        if any(w in name for w in words):
+            return group, step
+    return (FORD_GROUP, 12) if FORD_PART.match(name) else None
+
+
 def tray_step_of(group: str) -> int:
     """The step of the 13 that the parts of a group belong to, by the words in its name."""
-    name = group.lower()
-    for step, words in TRAY_RULES:
-        if any(w in name for w in words):
-            return step
-    return TRAY_OTHER
+    found = _rule(TRAY_RULES, group)
+    return found[1] if found else TRAY_OTHER
 
 
 def tray_group_known(group: str) -> bool:
-    return any(w in group.lower() for _step, words in TRAY_RULES for w in words)
+    return _rule(TRAY_RULES, group) is not None
 
 
 def tray_sequence_fits(model: AssemblyModel) -> int:
-    """How many of the 13 steps would get parts by the names of the groups (0 = the names say nothing)."""
-    return len({tray_step_of(g) for g in model.groups() if g != REF_GROUP and tray_group_known(g)})
+    """How many of the 13 steps would get parts by the names of the groups and parts (0 = the names say nothing)."""
+    texts = {t for p in model.parts if p.group != REF_GROUP for t in (p.group, p.name)}
+    return len({found[1] for t in texts if (found := _rule(TRAY_RULES, t)) is not None})
 
 
-def apply_tray_sequence(model: AssemblyModel, job=None, explode: bool = True) -> dict[str, int]:
-    """The 13 steps put on a model: every group goes to its step by its name (the vehicle stays step 0), groups no
-    rule knows go to step 4. A step that gets no part becomes a step of work only. With `explode` the parts of
-    each step wait in the direction they are fitted from. Returns {group: step}."""
-    where = {g: (0 if g == REF_GROUP else tray_step_of(g)) for g in model.groups()}
+def _gap(a: tuple, b: tuple) -> float:
+    """Distance between two boxes (0 when they touch or overlap)."""
+    return math.sqrt(sum(max(0.0, a[0][i] - b[1][i], b[0][i] - a[1][i]) ** 2 for i in range(3)))
+
+
+def adopt_groups(model: AssemblyModel, other: AssemblyModel, tol: float = 1.0) -> dict[str, str]:
+    """Part id of `model` → the group that the same thing has in `other` (the same assembly from another file: the
+    IGES of a tray has the designer's levels, its STEP the names). A part is the same thing when its box is the box
+    of a part of `other` within `tol` mm, or when parts of `other` of one group lie inside it and fill its box (a
+    solid that the other file holds in several sewn pieces). Nothing is said when the groups disagree."""
+    theirs = [(p.bounds(), p.group) for p in other.parts]
+    out: dict[str, str] = {}
+    cells: dict[tuple, list[int]] = {}  # their boxes by the cell of their lower corner: the search stays near
+    size = max(tol * 4, 50.0)
+    for n, ((blo, _bhi), _g) in enumerate(theirs):
+        cells.setdefault(tuple(int(blo[i] // size) for i in range(3)), []).append(n)
+    for part in model.parts:
+        lo, hi = part.bounds()
+        key = [int(lo[i] // size) for i in range(3)]
+        near = [n for dx in (-1, 0, 1) for dy in (-1, 0, 1) for dz in (-1, 0, 1)
+                for n in cells.get((key[0] + dx, key[1] + dy, key[2] + dz), ())]
+        same = {theirs[n][1] for n in near
+                if all(abs(lo[i] - theirs[n][0][0][i]) <= tol and abs(hi[i] - theirs[n][0][1][i]) <= tol for i in range(3))}
+        if len(same) == 1:
+            out[part.id] = same.pop()
+            continue
+        if same:
+            continue
+        inside = [((blo, bhi), g) for (blo, bhi), g in theirs
+                  if all(blo[i] >= lo[i] - tol and bhi[i] <= hi[i] + tol for i in range(3))]
+        filled = [group for group in sorted({g for _b, g in inside})
+                  if all(abs(min(b[0][i] for b, g in inside if g == group) - lo[i]) <= 2 * tol
+                         and abs(max(b[1][i] for b, g in inside if g == group) - hi[i]) <= 2 * tol for i in range(3))]
+        if len(filled) == 1:
+            out[part.id] = filled[0]
+    return out
+
+
+def tray_steps(model: AssemblyModel, levels: dict[str, str] | None = None) -> dict[str, tuple[int, str, str]]:
+    """Every part of a flat tray → (step, group for the technician, how it was found: 'ชื่อ' · 'เลเยอร์' · 'กลุ่ม' ·
+    'ชิ้นข้างเคียง' · 'ไม่ทราบ'). In this order: a name RRS sorts by; the designer's level (`levels`, from
+    adopt_groups); the group. A screw, nut or washer follows its sub-assembly, then its level, then the part it sits
+    on – the size of a bolt does not say what it fastens. What nothing tells stays at step 4, not guessed."""
+    levels = levels or {}
+    out: dict[str, tuple[int, str, str]] = {}
+    bolts: list[Part3D] = []
     for p in model.parts:
-        if p.step != 0 or p.group != REF_GROUP:
-            p.step = where[p.group]
+        if p.group == REF_GROUP:
+            continue
+        level = levels.get(p.id, "")
+        bolt = bool(FASTENER.search(_own_words(p.name)))
+        named = _rule(TRAY_NAMED, p.name) or (None if bolt else _rule(TRAY_NAMED, p.group))  # a bolt is not a hinge
+        if named is None and (FORD_PART.match(_own_words(p.name)) or FORD_PART.match(_own_words(p.group))):
+            named = (FORD_GROUP, 12)
+        by_level, by_group = _rule(TRAY_RULES, level), _rule(TRAY_RULES, p.group)
+        if named:
+            out[p.id] = (named[1], named[0], "ชื่อ")
+        elif bolt:
+            if FASTENER.search(_own_words(p.group)):  # a group that is only the bolt's own name says nothing
+                by_group = None
+            found = by_group or by_level
+            if found:
+                own = tidy_name(MIRROR.sub("", p.group)) if by_group else tidy_name(level)
+                out[p.id] = (found[1], FASTENER_GROUPS.get(found[1], own), "กลุ่ม" if by_group else "เลเยอร์")
+            else:
+                bolts.append(p)
+        elif by_level:
+            out[p.id] = (by_level[1], tidy_name(level), "เลเยอร์")
+        elif by_group:
+            out[p.id] = (by_group[1], tidy_name(MIRROR.sub("", p.group)), "กลุ่ม")
+        else:
+            group = UNSORTED_GROUP if DEFAULT_NAME.match(_own_words(p.group)) else tidy_name(MIRROR.sub("", p.group))
+            out[p.id] = (TRAY_OTHER, group, "ไม่ทราบ")
+    # a sub-assembly keeps the name of the designer's level its step is drawn on ('ตะแกรงมีลาย', not a second group)
+    count: dict[int, dict[str, int]] = {}
+    for step, group, how in out.values():
+        if how == "เลเยอร์":
+            count.setdefault(step, {})[group] = count.get(step, {}).get(group, 0) + 1
+    main = {step: max(c, key=c.get) for step, c in count.items()}
+    for pid, (step, group, how) in out.items():
+        if how == "กลุ่ม" and step in main and group not in FASTENER_GROUPS.values():
+            out[pid] = (step, main[step], how)
+    held = [(p.bounds(), out[p.id]) for p in model.parts if p.id in out and out[p.id][2] != "ไม่ทราบ"
+            and not FASTENER.search(_own_words(p.name))]
+    for p in bolts:  # a bolt belongs to what it fastens
+        box = p.bounds()
+        near = min(held, key=lambda k: _gap(box, k[0]), default=None)
+        if near is not None and _gap(box, near[0]) <= 50.0:
+            step, group = near[1][0], near[1][1]
+            out[p.id] = (step, FASTENER_GROUPS.get(step, group), "ชิ้นข้างเคียง")
+        else:
+            out[p.id] = (TRAY_OTHER, UNSORTED_GROUP, "ไม่ทราบ")
+    return out
+
+
+def tidy_name(text: str) -> str:
+    """A name from the CAD file as the technician should read it: the known misspellings corrected."""
+    for wrong, right in TRAY_SPELLING:
+        text = text.replace(wrong, right)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _with_side(name: str, side: str) -> str:
+    """'บานพับ_Mirror 02' + ขวา → 'บานพับ ขวา 02' · 'พื้น ซ้าย2_Mirror' + ขวา → 'พื้น ขวา2'."""
+    name = MIRROR.sub("", name).strip()
+    if not side:
+        return name
+    if "ซ้าย" in name or "ขวา" in name:
+        return name.replace("ซ้าย", side).replace("ขวา", side) if side == "ซ้าย" else name.replace("ซ้าย", side)
+    m = re.match(r"^(.*?)(\s+\d+)?$", name)
+    return f"{m.group(1)} {side}{m.group(2) or ''}"
+
+
+def tidy_names(model: AssemblyModel, rear: float = 0.0) -> int:
+    """Names for the technician: misspellings corrected, and ZW3D's '_Mirror' said as a side. With `rear` (+1: the
+    rear of the body is at +X, −1: at −X) the side is where the part really is – left and right as seen from behind
+    the vehicle looking forward – for a mirrored part and its original alike; without it a mirrored part is called
+    ขวา and its original ซ้าย, as RRS draws them. The name in the file stays in the part's note. Returns how many
+    names changed."""
+    real = [p for p in model.parts if p.group != REF_GROUP]
+    if not real:
+        return 0
+    lo, hi = model.bounds(real)
+    mid, clear = (lo[1] + hi[1]) / 2, max((hi[1] - lo[1]) * 0.02, 1.0)
+    twins = {MIRROR.sub("", t).strip() for p in real for t in (p.name, p.group) if MIRROR.search(t)}
+    changed = 0
+    for p in real:
+        mirrored = bool(MIRROR.search(p.name) or MIRROR.search(p.group))
+        side = ""
+        if mirrored or p.name in twins or p.group in twins:
+            off = p.centre()[1] - mid
+            if rear and abs(off) > clear:
+                side = "ซ้าย" if off * rear < 0 else "ขวา"
+            elif not rear:
+                side = "ขวา" if mirrored else "ซ้าย"
+        name = tidy_name(_with_side(p.name, side) if side or mirrored else p.name)
+        if name != p.name:
+            if "ชื่อในไฟล์:" not in p.note:
+                p.note = f"{p.note} · ชื่อในไฟล์: {p.name}".strip(" ·")
+            p.name = name
+            changed += 1
+        p.group = tidy_name(MIRROR.sub("", p.group).strip())
+    return changed
+
+
+def apply_tray_sequence(model: AssemblyModel, job=None, explode: bool = True,
+                        levels: dict[str, str] | None = None, tidy: bool = False) -> dict[str, int]:
+    """The 13 steps put on a model: every part goes to its step (see tray_steps; the vehicle stays step 0). A step
+    that gets no part becomes a step of work only. With `explode` the parts of each step wait in the direction they
+    are fitted from. With `tidy` (a model from a CAD file) the parts also get the groups the technician reads and
+    names without misspellings and '_Mirror'. Returns {group: the step most of its parts went to}."""
+    found = tray_steps(model, levels)
+    for p in model.parts:
+        if p.id in found:
+            p.step = found[p.id][0]
     upper = [p for p in model.parts if p.step == 2]
     width = None
     if upper:
@@ -410,13 +606,20 @@ def apply_tray_sequence(model: AssemblyModel, job=None, explode: bool = True) ->
         if not model.parts_of_step(n):
             step.no_parts = True
     real = [p for p in model.parts if p.step > 0]
-    if explode and real:
-        auto_explode(model)  # what no rule below covers (small parts, bolts) moves away from the middle
+    rear = 0.0
+    if real:
         lo, hi = model.bounds(real)
         mid = [(lo[i] + hi[i]) / 2 for i in range(3)]
         half = [max((hi[i] - lo[i]) / 2, 1.0) for i in range(3)]
         tail = [p for p in real if p.step in (9, 12)]  # the rear is where the tail bar and the lamps are
-        rear = -1.0 if tail and sum(p.centre()[0] for p in tail) / len(tail) < mid[0] else 1.0
+        head = [p for p in real if p.step == 7]  # … and opposite the headboard
+        if tail:
+            rear = -1.0 if sum(p.centre()[0] for p in tail) / len(tail) < mid[0] else 1.0
+        elif head:
+            rear = 1.0 if sum(p.centre()[0] for p in head) / len(head) < mid[0] else -1.0
+    if explode and real:
+        auto_explode(model)  # what no rule below covers (small parts, bolts) moves away from the middle
+        back = rear or 1.0
         lift = {1: 0.0, 2: 450.0, 3: 650.0, 7: 800.0}  # the lower frame lies on the jig; the rest comes down onto it
         for p in real:
             c = p.centre()
@@ -424,13 +627,28 @@ def apply_tray_sequence(model: AssemblyModel, job=None, explode: bool = True) ->
                 p.explode = [0.0, 0.0, lift[p.step]]
             elif p.step in (8, 10):  # sides out to their side; a tailgate out to the rear
                 along, across = (c[0] - mid[0]) / half[0], (c[1] - mid[1]) / half[1]
-                if p.step == 8 and abs(along) > abs(across) and along * rear > 0:
-                    p.explode = [rear * 600.0, 0.0, 0.0]
+                if p.step == 8 and abs(along) > abs(across) and along * back > 0:
+                    p.explode = [back * 600.0, 0.0, 0.0]
                 else:
                     p.explode = [0.0, 550.0 if across >= 0 else -550.0, 0.0]
             elif p.step in (9, 12):
-                p.explode = [rear * 600.0, 0.0, 0.0]
-    return where
+                p.explode = [back * 600.0, 0.0, 0.0]
+    if tidy:
+        for p in model.parts:
+            if p.id in found:
+                p.group = found[p.id][1]
+        tidy_names(model, rear)
+    where: dict[str, dict[int, int]] = {}
+    for p in model.parts:
+        count = where.setdefault(p.group, {})
+        count[p.step] = count.get(p.step, 0) + 1
+    return {g: max(c, key=c.get) for g, c in where.items()}
+
+
+def tray_unsorted(model: AssemblyModel, levels: dict[str, str] | None = None) -> list[Part3D]:
+    """The parts whose name, group and level do not say which step they belong to."""
+    found = tray_steps(model, levels)
+    return [p for p in model.parts if p.id in found and found[p.id][2] == "ไม่ทราบ"]
 
 
 def _clean_name(text: str, fallback: str) -> str:

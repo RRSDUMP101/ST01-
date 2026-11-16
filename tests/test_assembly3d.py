@@ -56,7 +56,7 @@ def test_the_13_steps_on_an_imported_model():
         return a3.Part3D(f"m{n}", f"{group} {n:02d}", group, "mesh", mesh=[[[x, y, z], [x + 50, y, z], [x, y + 50, z]]])
 
     names = ["กล่องหลัง", "โครงตัวล่าง", "โครงตัวบน", "พิ้น", "Layer0000", "โรบาหลัง", "ฝาข้าง", "ตะแกรงมีลาย", "Layer0001",
-             "บังโครน ใหม่", "ขาบ้ายะเบียน", "ฝาทังนำ้ม้น", "ไฟท้าย", "กรอบพื้น", "บานพับหลัง", "Hexagon nut M12"]
+             "บังโครน ใหม่", "ขาบ้ายะเบียน", "ฝาทังนำ้ม้น", "ไฟท้าย", "กรอบพื้น", "บานพับหลัง", "สลักยึดแท่น M12"]
     spots = {"โรบาหลัง": (1200, 0, 300), "ไฟท้าย": (1300, -800, -100), "กล่องหลัง": (1250, 0, -150)}
     parts = [part(n, g, *spots.get(g, (-1000 + 100 * n, (-1) ** n * 600, 10 * n))) for n, g in enumerate(names, 1)]
     parts.insert(2, part(40, "ฝาข้าง", 0, -950, 200))  # the right side gate
@@ -65,7 +65,7 @@ def test_the_13_steps_on_an_imported_model():
     where = a3.apply_tray_sequence(model)
     assert where == {"กล่องหลัง": 12, "โครงตัวล่าง": 1, "โครงตัวบน": 2, "พิ้น": 3, "Layer0000": 4, "โรบาหลัง": 9, "ฝาข้าง": 8,
                      "ตะแกรงมีลาย": 7, "Layer0001": 4, "บังโครน ใหม่": 10, "ขาบ้ายะเบียน": 4, "ฝาทังนำ้ม้น": 11, "ไฟท้าย": 12,
-                     "กรอบพื้น": 2, "บานพับหลัง": 4, "Hexagon nut M12": 6}
+                     "กรอบพื้น": 2, "บานพับหลัง": 4, "สลักยึดแท่น M12": 6}
     assert len(model.steps) == 13 and model.problems() == []
     assert [n for n, s in enumerate(model.steps, 1) if s.no_parts] == [5, 13]
     assert model.steps[5].torque == "M12 เกรด 10.9: 95–125 Nm"  # no job: the minimum of Ford's manual
@@ -81,6 +81,112 @@ def test_the_13_steps_on_an_imported_model():
     a3.apply_tray_sequence(model, job, explode=False)
     assert "งานนี้ 35 มม." in model.steps[4].check and "งานนี้ 620 มม." in model.steps[11].check
     assert by_group["พิ้น"].explode == [0.0, 0.0, 650.0]  # left as they were
+
+
+def _solid(n, name, group, x, y, z, lx=50.0, ly=50.0, lz=50.0):
+    """A part as it comes from a CAD file: a mesh that fills the box from (x, y, z)."""
+    faces = [[[x, y, z], [x + lx, y, z], [x, y + ly, z]], [[x + lx, y + ly, z + lz], [x, y + ly, z + lz], [x + lx, y, z + lz]]]
+    return a3.Part3D(f"s{n}", name, group, "mesh", mesh=faces)
+
+
+def _step_tray() -> tuple[a3.AssemblyModel, a3.AssemblyModel]:
+    """A tray as ZW3D writes it to STEP (names, a group per part or sub-assembly, the front at −X) and the same
+    tray from IGES (no names, the designer's levels)."""
+    rows = [  # name, group, box, level in the IGES
+        ("ตะขอผ้าไบ 01", "ตะขอผ้าไบ", (0, -900, -60), "Layer0000"),
+        ("เต่าที่1", "เต่าที่", (-600, -630, -180), "โครงตัวล่าง"),
+        ("เต่าที่1_Mirror_1", "เต่าที่1_Mirror", (-600, 580, -180), "โครงตัวล่าง"),
+        ("Part015", "Part", (300, -580, -180), "โครงตัวล่าง"),
+        ("Part015_Mirror_1", "Part015_Mirror", (300, 530, -180), "โครงตัวล่าง"),
+        ("โครงล่าง หน้า", "โครงล่าง หน้า", (-1300, 0, -100), "โครงตัวบน"),  # the name says lower, the level upper
+        ("โครงล่าง หลัง", "โครงล่าง หลัง", (1200, 0, -200), ""),
+        ("พื้น ซ้าย 01", "พื้น ซ้าย", (-100, -25, 0), "พิ้น"),
+        ("รางข้างแบบพับ 01", "รางข้างแบบพับ", (0, -960, 250, 1200, 20, 300), "ฝาข้าง"),
+        ("รางข้างแบบพับ_Mirror 01", "รางข้างแบบพับ_Mirror", (0, 940, 250, 1200, 20, 300), "ฝาข้าง"),
+        ("Hex head screw ISO8676-M12x1.25x65-5.6", "Part004", (100, -990, 270, 18, 30, 20), "Layer0000"),
+        ("Washer ISO 7090-12-200HV", "Part004", (100, -995, 270, 24, 3, 24), ""),
+        ("Hexagon regular nut ISO8673-M12x1.25-0_4", "Hexagon regular nut ISO8673-M12x1.25-0", (1270, -940, 560, 18, 20, 11),
+         "ฝาข้าง"),
+        ("JNSPN5", "JNSPN", (1270, 910, 560, 23, 54, 3), "ฝาข้าง"),
+        ("Hex head screw ISO8676-M8x1x16-5.6", "duratray ตะแกรงห้นา1", (-1370, 90, 355, 21, 15, 13), ""),
+        ("Hex head screw ISO8676-M12x1.25x100-5.6", "เขาบน_Mirror", (-1370, 630, 860, 108, 21, 18), "Layer0001"),
+        ("ตะแกรง 01", "duratray ตะแกรงห้นา1", (-1390, -25, 400), "ตะแกรงมีลาย"),
+        ("ราวท่อด้านข้างตัวหน้า1_Mirror 01", "ราวท่อด้านข้างตัวหน้า1_Mirror", (-500, 900, -300), "Layer0000"),
+        ("โรบาหลัง 01", "โรบาหลัง", (1130, -25, 0), "โรบาหลัง"),
+        ("ขายึดบังโครน_Mirror", "บังโครน ใหม่_Mirror_1", (700, 800, -200), "Layer0000"),
+        ("ฝาทังนำ้ม้น 2", "ฝาทังนำ้ม้น", (-700, -980, -150), "Layer0000"),
+        ("N1WJ-19H391-A-1-RVC KIT ASSEMBLY (1) 01", "N1WJ-19H391-A-1-RVC KIT ASSEMBLY (1)", (1030, -30, -370), "กล่องหลัง"),
+        ("W711213-S/2-NUT&WSHR M8 HX FL 10 01", "DI-P703-W711213-FBUGJ7_RH-002/2-NUT&WSHR M8 HX FL 10 (View)", (1210, -890, -230),
+         "Layer0000"),
+        ("Part009_Mirror", "Part009_Mirror", (500, 300, -400), "Layer0000"),
+        ("Hexagon nut ISO4032-M10", "Part030", (500, 0, -700, 16, 16, 8), ""),  # a nut by itself, far from anything
+        ("ท้าย2", "ท้าย", (-1280, -900, -110), ""),
+    ]
+    step = a3.AssemblyModel("step", [_solid(n, name, group, *box) for n, (name, group, box, _l) in enumerate(rows)], source="file")
+    iges = a3.AssemblyModel("iges", [_solid(n, f"{level} {n:02d}", level, *box) for n, (_n, _g, box, level) in enumerate(rows)
+                                     if level], source="file")
+    return step, iges
+
+
+def test_levels_of_the_same_assembly_from_another_file():
+    step, iges = _step_tray()
+    iges.parts[0].mesh = [[[x + 0.4, y, z] for x, y, z in f] for f in iges.parts[0].mesh]  # the files differ by a hair
+    floor = next(p for p in iges.parts if p.group == "พิ้น")  # … and the IGES has this solid sewn in two pieces
+    lo, hi = floor.bounds()
+    half = (lo[0] + hi[0]) / 2
+    iges.parts.append(_solid(90, "พิ้น 90", "พิ้น", half, lo[1], lo[2], hi[0] - half, 50, 50))
+    floor.mesh = _solid(0, "", "", lo[0], lo[1], lo[2], half - lo[0], 50, 50).mesh
+    stray = _solid(91, "x", "ฝาข้าง", 300, -580, -180)  # two levels at the place of one part: no answer
+    iges.parts.append(stray)
+    levels = a3.adopt_groups(step, iges)
+    by_name = {p.name: levels.get(p.id) for p in step.parts}
+    assert by_name["ตะขอผ้าไบ 01"] == "Layer0000" and by_name["เต่าที่1"] == "โครงตัวล่าง" and by_name["พื้น ซ้าย 01"] == "พิ้น"
+    assert by_name["Part015"] is None and by_name["โครงล่าง หลัง"] is None and by_name["Part015_Mirror_1"] == "โครงตัวล่าง"
+    assert a3.adopt_groups(step, a3.AssemblyModel("far", [_solid(1, "a", "ฝาข้าง", 9000, 0, 0)])) == {}
+
+
+def test_parts_of_a_real_tray_go_to_their_steps_by_name_level_and_what_they_fasten():
+    step, iges = _step_tray()
+    levels = a3.adopt_groups(step, iges)
+    found = a3.tray_steps(step, levels)
+    got = {p.name: found[p.id] for p in step.parts}
+    assert got["ตะขอผ้าไบ 01"] == (4, "ตะขอผ้าใบ", "ชื่อ") and got["เต่าที่1"] == (4, "รองขาเต้า", "ชื่อ")  # a name beats the level
+    assert got["Part015"] == (1, "โครงตัวล่าง", "เลเยอร์") and got["โครงล่าง หน้า"] == (2, "โครงตัวบน", "เลเยอร์")
+    assert got["โครงล่าง หลัง"] == (1, "โครงตัวล่าง", "กลุ่ม")  # no level: its own group, called as the level of that step
+    assert got["พื้น ซ้าย 01"] == (3, "พื้น", "เลเยอร์") and got["โรบาหลัง 01"] == (9, "โรบาหลัง", "เลเยอร์")
+    assert got["รางข้างแบบพับ 01"] == got["JNSPN5"] == (8, "รางพับฝาข้าง", "ชื่อ")
+    # bolts: M12 at the height of the gates are gate bolts – the size does not make them chassis bolts
+    assert got["Hex head screw ISO8676-M12x1.25x65-5.6"] == (8, "สลักฝาข้าง / รางพับ", "ชิ้นข้างเคียง")
+    assert got["Washer ISO 7090-12-200HV"] == (8, "สลักฝาข้าง / รางพับ", "ชิ้นข้างเคียง")
+    assert got["Hexagon regular nut ISO8673-M12x1.25-0_4"] == (8, "สลักฝาข้าง / รางพับ", "เลเยอร์")
+    assert got["Hex head screw ISO8676-M8x1x16-5.6"] == (7, "สลักตะแกรงกันหัว", "กลุ่ม")
+    assert got["Hex head screw ISO8676-M12x1.25x100-5.6"] == (7, "สลักตะแกรงกันหัว", "กลุ่ม")  # in the headboard's horn
+    assert got["Hexagon nut ISO4032-M10"] == (4, a3.UNSORTED_GROUP, "ไม่ทราบ")  # nothing near: not guessed
+    assert got["ราวท่อด้านข้างตัวหน้า1_Mirror 01"] == (4, "ราวท่อข้าง", "ชื่อ")
+    assert got["ขายึดบังโครน_Mirror"] == (10, "บังโคลน", "ชื่อ") and got["ฝาทังนำ้ม้น 2"] == (11, "คอเติมน้ำมัน", "ชื่อ")
+    assert got["N1WJ-19H391-A-1-RVC KIT ASSEMBLY (1) 01"] == (12, "ชุดกล้องถอย", "ชื่อ")  # on the level 'กล่องหลัง'
+    assert got["W711213-S/2-NUT&WSHR M8 HX FL 10 01"] == (12, a3.FORD_GROUP, "ชื่อ")  # Ford's nut, not a mount bolt
+    assert got["Part009_Mirror"] == (4, a3.UNSORTED_GROUP, "ไม่ทราบ") and got["ท้าย2"] == (4, "ท้าย", "ไม่ทราบ")
+    assert [p.name for p in a3.tray_unsorted(step, levels)] == ["Part009_Mirror", "Hexagon nut ISO4032-M10", "ท้าย2"]
+    assert a3.tray_sequence_fits(step) >= 8
+
+    a3.apply_tray_sequence(step, levels=levels, tidy=True)
+    named = {p.id: (p.name, p.group, p.step) for p in step.parts}
+    names = {name for name, _g, _s in named.values()}
+    # misspellings corrected; '_Mirror' is the side the part is on (the front is at −X, so −Y is the left)
+    assert {"ตะขอผ้าใบ 01", "ขาเต้า ซ้าย", "ขาเต้า ขวา", "Part015 ซ้าย", "Part015 ขวา", "รางข้างแบบพับ ซ้าย 01", "รางข้างแบบพับ ขวา 01",
+            "ขายึดบังโคลน ขวา", "ฝาถังน้ำมัน 2", "Part009 ขวา", "ราวท่อด้านข้างตัวหน้า1 ขวา 01", "พื้น ซ้าย 01", "ท้าย2"} <= names
+    kept = next(p for p in step.parts if p.name == "ขาเต้า ขวา")
+    assert kept.note == "ชื่อในไฟล์: เต่าที่1_Mirror_1" and kept.group == "รองขาเต้า"
+    assert not any("_Mirror" in p.name or "_Mirror" in p.group for p in step.parts)
+    assert step.problems() == [] and [n for n, s in enumerate(step.steps, 1) if s.no_parts] == [5, 6, 13]
+    a3.apply_tray_sequence(step, tidy=True)  # again, without the other file: the groups now say it all
+    assert {p.id: (p.name, p.group, p.step) for p in step.parts} == named
+
+    plain = a3.AssemblyModel("p", [_solid(1, "บานพับ_Mirror 02", "บานพับ_Mirror", 0, 0, 0), _solid(2, "บานพับ 01", "บานพับ", 0, 9, 0)])
+    assert a3.tidy_names(plain) == 2  # the side is not known: a mirrored part is the right one, as RRS draws them
+    assert [p.name for p in plain.parts] == ["บานพับ ขวา 02", "บานพับ ซ้าย 01"]
+    assert a3.tidy_name("duratray ตะแกรงห้นา1") == "ตะแกรงหน้า (กันหัว)" and a3.tidy_name("รองขาเต่า4") == "รองขาเต้า4"
 
 
 def test_faces_wind_outwards():
@@ -404,10 +510,33 @@ def test_tab_puts_the_13_steps_on_an_imported_model(window, tmp_path):
     tab.go(2, animate=False)
     tab.done.setChecked(True)
     where = tab.use_tray_sequence(ask=False)
-    assert where["Layer0000"] == 4 and where["โรบาหลัง"] == 9 and len(tab.model.steps) == 13 and tab.step == 0
+    assert where[a3.UNSORTED_GROUP] == 4 and where["โรบาหลัง"] == 9 and len(tab.model.steps) == 13 and tab.step == 0
+    assert where["พื้น"] == 3 and "ยังไม่ได้จัด 1 ชิ้น" in window.statusBar().currentMessage()  # 'พิ้น' as the file spells it
     assert not any(k.startswith("asm:") for k in page.job.record)  # the marks were of the old steps
     assert "ขั้น 4" in window.statusBar().currentMessage() or tab.model.problems() == []
     tab.go(1, animate=False)
     assert tab.step_no.text() == "ขั้นที่ 1 / 13 · งานบนจิ๊ก" and tab.bom.rowCount() == 2
     tab.go(5, animate=False)
     assert "28 มม." in tab.step_info.text() and "ไม่มีชิ้นส่วนใหม่" in tab.step_info.text()
+
+
+def test_tab_takes_the_groups_of_the_same_assembly_from_another_file(window, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+
+    tab = window.pages["install"].assembly
+    step, iges = _step_tray()
+    tab.set_model(step)
+    other = tmp_path / "iges.rrsasm"
+    iges.save(other)
+    assert tab.adopt_levels(str(other))
+    message = window.statusBar().currentMessage()
+    assert "ตรงกัน 21 จาก 26 ชิ้น" in message and "ยังไม่ได้จัด 2 ชิ้น" in message, message
+    part = tab.model.part("s3")  # 'Part015': a name that says nothing, on the designer's level of the lower frame
+    assert len(tab.model.steps) == 13 and (part.name, part.group, part.step) == ("Part015 ซ้าย", "โครงตัวล่าง", 1)
+    assert part.note == "ชื่อในไฟล์: Part015"
+    warned = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda *a: warned.append(a[2]))
+    far = tmp_path / "far.rrsasm"
+    a3.AssemblyModel("far", [_solid(1, "a", "ฝาข้าง", 9000, 0, 0)]).save(far)
+    assert not tab.adopt_levels(str(far)) and "ไม่พบชิ้นของ far.rrsasm" in warned[0]
+    assert not tab.adopt_levels(str(tmp_path / "none.rrsasm")) and "อ่านไฟล์ไม่ได้" in warned[1]

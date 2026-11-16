@@ -394,6 +394,7 @@ def _clean(text: str | None) -> str:
     return text
 
 
+_DEFAULT_LAYER = re.compile(r"(?i)^(layer\s*\d*|\d+|default)$")  # a layer nobody named
 _MADE_UP = {"COMPOUND", "COMPSOLID", "SOLID", "SHELL", "FACE", "WIRE", "EDGE", "VERTEX", "SHAPE", "NAUO", "UNNAMED"}
 
 
@@ -823,21 +824,30 @@ class _Import:
             self._walk(free.Value(i), o.TopLoc_Location(), "", "", "", top=True, many=many, path=str(i))
         del self.shapes, self.colours, self.layers
 
-    def _walk(self, label, loc, parent: str, colour: str, layer: str, top: bool, many: bool, path: str) -> None:
+    def _walk(self, label, loc, parent: str, colour: str, layer: str, top: bool, many: bool, path: str,
+              given: str = "") -> None:
         o, tool = self.o, self.o.XCAFDoc_ShapeTool
-        name = self._name(label)
+        name = self._name(label) or given
         colour = self._colour(label) or colour
         layer = self._layer(label) or layer
         if tool.IsAssembly_s(label):
             self.tree = True
             comps = o.TDF_LabelSequence()
             tool.GetComponents_s(label, comps, False)
-            below = name if (not top or many) else ""  # the one top assembly is the whole thing, not a group
+            refs = []
             for i in range(1, comps.Length() + 1):
                 comp, ref = comps.Value(i), o.TDF_Label()
                 if tool.GetReferredShape_s(comp, ref):
-                    self._walk(ref, loc.Multiplied(tool.GetLocation_s(comp)), below or parent,
-                               self._colour(comp) or colour, self._layer(comp) or layer, False, many, f"{path}.{i}")
+                    refs.append((i, comp, ref))
+            # ZW3D writes a part as a named product that holds its bodies as nameless shapes: that is one part
+            # with that name, not a group of nameless parts
+            is_part = bool(name) and not (top and not many) and bool(refs) and all(
+                not tool.IsAssembly_s(ref) and not self._name(ref) and not self._name(comp) for _i, comp, ref in refs)
+            below = name if (not top or many) else ""  # the one top assembly is the whole thing, not a group
+            for i, comp, ref in refs:
+                self._walk(ref, loc.Multiplied(tool.GetLocation_s(comp)), parent if is_part else (below or parent),
+                           self._colour(comp) or colour, self._layer(comp) or layer, False, many, f"{path}.{i}",
+                           given=name if is_part else "")
             return
         shape = tool.GetShape_s(label)
         if shape is None or shape.IsNull():
@@ -1337,7 +1347,8 @@ class _Import:
             if up == "y":  # (x, y, z) → (x, -z, y): a turn, so the faces keep their front
                 tris = np.stack([tris[..., 0], -tris[..., 2], tris[..., 1]], axis=-1)
             name = body.name or body.leaf_name
-            if body.layer and (self.level_names or (not name and len(layers) > 1)):
+            if body.layer and (self.level_names or (not name and len(layers) > 1)
+                               or (len(layers) > 1 and not _DEFAULT_LAYER.match(body.layer))):
                 group = self._level_group(body.layer)  # the levels have names: the designer's own grouping
             elif name:
                 group = body.parent or a3._group_of(name)

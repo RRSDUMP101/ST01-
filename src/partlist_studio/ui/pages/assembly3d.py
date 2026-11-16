@@ -226,7 +226,10 @@ class AssemblyTab(QWidget):
                                 ("▼", lambda: self.shift_step(1), "เลื่อนขั้นนี้ลง (ทำทีหลัง)"),
                                 ("ลบขั้น", lambda: self.delete_step(), "ลบขั้นนี้ – ชิ้นส่วนย้ายไปขั้นก่อนหน้า"),
                                 ("ลำดับ 13 ขั้น", lambda: self.use_tray_sequence(),
-                                 "แทนขั้นทั้งหมดด้วยลำดับประกอบกระบะพื้นเรียบ 13 ขั้นของ RRS – จัดชิ้นเข้าขั้นตามชื่อกลุ่ม")):
+                                 "แทนขั้นทั้งหมดด้วยลำดับประกอบกระบะพื้นเรียบ 13 ขั้นของ RRS – จัดชิ้นเข้าขั้นตามชื่อชิ้นและกลุ่ม"),
+                                ("รับกลุ่มจากไฟล์อื่น", lambda: self.adopt_levels(),
+                                 ("ชุดประกอบเดียวกันจากอีกไฟล์ (เช่น IGES ที่มีเลเยอร์ของผู้ออกแบบ): ชิ้นที่อยู่ตำแหน่งเดียวกัน"
+                                  "รับกลุ่มจากไฟล์นั้น แล้วจัดเข้าลำดับ 13 ขั้น"))):
             b = button(text, tooltip=tip)
             b.clicked.connect(slot)
             row.addWidget(b)
@@ -606,24 +609,60 @@ class AssemblyTab(QWidget):
         self._edited()
         return True
 
-    def use_tray_sequence(self, ask: bool = True) -> dict[str, int]:
-        """The 13 steps of a flat tray in place of the steps of the model; the parts go to them by their groups."""
+    def use_tray_sequence(self, ask: bool = True, levels: dict[str, str] | None = None) -> dict[str, int]:
+        """The 13 steps of a flat tray in place of the steps of the model; the parts go to them by their names, their
+        groups and (`levels`, from another file of the same assembly) the designer's levels. A model from a file also
+        gets the groups the technician reads and names without misspellings and '_Mirror'."""
         if not self.model:
             return {}
-        other = [g for g in self.model.groups() if g != a3.REF_GROUP and not a3.tray_group_known(g)]
         if ask and QMessageBox.question(
                 self, "ลำดับ 13 ขั้น", "แทนขั้นทั้งหมดของโมเดลนี้ด้วยลำดับประกอบกระบะพื้นเรียบ 13 ขั้นของ RRS?\n\n"
                 "• งานบนจิ๊ก 4 ขั้น → ยกขึ้นรถ 2 ขั้น → งานบนรถ 7 ขั้น – แก้ได้หลังจากนี้\n"
-                "• ชิ้นส่วนถูกจัดเข้าขั้นตามชื่อกลุ่ม ทิศแยกชิ้นถูกตั้งใหม่ เครื่องหมาย “ประกอบเสร็จ” ถูกล้าง\n"
-                + (f"• กลุ่มที่ชื่อไม่บอกว่าเป็นอะไร ({', '.join(other[:5])}) ไปรวมที่ขั้น 4 (ชิ้นเชื่อมย่อย)\n" if other else "")
-                ) != QMessageBox.Yes:
+                "• ชิ้นส่วนถูกจัดเข้าขั้นตามชื่อชิ้นและชื่อกลุ่ม ทิศแยกชิ้นถูกตั้งใหม่ เครื่องหมาย “ประกอบเสร็จ” ถูกล้าง\n"
+                "• โมเดลที่นำเข้าจากไฟล์: ชื่อที่สะกดผิดถูกแก้ “_Mirror” เปลี่ยนเป็น ซ้าย / ขวา ตามตำแหน่งจริง "
+                "(ชื่อในไฟล์เก็บไว้ในหมายเหตุของชิ้น)\n"
+                f"• ชิ้นที่ชื่อไม่บอกว่าเป็นอะไรไปรวมที่ขั้น 4 ในกลุ่ม “{a3.UNSORTED_GROUP}”\n") != QMessageBox.Yes:
             return {}
-        where = a3.apply_tray_sequence(self.model, self.get_job())
+        unsorted = len(a3.tray_unsorted(self.model, levels))
+        imported = any(p.shape == "mesh" for p in self.model.parts)
+        where = a3.apply_tray_sequence(self.model, self.get_job(), levels=levels, tidy=imported)
         self._remap_done({n: None for n in range(1, 200)})
         self.step = 0
         self._edited(keep_rows=False)
-        self.state.notify("ใช้ลำดับ 13 ขั้นแล้ว" + (f" · กลุ่มที่ยังไม่ได้จัด ({len(other)}) อยู่ที่ขั้น 4" if other else ""))
+        self.state.notify("ใช้ลำดับ 13 ขั้นแล้ว" + (f" · ยังไม่ได้จัด {unsorted} ชิ้น อยู่ที่ขั้น 4" if unsorted else ""))
         return where
+
+    def adopt_levels(self, path: str = "") -> bool:
+        """The same assembly from another file gives its groups to the parts that lie where its parts lie – the
+        IGES of a tray has the designer's levels, the STEP has the names – and the 13 steps are put on again."""
+        if not self.model:
+            return False
+        if not path:
+            path, _ = QFileDialog.getOpenFileName(self, "รับกลุ่มจากไฟล์อื่น (ชุดประกอบเดียวกัน)", "",
+                                                  "โมเดลชุดเดียวกัน (*.rrsasm *.json *.igs *.iges *.stp *.step)")
+        if not path:
+            return False
+        if Path(path).suffix.lower() not in (".rrsasm", ".json"):
+            return self.import_cad(path, use=lambda other: self._adopt(other, Path(path).name))
+        try:
+            other = a3.AssemblyModel.load(path)
+        except (OSError, ValueError, TypeError) as e:
+            QMessageBox.warning(self, "รับกลุ่มจากไฟล์อื่น", f"อ่านไฟล์ไม่ได้: {e}")
+            return False
+        return self._adopt(other, Path(path).name)
+
+    def _adopt(self, other: a3.AssemblyModel, name: str) -> bool:
+        levels = a3.adopt_groups(self.model, other)
+        if not levels:
+            QMessageBox.warning(self, "รับกลุ่มจากไฟล์อื่น", f"ไม่พบชิ้นของ {name} ที่อยู่ตำแหน่งเดียวกับชิ้นในโมเดลนี้\n\n"
+                                "ต้องเป็นชุดประกอบเดียวกัน ส่งออกจากไฟล์เดียวกัน พิกัดและหน่วยเดียวกัน")
+            return False
+        total = len([p for p in self.model.parts if p.group != a3.REF_GROUP])
+        self.use_tray_sequence(ask=False, levels=levels)
+        unsorted = len([p for p in self.model.parts if p.group == a3.UNSORTED_GROUP])
+        self.state.notify(f"รับกลุ่มจาก {name}: ตรงกัน {len(levels)} จาก {total} ชิ้น · จัดเข้าลำดับ 13 ขั้นแล้ว"
+                          + (f" · ยังไม่ได้จัด {unsorted} ชิ้น (ขั้น 4)" if unsorted else ""))
+        return True
 
     def _done_toggled(self, checked: bool) -> None:
         if self._loading or not self.step:
@@ -677,9 +716,10 @@ class AssemblyTab(QWidget):
                           "แก้ชื่อ กลุ่ม และขั้นในตารางได้")
         return model
 
-    def import_cad(self, path: str, ignored: int = 0) -> bool:
+    def import_cad(self, path: str, ignored: int = 0, use=None) -> bool:
         """STEP / IGES: read by OpenCascade behind a worker thread (in a child process, see `read_cad_isolated`),
-        so that a file of hundreds of MB does not freeze the window; the note shows how far it is."""
+        so that a file of hundreds of MB does not freeze the window; the note shows how far it is. With `use` the
+        model that was read goes to that function and the model on the page stays."""
         if self._cad_busy:
             self.state.notify(f"กำลังนำเข้า {self._cad_busy} อยู่ – รอให้เสร็จก่อน")
             return False
@@ -699,12 +739,19 @@ class AssemblyTab(QWidget):
 
         def done(model: a3.AssemblyModel) -> None:
             finish()
+            if use is not None:
+                self.note.setText(note)
+                use(model)
+                return
             fits = a3.tray_sequence_fits(model)
-            if fits >= 4:  # the groups are named like the parts of a flat tray: start from the 13 steps
-                a3.apply_tray_sequence(model, self.get_job())
+            unsorted = 0
+            if fits >= 4:  # the names are those of the parts of a flat tray: start from the 13 steps
+                unsorted = len(a3.tray_unsorted(model))
+                a3.apply_tray_sequence(model, self.get_job(), tidy=True)
             self.set_model(model)
             self.state.notify(f"นำเข้า {name}: {len(model.parts)} ชิ้น {a3.face_count(model):,} หน้า · {len(model.steps)} ขั้น"
-                              + (" (ลำดับกระบะพื้นเรียบ 13 ขั้น จัดตามชื่อกลุ่ม)" if fits >= 4 else "")
+                              + (" (ลำดับกระบะพื้นเรียบ 13 ขั้น จัดตามชื่อชิ้นและกลุ่ม" if fits >= 4 else "")
+                              + (f" · ยังไม่ได้จัด {unsorted} ชิ้น อยู่ที่ขั้น 4" if unsorted else "") + (")" if fits >= 4 else "")
                               + " – แก้ชื่อ กลุ่ม และขั้นในตารางได้")
 
         def failed(message: str) -> None:

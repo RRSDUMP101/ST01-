@@ -137,10 +137,11 @@ def _occ() -> SimpleNamespace:
         from OCP.TDataStd import TDataStd_Name
         from OCP.TDF import TDF_Label, TDF_Tool
         from OCP.TDocStd import TDocStd_Document
-        from OCP.TopAbs import (TopAbs_EDGE, TopAbs_FACE, TopAbs_REVERSED, TopAbs_SHELL, TopAbs_SOLID, TopAbs_VERTEX)
+        from OCP.TopAbs import (TopAbs_EDGE, TopAbs_FACE, TopAbs_FORWARD, TopAbs_REVERSED, TopAbs_SHELL, TopAbs_SOLID,
+                                TopAbs_VERTEX, TopAbs_WIRE)
         from OCP.TopExp import TopExp_Explorer
         from OCP.TopLoc import TopLoc_Location
-        from OCP.TopoDS import TopoDS, TopoDS_Compound
+        from OCP.TopoDS import TopoDS, TopoDS_Compound, TopoDS_Iterator
         from OCP.XCAFDoc import (XCAFDoc_ColorCurv, XCAFDoc_ColorGen, XCAFDoc_ColorSurf, XCAFDoc_DocumentTool,
                                  XCAFDoc_ShapeTool)
         try:
@@ -195,6 +196,130 @@ def _quiet(o) -> None:
             printer.SetTraceLevel(o.Message_Gravity.Message_Fail)
     except Exception:  # noqa: BLE001 - a missing accessor in some version only means more chatter
         pass
+
+
+def _children(o, shape) -> list:
+    it, out = o.TopoDS_Iterator(shape), []
+    while it.More():
+        out.append(it.Value())
+        it.Next()
+    return out
+
+
+def _compound_of(o, shapes):
+    compound, builder = o.TopoDS_Compound(), o.BRep_Builder()
+    builder.MakeCompound(compound)
+    for s in shapes:
+        builder.Add(compound, s)
+    return compound
+
+
+def _box_size(o, shapes, optimal: bool = False) -> tuple[float, float, float] | None:
+    """The size of the box around shapes, from their geometry (no mesh needed). `optimal`: exact, and slower;
+    else quick and a little generous - right for edges and wires, far too big for a trimmed face, whose surface
+    reaches beyond its border."""
+    box = o.Bnd_Box()
+    for s in shapes:
+        if optimal:
+            o.BRepBndLib.AddOptimal_s(s, box, False, False)
+        else:
+            o.BRepBndLib.Add_s(s, box, False)
+    if box.IsVoid():
+        return None
+    lo, hi = box.CornerMin(), box.CornerMax()
+    gap = 2 * box.GetGap()
+    return tuple(max(b - a - gap, 0.0) for a, b in ((lo.X(), hi.X()), (lo.Y(), hi.Y()), (lo.Z(), hi.Z())))
+
+
+# --------------------------------------------------------------------------- small holes and patterns
+def _drop_small_loops(o, shape, hole_max: float) -> tuple[object, int, int]:
+    """The shape without its small holes, cut-outs and embossed patterns: a new shape of the same faces, less
+    the inner loops no bigger than `hole_max` and the small faces behind them (the wall of a hole, the top of
+    a chequer). It is what makes a perforated or chequered plate cost a hundred triangles instead of ten
+    thousand, and it takes away nothing that shows in a picture of the whole assembly.
+
+    A loop goes only together with everything behind it: when what lies across its edges is not small faces
+    closed off by other small loops (a tube welded into the hole, a rim that runs out into the border), it all
+    stays. No surface is computed: the faces are put together again from their own wires, so it costs
+    nothing and cannot fail. Returns the new shape (the old one when nothing was dropped), loops and faces dropped."""
+    faces = _explore(o, shape, o.TopAbs_FACE)
+    wires: list[list] = []  # per face: (wire, keys of its edges, size)
+    edge_faces: dict[object, list[int]] = {}
+    small: list[bool] = []
+    loop_at: dict[tuple, int] = {}  # (face, edge) → the droppable loop of the face that holds the edge
+    for i, face in enumerate(faces):
+        mine, sizes = [], []
+        for wire in _children(o, face.Oriented(o.TopAbs_FORWARD)):
+            if wire.ShapeType() != o.TopAbs_WIRE:
+                continue
+            keys = list({e.TShape() for e in _explore(o, wire, o.TopAbs_EDGE)})
+            size = _box_size(o, [wire])
+            mine.append((wire, keys, math.hypot(*size) if size else math.inf))
+            sizes.append(size)
+            for k in keys:
+                seen = edge_faces.setdefault(k, [])
+                if i not in seen:
+                    seen.append(i)
+        wires.append(mine)
+        whole = [max(s[a] for s in sizes) for a in range(3)] if sizes and all(sizes) else None  # about: wires share a place
+        small.append(whole is not None and math.hypot(*whole) <= hole_max)
+        if len(mine) > 1:
+            outer = o.BRepTools.OuterWire_s(o.face(face))
+            limit = max((w[2] for w in mine if w[0].IsSame(outer)), default=0.0) / 2  # two rims of one tube are no hole
+            for n, (wire, keys, size) in enumerate(mine):
+                if size <= hole_max and size < limit and not wire.IsSame(outer):
+                    for k in keys:
+                        loop_at[(i, k)] = n
+    if not loop_at:
+        return shape, 0, 0
+    dropped_loops: set[tuple[int, int]] = set()
+    dropped_faces: set[int] = set()
+    tried: set[tuple[int, int]] = set()
+    for start in sorted(set((i, n) for (i, _k), n in loop_at.items())):
+        if start in tried:
+            continue
+        loops, region, todo, fine = {start}, set(), [("loop", start)], True
+        while todo and fine:
+            kind, item = todo.pop()
+            if kind == "loop":
+                owner, keys = item[0], wires[item[0]][item[1]][1]
+            else:
+                owner, keys = item, [k for w in wires[item] for k in w[1]]
+            for k in keys:
+                for other in edge_faces[k]:
+                    if other == owner or other in region:
+                        continue
+                    n = loop_at.get((other, k))
+                    if n is not None:  # the rim of the hole on its other side
+                        if (other, n) not in loops:
+                            loops.add((other, n))
+                            todo.append(("loop", (other, n)))
+                    elif small[other] and len(region) < 400:
+                        region.add(other)
+                        todo.append(("face", other))
+                    else:
+                        fine = False
+        tried |= loops
+        if fine and not {i for i, _n in loops} & region:
+            dropped_loops |= loops
+            dropped_faces |= region
+    if not dropped_loops or len(dropped_faces) >= len(faces):
+        return shape, 0, 0
+    builder, kept = o.BRep_Builder(), []
+    for i, face in enumerate(faces):
+        if i in dropped_faces:
+            continue
+        gone = {n for j, n in dropped_loops if j == i}
+        if gone:
+            new = face.EmptyCopied()
+            new.Orientation(o.TopAbs_FORWARD)
+            for n, (wire, _keys, _size) in enumerate(wires[i]):
+                if n not in gone:
+                    builder.Add(new, wire)
+            new.Orientation(face.Orientation())
+            face = new
+        kept.append(face)
+    return _compound_of(o, kept), len(dropped_loops), len(dropped_faces)
 
 
 # --------------------------------------------------------------------------- text

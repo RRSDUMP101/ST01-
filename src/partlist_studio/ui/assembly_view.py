@@ -468,7 +468,7 @@ class Assembly3DView(QWidget):
         font = QFont(theme.app_font())
         font.setPointSizeF(8.5 * k)
         painter.setFont(font)
-        for axis, color, name in (((1, 0, 0), "#D64545", "X ท้ายรถ"), ((0, 1, 0), "#2E9D5B", "Y ซ้าย"), ((0, 0, 1), "#2F6FD0", "Z")):
+        for axis, color, name in (((1, 0, 0), "#D64545", "X ท้ายรถ"), ((0, 1, 0), "#2E9D5B", "Y ขวา"), ((0, 0, 1), "#2F6FD0", "Z")):
             a = np.array(axis, dtype=float)
             ex, ey = ox + float(a @ r) * 30 * k, oy - float(a @ u) * 30 * k
             painter.setPen(QPen(QColor(color), 2 * k))

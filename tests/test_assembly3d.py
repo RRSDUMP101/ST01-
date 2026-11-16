@@ -275,7 +275,7 @@ def test_view_steps_and_picking(app):
     image = view.render_image(900, 600)
     colors = {image.pixel(x, y) for x in range(0, 900, 30) for y in range(0, 600, 30)}
     assert len(colors) > 8  # something is drawn
-    floor = next(p for p in model.parts if p.name == "แผ่นพื้น ซ้าย")
+    floor = next(p for p in model.parts if p.name == "แผ่นพื้น ขวา")  # the sheet at +Y
     picked = model.part(view.pick(450, 300))
     assert picked is not None and picked.step > 0
     view.set_step(2, animate=False)
@@ -450,7 +450,7 @@ def test_steps_can_be_added_removed_and_moved():
     assert len(model.parts_of_step(1)) == frame + plates + upper and model.problems() == [] and len(model.steps) == 11
     one = a3.AssemblyModel("x", [a3.Part3D("a", "a", "g", step=1)], [a3.Step("เดียว")])
     assert a3.remove_step(one, 1) == {} and len(one.steps) == 1  # the last step stays
-    a3.set_explode(one.parts, "ไปทางขวา (−Y)", 250)
+    a3.set_explode(one.parts, "ไปทางซ้าย (−Y)", 250)
     assert one.parts[0].explode == [0.0, -250.0, 0.0]
 
 
@@ -530,7 +530,7 @@ def test_tab_takes_the_groups_of_the_same_assembly_from_another_file(window, tmp
     iges.save(other)
     assert tab.adopt_levels(str(other))
     message = window.statusBar().currentMessage()
-    assert "ตรงกัน 21 จาก 26 ชิ้น" in message and "ยังไม่ได้จัด 2 ชิ้น" in message, message
+    assert "ตรงกัน 21 จาก 26 ชิ้น" in message and "ยังไม่ได้จัด 3 ชิ้น" in message, message
     part = tab.model.part("s3")  # 'Part015': a name that says nothing, on the designer's level of the lower frame
     assert len(tab.model.steps) == 13 and (part.name, part.group, part.step) == ("Part015 ซ้าย", "โครงตัวล่าง", 1)
     assert part.note == "ชื่อในไฟล์: Part015"

@@ -658,8 +658,8 @@ class AssemblyTab(QWidget):
                                 "ต้องเป็นชุดประกอบเดียวกัน ส่งออกจากไฟล์เดียวกัน พิกัดและหน่วยเดียวกัน")
             return False
         total = len([p for p in self.model.parts if p.group != a3.REF_GROUP])
+        unsorted = len(a3.tray_unsorted(self.model, levels))
         self.use_tray_sequence(ask=False, levels=levels)
-        unsorted = len([p for p in self.model.parts if p.group == a3.UNSORTED_GROUP])
         self.state.notify(f"รับกลุ่มจาก {name}: ตรงกัน {len(levels)} จาก {total} ชิ้น · จัดเข้าลำดับ 13 ขั้นแล้ว"
                           + (f" · ยังไม่ได้จัด {unsorted} ชิ้น (ขั้น 4)" if unsorted else ""))
         return True

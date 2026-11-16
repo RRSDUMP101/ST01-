@@ -1,7 +1,7 @@
 """คู่มือประกอบ 3 มิติ: ชิ้นส่วน (แยกกลุ่ม) → ขั้นตอนประกอบ → ตำแหน่งที่แยกชิ้น (explode) สำหรับสาธิตการประกอบ.
 
-ไม่ใช้ Qt. หน่วย มม. แกน: X = ตามยาวรถ (0 = หน้าตัวถังด้านหลังเก๋ง → ท้ายรถ), Y = ขวาง (0 = กึ่งกลางรถ),
-Z = ขึ้น (0 = หน้าแท่นยึดบนแชสซี).
+ไม่ใช้ Qt. หน่วย มม. แกน: X = ตามยาวรถ (0 = หน้าตัวถังด้านหลังเก๋ง → ท้ายรถ), Y = ขวาง (0 = กึ่งกลางรถ, +Y = ฝั่งขวา
+ของรถเมื่อมองจากท้ายรถไปหน้ารถ, −Y = ฝั่งซ้าย), Z = ขึ้น (0 = หน้าแท่นยึดบนแชสซี).
 
 * `Part3D` – ชิ้นส่วน 1 ชิ้น: รูปทรงพื้นฐาน (กล่อง, เหล็กราง C, เหล็กฉาก, แท่ง/น็อตหลายเหลี่ยม) หรือ mesh ที่นำเข้า
 * `Step` – ขั้นตอนประกอบ 1 ขั้น (ชื่อ วิธีทำ คำเตือน แรงขัน เครื่องมือ จุดตรวจ อ้างอิง BEMM)
@@ -249,7 +249,7 @@ def auto_explode(model: AssemblyModel, factor: float = 0.6, least: float = 150.0
 
 # --------------------------------------------------------------------------- editing the steps
 EXPLODE_DIRECTIONS = {"ขึ้น (+Z)": (0, 0, 1), "ลง (−Z)": (0, 0, -1), "ไปท้ายรถ (+X)": (1, 0, 0), "ไปหน้ารถ (−X)": (-1, 0, 0),
-                      "ไปทางซ้าย (+Y)": (0, 1, 0), "ไปทางขวา (−Y)": (0, -1, 0)}
+                      "ไปทางขวา (+Y)": (0, 1, 0), "ไปทางซ้าย (−Y)": (0, -1, 0)}
 
 
 def insert_step(model: AssemblyModel, at: int, step: Step | None = None) -> dict[int, int]:
@@ -798,7 +798,7 @@ def _subframe(b: _Builder, job, torque: str) -> float:
                 "คานต้องแนบโดยไม่ต้องงัด (ไม่มี pre-load)", check=f"ช่องห่างหลังเก๋ง ≥ 28 มม. (งานนี้ {gap:g} มม.) · "
                 "ระยะทแยงมุมสองแนวเท่ากัน", ref="5.1.4 / 5.6.5", tools="เครน/รอก ตลับเมตร ฉาก")
     for side in (-1, 1):
-        b.add("คานตามยาว " + ("ขวา" if side < 0 else "ซ้าย"), "ซับเฟรม", "channel", (length, 50, 100, 5),
+        b.add("คานตามยาว " + ("ซ้าย" if side < 0 else "ขวา"), "ซับเฟรม", "channel", (length, 50, 100, 5),
               (0, side * rail_y + (25 if side < 0 else -25), 0), explode=(0, 0, 420), size=f"C100×50×5 L={length:g}",
               flip=side < 0)
     # ---- bolts
@@ -831,7 +831,7 @@ def _subframe(b: _Builder, job, torque: str) -> float:
                 check=f"กว้างรวม {width:g} มม. (BEMM ≤ {cab.max_body_width}) · ยาว {length:g} มม.", ref="1.11.1",
                 tools="ปากกาจับ C ตลับเมตร")
     for side in (-1, 1):
-        b.add("คานข้าง " + ("ขวา" if side < 0 else "ซ้าย"), "กรอบพื้น", "box", (length, 50, 75),
+        b.add("คานข้าง " + ("ซ้าย" if side < 0 else "ขวา"), "กรอบพื้น", "box", (length, 50, 75),
               (0, side * (width / 2 - 25) - 25, 100), explode=(0, side * 520, 0), size=f"□75×50 L={length:g}")
     b.add("คานหัว", "กรอบพื้น", "box", (50, cm_len, 75), (0, -cm_len / 2, 100), explode=(-80, 0, 520),
           size=f"□75×50 L={cm_len:g}")
@@ -842,7 +842,7 @@ def _subframe(b: _Builder, job, torque: str) -> float:
                 "ซีลรอยต่อและทุกจุดที่ยึดทะลุพื้น", check="แผ่นพื้นแนบสนิท ไม่กระดก", ref="5.6.3 / 5.5",
                 tools="สว่าน สกรู/รีเวต ซีลแลนต์")
     for side in (-1, 1):
-        b.add("แผ่นพื้น " + ("ขวา" if side < 0 else "ซ้าย"), "พื้น", "box", (length, width / 2, 4),
+        b.add("แผ่นพื้น " + ("ซ้าย" if side < 0 else "ขวา"), "พื้น", "box", (length, width / 2, 4),
               (0, -width / 2 if side < 0 else 0, 175), color=PLATE, explode=(0, side * 150, 600),
               size=f"t4 {width / 2:g}×{length:g}")
     return 179.0
@@ -866,7 +866,7 @@ def _lamps(b: _Builder, job, floor_z: float) -> None:
           explode=(380, 0, 0), size=f"{width - 100:g}×{high - low + 40:g}")
     for side in (-1, 1):
         y = side * (width / 2 - job.lamp_from_edge) - (lamp_w if side > 0 else 0)
-        b.add("ไฟท้ายรวม " + ("ขวา" if side < 0 else "ซ้าย"), "ไฟ & ป้าย", "box", (40, lamp_w, max(60.0, high - low)),
+        b.add("ไฟท้ายรวม " + ("ซ้าย" if side < 0 else "ขวา"), "ไฟ & ป้าย", "box", (40, lamp_w, max(60.0, high - low)),
               (length - 40, y, low), color=LAMP, explode=(450, 0, 0), size="โคม LED")
     b.add("ขายึดป้ายทะเบียน", "ไฟ & ป้าย", "box", (10, 440, 160), (length - 10, -220, min(low, floor_z - 420)),
           color="#F2F4F7", explode=(520, 0, 0), size="440×160")
@@ -882,7 +882,7 @@ def build_tray(job) -> AssemblyModel:
                 "โครงกันหัวต้องไม่แตะเก๋งตลอดช่วงที่แชสซีบิดตัว", check="ช่องห่างหลังเก๋ง ≥ 28 มม. ตลอดความสูง · ตั้งฉากกับพื้น",
                 ref="1.11.3", tools="ฉาก ระดับน้ำ")
     for side in (-1, 1):
-        b.add("เสาโครงกันหัว " + ("ขวา" if side < 0 else "ซ้าย"), "โครงกันหัว", "box", (50, 50, head),
+        b.add("เสาโครงกันหัว " + ("ซ้าย" if side < 0 else "ขวา"), "โครงกันหัว", "box", (50, 50, head),
               (0, side * (width / 2 - 25) - 25, z), explode=(0, side * 200, 650), size=f"□50×50 L={head:g}")
     b.add("คานบนโครงกันหัว", "โครงกันหัว", "box", (50, width - 100, 50), (0, -(width - 100) / 2, z + head - 50),
           explode=(0, 0, 850), size=f"□50×50 L={width - 100:g}")
@@ -892,7 +892,7 @@ def build_tray(job) -> AssemblyModel:
     b.next_step("ติดตั้งฝาข้างและฝาท้าย", "ยึดบานพับกับกรอบพื้น แขวนฝาข้างซ้าย–ขวาและฝาท้าย ปรับกลอนให้ล็อกสนิททุกจุด "
                 "เปิด–ปิดทดสอบ", check="ฝาปิดสนิท กลอนล็อกครบ ช่องไฟเท่ากัน", tools="ประแจ สว่าน")
     for side in (-1, 1):
-        b.add("ฝาข้าง " + ("ขวา" if side < 0 else "ซ้าย"), "ฝาข้าง", "box", (length - 70, 20, gate),
+        b.add("ฝาข้าง " + ("ซ้าย" if side < 0 else "ขวา"), "ฝาข้าง", "box", (length - 70, 20, gate),
               (50, side * (width / 2 - 10) - 10, z), color=PLATE, explode=(0, side * 600, 0),
               size=f"{length - 70:g}×{gate:g}")
     b.add("ฝาท้าย", "ฝาท้าย", "box", (20, width - 40, gate), (length - 20, -(width - 40) / 2, z), color=PLATE,
@@ -917,7 +917,7 @@ def build_box(job) -> AssemblyModel:
     b.next_step("ตั้งผนังข้างซ้าย–ขวา", "ตั้งผนังข้างชนผนังหน้า ยึดกับกรอบพื้นตลอดความยาว ตรวจระยะทแยงมุมของหน้าตัดตู้",
                 check=f"กว้างนอก {width:g} มม. · ทแยงมุมเท่ากัน", ref="5.1.1")
     for side in (-1, 1):
-        b.add("ผนังข้าง " + ("ขวา" if side < 0 else "ซ้าย"), "ผนังตู้", "box", (length - 30, 30, wall),
+        b.add("ผนังข้าง " + ("ซ้าย" if side < 0 else "ขวา"), "ผนังตู้", "box", (length - 30, 30, wall),
               (30, side * (width / 2 - 15) - 15, z), color=PLATE, explode=(0, side * 800, 0), size=f"{length - 30:g}×{wall:g}")
     b.next_step("ปิดหลังคา", "วางหลังคาบนผนังทั้งสามด้าน ยึดและซีลรอยต่อทั้งหมด", check="ซีลรอยต่อครบ ไม่รั่ว",
                 ref="5.5", warning=f"ความสูงตัวถังเหนือแชสซี ≤ 2400 มม. (งานนี้ {top:g})")
@@ -926,7 +926,7 @@ def build_box(job) -> AssemblyModel:
     b.next_step("ติดตั้งประตูท้าย", "แขวนบานประตูซ้าย–ขวา ปรับบานพับและกลอนก้านยาวให้ปิดสนิท ติดยางขอบ",
                 check="ประตูปิดสนิท กลอนล็อกครบ")
     for side in (-1, 1):
-        b.add("ประตูท้าย " + ("ขวา" if side < 0 else "ซ้าย"), "ประตู", "box", (30, width / 2 - 30, wall - 30),
+        b.add("ประตูท้าย " + ("ซ้าย" if side < 0 else "ขวา"), "ประตู", "box", (30, width / 2 - 30, wall - 30),
               (length - 30, -width / 2 + 30 if side < 0 else 0, z), color=PLATE, explode=(700, side * 300, 0),
               size=f"{width / 2 - 30:g}×{wall - 30:g}")
     _lamps(b, job, z)

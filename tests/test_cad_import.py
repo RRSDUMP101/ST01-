@@ -361,8 +361,8 @@ def test_iges_names_colours_levels(tmp_path):
 
 def test_unnamed_parts_on_levels_are_grouped_by_level(tmp_path):
     d = _Doc()
-    for i in range(3):
-        d.part(_box(200 * i, 0, 0, 100, 50, 20), layer="12" if i < 2 else "30")
+    for i in range(3):  # (OpenCascade's XDE reader keeps the level only of what also has a colour)
+        d.part(_box(200 * i, 0, 0, 100, 50, 20), colour=(0.5, 0.5, 0.5), layer="12" if i < 2 else "30")
     model = ci.read_cad(d.write_iges(tmp_path / "levels.igs"))
     _check(model)
     assert [p.group for p in model.parts] == ["เลเยอร์ 12", "เลเยอร์ 12", "เลเยอร์ 30"]
@@ -393,7 +393,7 @@ def test_loose_surfaces_do_not_become_thousands_of_parts(tmp_path, monkeypatch):
     # 3. … and when that still leaves too many: by IGES level, else by colour
     monkeypatch.setattr(ci, "LOOSE_MAX", 2)
     monkeypatch.setattr(ci, "LINK_GRID", 0.01)  # nothing links
-    model = ci.read_cad(_gapped(tmp_path, 0.45, lambda i: {"layer": "5" if i < 3 else "8"}))
+    model = ci.read_cad(_gapped(tmp_path, 0.45, lambda i: {"layer": "5" if i < 3 else "8", "colour": (0, 1, 0)}))
     _check(model)
     assert len(model.parts) == 2 and "รวมผิวตาม level ของ IGES 30 ผิว เป็น 2 ชิ้น" in model.note
     assert sorted(len(p.mesh) for p in model.parts) == [24, 36] and model.groups() == ["เลเยอร์ 5", "เลเยอร์ 8"]
@@ -412,8 +412,8 @@ def test_loose_surfaces_do_not_become_thousands_of_parts(tmp_path, monkeypatch):
 # --------------------------------------------------------------------------- units
 def test_inch_and_metre_files_come_out_in_mm(tmp_path):
     inch, report = ci.read_cad_report(_write_iges(tmp_path / "inch.igs", _four_shapes(), unit="IN"))
-    assert " 1HG" not in "" and report.unit == "นิ้ว" and "หน่วยในไฟล์: นิ้ว → มม." in inch.note
-    assert "2HIN" in (tmp_path / "inch.igs").read_text("latin-1")[:800]  # the file really is in inches: 100 mm is 3.937 there
+    assert report.unit == "นิ้ว" and "หน่วยในไฟล์: นิ้ว → มม." in inch.note
+    assert ",1,4HINCH," in (tmp_path / "inch.igs").read_text("latin-1")[:800].replace("\n", "")  # the file really is in inches
     by_name = {p.name: p for p in inch.parts}
     assert all(_close(by_name[f"ชิ้นที่ {n}"].bounds(), box) for n, box in enumerate(SHAPES, 1))
     surfaces = ci.read_cad(_write_iges(tmp_path / "inch_s.igs", [f for s in _four_shapes() for f in _faces(s)], solids=False, unit="IN"))
@@ -435,19 +435,25 @@ def _spheres(tmp_path, count=60) -> Path:
 
 def test_face_budget_meshes_coarser_then_boxes_the_smallest_and_drops_nothing(tmp_path):
     path = _spheres(tmp_path)
-    fine, report = ci.read_cad_report(path)
-    _check(fine)
-    assert len(fine.parts) == 60 and report.level == 0 and report.boxed == 0 and report.triangles > 30000
-    # 1. a smaller budget: the same parts, a coarser mesh, still spheres
-    model, report = ci.read_cad_report(path, max_faces=8000)
-    _check(model, 8000)
-    assert len(model.parts) == 60 and 0 < report.level and report.boxed == 0 and report.triangles <= 8000
-    assert all(p.shape == "mesh" and p.cull and len(p.mesh) >= 40 for p in model.parts) and f"ระดับ {report.level + 1}/4" in model.note
-    ball = min(model.parts, key=lambda p: p.bounds()[1][2])  # the smallest: still within 12 % of a sphere of 10 mm
+    fine, report = ci.read_cad_report(path, max_faces=10 ** 6)
+    _check(fine, 10 ** 6)
+    assert len(fine.parts) == 60 and report.level == 0 and report.boxed == 0 and report.triangles > 60000
+    # 1. the budget of the program: the same parts, a coarser mesh - and the room that is left goes to the biggest
+    model, report = ci.read_cad_report(path)
+    _check(model)
+    assert len(model.parts) == 60 and report.level == 1 and report.boxed == 0 and 40000 < report.triangles <= 60000
+    assert "ระดับ 2/4" in model.note and "ละเอียดขึ้นหนึ่งระดับ" in model.note
+    sizes = sorted((p.bounds()[1][2], len(p.mesh)) for p in model.parts)
+    assert sizes[-1][1] > 3 * sizes[0][1]  # the big sphere has the finer mesh, the small one the coarser
+    # 2. a small budget: the coarsest mesh there is - still spheres, not blobs
+    model, report = ci.read_cad_report(path, max_faces=4500)
+    _check(model, 4500)
+    assert len(model.parts) == 60 and report.level == 3 and report.boxed == 0 and report.triangles <= 4500
+    assert all(p.shape == "mesh" and p.cull and len(p.mesh) >= 40 for p in model.parts) and "ระดับ 4/4 (หยาบสุด)" in model.note
+    ball = min(model.parts, key=lambda p: p.bounds()[1][2])  # the smallest, 10 mm: its size kept, most of its volume
     assert 0.6 < _volume(ball) / (4 / 3 * 3.14159 * 1000) <= 1.0 and _close(ball.bounds(), ((-10, -10, -10), (10, 10, 10)), 1.5)
-    # 2. under what the coarsest mesh needs: the smallest are shown as their boxes, and the note says how many
-    coarsest = ci.read_cad_report(path, max_faces=4000)[1].triangles
-    budget = coarsest // 2
+    # 3. under what the coarsest mesh needs: the smallest are shown as their boxes, and the note says how many
+    budget = report.triangles // 2
     model, report = ci.read_cad_report(path, max_faces=budget)
     _check(model, budget)
     boxes = [p for p in model.parts if p.shape == "box"]
@@ -456,7 +462,7 @@ def test_face_budget_meshes_coarser_then_boxes_the_smallest_and_drops_nothing(tm
     assert max(p.dims[0] for p in boxes) < min(p.bounds()[1][0] - p.bounds()[0][0] for p in model.parts if p.shape == "mesh")
     assert all(abs(p.dims[0] - p.dims[1]) < 2 and 19 < p.dims[0] < 140 for p in boxes)  # where the sphere was, as big as it was
     assert sorted(p.name for p in model.parts) == sorted(p.name for p in fine.parts)  # nothing dropped
-    # 3. a budget that not even boxes fit in: refused with the number to ask for, not a model with parts missing
+    # 4. a budget that not even boxes fit in: refused with the number to ask for, not a model with parts missing
     with pytest.raises(ci.CadImportError, match="60 ชิ้น.*720 หน้า"):
         ci.read_cad(path, max_faces=500)
 
@@ -543,7 +549,8 @@ def test_core_imports_and_runs_without_ocp(tmp_path):
     env = dict(os.environ, PYTHONPATH=str(ROOT / "src"))
     done = subprocess.run([sys.executable, "-c", code, str(path)], capture_output=True, text=True, env=env, cwd=str(tmp_path))
     assert done.returncode == 0 and done.stdout.strip() == "fine", done.stderr
-    assert "OCP" not in Path(ci.__file__).read_text("utf-8").split("def _occ")[0].replace("โมดูล OCP", "")  # no import at the top
+    source = Path(ci.__file__).read_text("utf-8").splitlines()
+    assert not [line for line in source if line.startswith(("import OCP", "from OCP"))]  # only inside the functions
 
 
 def test_isolated_reader_gives_the_same_model_and_survives_a_crash(tmp_path, monkeypatch):
@@ -571,7 +578,7 @@ def test_command_line_tool(tmp_path):
     assert len(model.parts) == 9 and a3.face_count(model) <= 300
     for word in ("9 ชิ้น ใน 2 กลุ่ม", "งบ 300", "มม. → โมเดลเป็น มม.", "2,600 × 1,800 × 330", "โครงสร้างชุดประกอบ", "วินาที", "MB", "tray.rrsasm"):
         assert word in done.stdout, word
-    assert "อ่านไฟล์" in done.stderr and "100%" in done.stderr and "อ่านไฟล์" not in done.stdout  # progress apart from the summary
+    assert "1%  อ่านไฟล์" in done.stderr and "100%" in done.stderr and "%  " not in done.stdout  # progress apart from the summary
     (tmp_path / "bad.igs").write_bytes(b"junk")
     done = subprocess.run([*tool, str(tmp_path / "bad.igs"), str(tmp_path / "bad.rrsasm")], capture_output=True, text=True, encoding="utf-8")
     assert done.returncode == 1 and "นำเข้าไม่ได้" in done.stderr and not (tmp_path / "bad.rrsasm").exists()
@@ -595,10 +602,10 @@ def test_a_closed_imported_box_shows_three_faces_not_six(app, tmp_path):
     view = Assembly3DView()
     view.resize(600, 400)
     view.set_model(model)
-    for name in ("iso", "iso2", "top", "side"):
+    for name, faces in (("iso", 3), ("iso2", 3), ("side", 1), ("top", 2)):  # 'top' looks down 89.9°: the top and a sliver
         view.set_view(name)
         view.render_image(600, 400)
-        assert len(view._drawn) == (2 if name == "side" else 6), name  # three faces towards the camera (side on: one)
+        assert len(view._drawn) == 2 * faces, name  # only the faces towards the camera, two triangles each
         assert view.pick(300, 200) == part.id
     # the faces that are drawn are the near ones: the top (z = 100), never the bottom
     view.set_view("iso")

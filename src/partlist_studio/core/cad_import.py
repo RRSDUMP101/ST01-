@@ -822,18 +822,18 @@ class _Import:
             form.no = number
         self.report.faces_in_file = sum(f.faces for f in self.forms.values() if f.uses)
 
-    def _mesh(self, level: int, clean: bool) -> int:
-        """Meshes every form at a level; forms of about one size go in together, so that the faces of all of
-        them are spread over the processors. Returns the triangles of the whole model."""
+    def _mesh(self, level: int, clean: bool, only: list | None = None) -> int:
+        """Meshes every form (or `only` some) at a level; forms of about one size go in together, so that the
+        faces of all of them are spread over the processors. Returns the triangles of the whole model."""
         o = self.o
         share, most, angle = LEVELS[level]
         batches: dict[float, list[_Shape]] = {}
-        for form in self.forms.values():
-            if form.uses:
-                deflection = min(max(share * form.diag, MIN_DEFLECTION), most)
-                step = 10 ** math.floor(math.log10(deflection))
-                deflection = max(m for m in (1, 2, 5) if m * step <= deflection * 1.0001) * step
-                batches.setdefault(deflection, []).append(form)
+        chosen = [f for f in self.forms.values() if f.uses] if only is None else only
+        for form in chosen:
+            deflection = min(max(share * form.diag, MIN_DEFLECTION), most)
+            step = 10 ** math.floor(math.log10(deflection))
+            deflection = max(m for m in (1, 2, 5) if m * step <= deflection * 1.0001) * step
+            batches.setdefault(deflection, []).append(form)
         done, count = 0, sum(len(b) for b in batches.values())
         for deflection, forms in sorted(batches.items()):
             compound = o.TopoDS_Compound()
@@ -846,16 +846,13 @@ class _Import:
             o.BRepMesh_IncrementalMesh(compound, deflection, False, angle, True)
             done += len(forms)
             self.say(f"สร้างตาข่าย (ระดับ {level + 1}/{len(LEVELS)})", 0.78 + 0.04 * level + 0.04 * done / count)
-        total = 0
         still = o.TopLoc_Location()
-        for form in self.forms.values():
-            if form.uses:
-                form.count = 0
-                for f in _explore(o, form.shape, o.TopAbs_FACE):
-                    tri = o.BRep_Tool.Triangulation_s(o.face(f), still)
-                    form.count += tri.NbTriangles() if tri is not None else 0
-                total += form.count * form.uses
-        return total
+        for form in chosen:
+            form.count = 0
+            for f in _explore(o, form.shape, o.TopAbs_FACE):
+                tri = o.BRep_Tool.Triangulation_s(o.face(f), still)
+                form.count += tri.NbTriangles() if tri is not None else 0
+        return sum(f.count * f.uses for f in self.forms.values())
 
     def mesh(self) -> None:
         self.say(f"สร้างตาข่าย (ระดับ 1/{len(LEVELS)})", 0.78)
@@ -863,21 +860,32 @@ class _Import:
         instances = sum(f.faces * f.uses for f in self.forms.values())
         # two triangles a face is the least there can be: when even that is over the budget, only the floor is tried
         level = last if 2 * instances > self.max_faces else 0
-        clean = False
+        clean, finer = False, None
         while True:
             total = self._mesh(level, clean)
             if total <= self.max_faces or level == last:
                 break
+            finer = {key: form.count for key, form in self.forms.items()}  # what the level that was too much cost
             level, clean = level + 1, True
         self.report.level = level
+        better = []
         if total > self.max_faces:
             total = self._box_small(total)
+        elif finer:  # room is left: the biggest parts, which fill the picture, get the finer mesh back
+            spare = self.max_faces - total
+            for form in sorted((f for f in self.forms.values() if f.uses), key=lambda f: -f.diag):
+                extra = (finer[form.key] - form.count) * form.uses
+                if 0 < extra <= spare:
+                    better.append(form)
+                    spare -= extra
+            if better:
+                self._mesh(level - 1, True, better)
         self.say("เก็บตาข่าย", 0.94)
         for form in self.forms.values():
             if form.uses:
                 self._triangles(form)
-        text = f"ตาข่ายระดับ {level + 1}/{len(LEVELS)}"
-        self.notes.append(text + (" (หยาบสุด)" if level == last and last else ""))
+        text = f"ตาข่ายระดับ {level + 1}/{len(LEVELS)}" + (" (หยาบสุด)" if level == last else "")
+        self.notes.append(text + (f" ชิ้นใหญ่ {len(better):,} แบบละเอียดขึ้นหนึ่งระดับ" if better else ""))
 
     def _box_small(self, total: int) -> int:
         """Still over the budget at the coarsest mesh: the smallest parts become their bounding boxes."""

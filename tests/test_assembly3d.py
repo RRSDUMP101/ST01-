@@ -230,3 +230,37 @@ def test_assembly_tab(window, tmp_path):
     assert tab.parts.item(0, 0).checkState() == Qt.Checked
     tab.parts.item(0, 0).setCheckState(Qt.Unchecked)
     assert model.parts[0].id in tab.view.hidden_parts
+
+
+def test_imported_mesh_is_filled_and_picked(app):
+    """A thin plate seen from above: its top and bottom triangles overlap on the screen and turn opposite ways. Drawn
+    as one path they must not cancel each other (the floor of the real tray once showed as a hole)."""
+    import numpy as np
+
+    from partlist_studio.ui.assembly_view import Assembly3DView, triangles_path
+
+    from PySide6.QtCore import QPointF
+
+    twice = triangles_path(np.array([[[0, 0], [10, 0], [0, 10]], [[0, 0], [10, 0], [0, 10]]], dtype=float))
+    assert twice.elementCount() == 8 and twice.contains(QPointF(2, 2))  # one over the other: still filled
+    opposite = triangles_path(np.array([[[0, 0], [10, 0], [0, 10]], [[0, 0], [0, 10], [10, 0]]], dtype=float))
+    assert not opposite.contains(QPointF(2, 2))  # why the view turns them all the same way first
+    top = [[0, 0, 2], [1000, 0, 2], [1000, 800, 2]], [[0, 0, 2], [1000, 800, 2], [0, 800, 2]]
+    bottom = [[0, 0, 0], [1000, 800, 0], [1000, 0, 0]], [[0, 0, 0], [0, 800, 0], [1000, 800, 0]]
+    quad = [[0, 0, 0], [1000, 0, 0], [1000, 0, 2], [0, 0, 2]]  # a face with 4 corners: drawn as 2 triangles
+    plate = a3.Part3D("m1", "แผ่นพื้น", "พื้น", "mesh", mesh=[*top, *bottom, quad], color="#A0A0A0", step=1)
+    model = a3.AssemblyModel("plate", [plate], [a3.Step("พื้น")], source="file")
+    view = Assembly3DView()
+    view.resize(600, 400)
+    view.set_model(model)
+    assert view._meshes["m1"].faces == 6
+    for moving in (False, True):
+        view._moving = moving
+        image = view.render_image(600, 400)
+        r, g, b = image.pixelColor(300, 200).getRgb()[:3]
+        assert abs(r - g) < 6 and abs(g - b) < 6 and 60 < r < 200, (moving, r, g, b)  # grey steel, not the background
+    view._moving = False
+    assert view.pick(300, 200) == "m1" and view.pick(5, 5) == ""
+    view.selected = "m1"  # a selected mesh is tinted (it has no outline to thicken)
+    r, g, b = view.render_image(600, 400).pixelColor(300, 200).getRgb()[:3]
+    assert r > b + 15

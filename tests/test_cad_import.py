@@ -940,20 +940,20 @@ def test_a_closed_imported_box_shows_three_faces_not_six(app, tmp_path):
     for name, faces in (("iso", 3), ("iso2", 3), ("side", 1), ("top", 2)):  # 'top' looks down 89.9°: the top and a sliver
         view.set_view(name)
         view.render_image(600, 400)
-        assert len(view._drawn) == 2 * faces, name  # only the faces towards the camera, two triangles each
+        assert len(view.drawn_faces()) == 2 * faces, name  # only the faces towards the camera, two triangles each
         assert view.pick(300, 200) == part.id
     # the faces that are drawn are the near ones: the top (z = 100), never the bottom
     view.set_view("iso")
     view.render_image(600, 400)
     r, u, _d = view._basis()
-    drawn = {(round(x), round(y)) for pts, _id in view._drawn for x, y in pts}
+    drawn = {(round(x), round(y)) for pts, _id in view.drawn_faces() for x, y in pts}
     corner = lambda x, y, z: (round(float((np.array([x, y, z]) - view.target) @ r) * view.zoom * 600 / max(view.width(), 1) + 300),  # noqa: E731
                               round(200 - float((np.array([x, y, z]) - view.target) @ u) * view.zoom * 600 / max(view.width(), 1)))
     assert corner(0, 0, 100) in drawn and corner(300, 200, 100) in drawn
     part.cull = False  # as an OBJ / STL comes in: both sides of every face, the far ones painted over
     view.set_model(model)
     view.render_image(600, 400)
-    assert len(view._drawn) == 12
+    assert len(view.drawn_faces()) == 12
     # files saved before there was such a thing still open, and draw as before
     old = model.to_dict()
     for p in old["parts"]:

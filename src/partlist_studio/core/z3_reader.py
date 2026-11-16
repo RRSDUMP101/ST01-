@@ -558,12 +558,15 @@ def _read_container(mm, base: int, end: int, tag: str = "") -> _Container:
 
 def _decode(raw: bytes, code_page: str) -> str:
     """Names are in the Windows code page of the author's computer, but some (layer names that came from a .zwlyr
-    file) are UTF-8. Thai text in cp874 is practically never valid UTF-8, so UTF-8 is tried first."""
+    file) are UTF-8. A code-page name can happen to be valid UTF-8 too (cp874 'แกน' reads as one Mongolian letter),
+    so UTF-8 is taken only when it gives nothing but ASCII and Thai letters."""
     if not raw.isascii():
         try:
-            return raw.decode("utf-8")
+            text = raw.decode("utf-8")
         except UnicodeDecodeError:
-            pass
+            text = ""
+        if text and all(c.isascii() or "\u0e00" <= c <= "\u0e7f" for c in text):
+            return text
     return raw.decode(code_page, "replace")
 
 
@@ -838,6 +841,20 @@ class Bom:
     def total_parts(self) -> int:
         return sum(line.qty for line in self.flat)
 
+    def by_file(self) -> list[tuple[str, int, int]]:
+        """(file, lines, pieces) per file that defines the parts - '' is the file listed. A body drawn on its
+        vehicle counts the whole vehicle too; this shows how much of the list is the body itself."""
+        table: dict[str, list[int]] = {}
+        for line in self.flat:
+            row = table.setdefault(line.file, [0, 0])
+            row[0] += 1
+            row[1] += line.qty
+        return [(name, n, q) for name, (n, q) in sorted(table.items(), key=lambda kv: (kv[0] != "", -kv[1][1]))]
+
+    def own(self) -> list[BomLine]:
+        """The parts defined in the file listed (not those that come with a referenced file)."""
+        return [line for line in self.flat if not line.file]
+
 
 class Z3Library:
     """Reads the files that assemblies refer to, once each. A file is looked for next to the file that names it,
@@ -908,11 +925,14 @@ def top_candidates(z3: Z3File) -> list[Z3Object]:
 
 
 def find_top(z3: Z3File) -> Z3Object | None:
-    """The top assembly: used by nothing in the file, and of those the one with the most parts under it (ties: the
-    one with more component rows, then the older one). None when the file holds no 3D object."""
+    """The top assembly: used by nothing in the file. Of those, the one named like the file (ZW3D names the first
+    object after the file, and other files refer to it by that name); else the one with the most parts under it
+    (ties: more component rows, then the older one). None when the file holds no 3D object."""
     free = top_candidates(z3)
     if free:
-        return free[0]
+        stem = _fold(z3.path.stem)
+        named = [o for o in free if _fold(o.name) == stem and o.components]
+        return named[0] if named else free[0]
     solids = [o for o in z3.objects if o.kind in ("part", "assembly")]
     return solids[0] if solids else None  # every object is used by another: a loop; start anywhere
 
@@ -996,6 +1016,9 @@ def bom(z3: Z3File, root: Z3Object | str | None = None, resolve: bool = True, li
     out.flat = sorted(flat.values(), key=lambda line: (_fold(line.file), _fold(line.name)))
     out.assemblies = sorted(subs.values(), key=lambda line: (_fold(line.file), _fold(line.name)))
     out.missing_files = list(missing)
+    lost = [line for line in out.flat if line.note.startswith("ไม่พบวัตถุชื่อนี้")]
+    if lost:  # the data area has no checksum: a name damaged on disk shows up only as a target that is not there
+        out.warnings.append(f"มี {len(lost)} รายการที่ชุดประกอบอ้างถึงแต่ไม่พบวัตถุชื่อนั้น – ไฟล์อาจเสียหายบางส่วนหรือชื่อถูกเปลี่ยน")
     out.unused = [o for o in top_candidates(z3) if o.root_id != top.root_id]
     return out
 

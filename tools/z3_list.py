@@ -119,6 +119,12 @@ def _describe(f: z3.Z3File, b: z3.Bom | None, args) -> None:
         return
     kind = "ชุดประกอบบนสุด" if b.root.kind == "assembly" else "ชิ้นส่วนเดี่ยว"
     print(f"  {kind}: {b.root.name}   ลึก {b.depth} ชั้น   ชิ้นส่วน {len(b.flat)} รายการ รวม {b.total_parts} ชิ้น")
+    split = b.by_file()
+    if len(split) > 1:
+        print("  แยกตามไฟล์ที่กำหนดชิ้นส่วน (ชิ้นส่วนที่มากับไฟล์อื่น เช่น แชสซีรถ ถูกนับรวมด้วย):")
+        for name, lines, pieces in split:
+            print(f"    {name or 'ไฟล์นี้เอง':<44} {lines:>5} รายการ {pieces:>6} ชิ้น")
+    print("  หมายเหตุ: ชิ้นที่ถูกซ่อนหรือระงับ (suppress) ใน ZW3D แยกไม่ได้ จึงถูกนับรวมด้วย")
     if b.missing_files:
         print(f"  ไฟล์ที่อ้างถึงแต่ไม่พบในโฟลเดอร์ ({len(b.missing_files)}): " + ", ".join(b.missing_files))
     if b.unused:
@@ -215,6 +221,8 @@ def main(argv: list[str] | None = None) -> int:
             head = ["รหัสวัตถุ", "ชนิด", "ชื่อ", "รายการชิ้นส่วนย่อย", "จำนวนชิ้นส่วนย่อย", "หมายเหตุ"]
             _write_csv(folder / "objects.csv", head, _object_rows(f, b))
             _write_csv(folder / "bom.csv", BOM_HEAD, _bom_rows(b) if b else [])
+            own = [[i + 1, x.name, x.qty, x.file, x.note] for i, x in enumerate(b.own())] if b else []
+            _write_csv(folder / "bom_this_file.csv", BOM_HEAD, own)  # the body itself, without vehicle and trailer
             (folder / "tree.txt").write_text(_tree_text(f, b), encoding="utf-8")
             if f.preview_png:
                 (folder / "preview.png").write_bytes(f.preview_png)

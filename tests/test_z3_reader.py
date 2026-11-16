@@ -655,6 +655,45 @@ def test_references_to_other_files_are_followed_and_missing_ones_reported(main_f
     assert lamp.kind == "assembly" and [(c.name, c.total) for c in lamp.children] == [("ฝาครอบ", 1), ("หลอดไฟ", 2)]
 
 
+def test_code_page_names_that_are_valid_utf8_stay_thai(tmp_path):
+    # cp874 'แกน' is the bytes E1 A1 B9 = one Mongolian letter in UTF-8; 'ลด' is C5 B4 = 'Ŵ'. Both are real part names.
+    b = Z3Builder()
+    top = b.obj3d("ชุดแกน")
+    b.obj3d("แกน")
+    b.obj3d("ford 1-3  ลด 40")
+    b.component(top, "แกน", n=2)
+    b.component(top, "ford 1-3  ลด 40")
+    f = z3.read_z3(write(tmp_path, b.build()))
+    assert [o.name for o in f.objects] == ["ชุดแกน", "แกน", "ford 1-3  ลด 40"]
+    assert sorted((x.name, x.qty) for x in z3.bom(f).flat) == [("ford 1-3  ลด 40", 1), ("แกน", 2)]
+    assert z3._decode("มือจับ".encode(), "cp874") == "มือจับ"  # real UTF-8 Thai is still taken as UTF-8
+    assert z3._decode("é".encode(), "cp874") != "é"  # UTF-8 that is not Thai: read in the code page
+
+
+def test_top_assembly_is_the_one_named_like_the_file(tmp_path):
+    # a file keeps an old big assembly nobody uses beside the one other files refer to by the file's name
+    b = Z3Builder()
+    old = b.obj3d("แบบเก่า")
+    for n in range(4):
+        b.obj3d(f"ชิ้น{n}")
+        b.component(old, f"ชิ้น{n}")
+    new = b.obj3d("โครงรถ")
+    b.component(new, "ชิ้น0")
+    f = z3.read_z3(write(tmp_path, b.build(), "โครงรถ.Z3"))
+    assert z3.find_top(f).name == "โครงรถ" and [o.name for o in z3.bom(f).unused] == ["แบบเก่า"]
+    assert z3.find_top(z3.read_z3(write(tmp_path, b.build(), "อื่น.Z3"))).name == "แบบเก่า"  # no such name: the biggest
+
+
+def test_bom_split_by_the_file_that_defines_the_parts(tmp_path):
+    (tmp_path / "สลัก.Z3PRT").write_bytes(pin_file())
+    (tmp_path / "ชุดไฟ.Z3").write_bytes(lamp_file())
+    b = z3.bom(z3.read_z3(write(tmp_path, model().build())))
+    split = dict((name, (lines, pieces)) for name, lines, pieces in b.by_file())
+    assert split[""] == (len(b.own()), sum(x.qty for x in b.own())) and split["สลัก.Z3PRT"] == (1, 2)
+    assert sum(q for _n, q in split.values()) == b.total_parts and b.by_file()[0][0] == ""
+    assert all(not x.file for x in b.own()) and len(b.own()) < len(b.flat)
+
+
 def test_referenced_file_is_also_found_one_folder_up(tmp_path):
     (tmp_path / "งาน").mkdir()
     (tmp_path / "สลัก.Z3PRT").write_bytes(pin_file())  # shared part kept above the folder of this body
@@ -673,7 +712,8 @@ def test_referenced_file_that_is_damaged_or_lacks_the_object(main_file, tmp_path
     kinds = {n.name: (n.kind, n.note) for n in b.root.children if n.file}
     assert kinds["สลัก"] == ("bad_file", "ไฟล์เสียหายหรือยังไม่รองรับ")
     assert kinds["โคมไฟท้าย"] == ("missing_object", "ไม่พบวัตถุชื่อนี้ในไฟล์ที่อ้างถึง")
-    assert len(b.warnings) == 1 and "สลัก.Z3PRT" in b.warnings[0] and b.missing_files == []
+    assert len(b.warnings) == 2 and "สลัก.Z3PRT" in b.warnings[0] and b.missing_files == []
+    assert "มี 1 รายการ" in b.warnings[1] and "ไม่พบวัตถุ" in b.warnings[1]  # a target that is not there is said aloud
 
 
 def test_component_naming_its_own_file_and_a_missing_local_object(tmp_path):
@@ -748,7 +788,10 @@ def test_tool_lists_one_file(tool, main_file, tmp_path, capsys):
         "note": "",
     }
     folder = out_dir / "z3" / main_file.name
-    assert sorted(p.name for p in folder.iterdir()) == ["bom.csv", "objects.csv", "preview.png", "tree.txt"]
+    assert sorted(p.name for p in folder.iterdir()) == ["bom.csv", "bom_this_file.csv", "objects.csv", "preview.png",
+                                                        "tree.txt"]
+    own = (folder / "bom_this_file.csv").read_text(encoding="utf-8-sig").splitlines()
+    assert len(own) <= len((folder / "bom.csv").read_text(encoding="utf-8-sig").splitlines())  # without other files' parts
     objects = list(csv.reader(io.StringIO((folder / "objects.csv").read_text(encoding="utf-8-sig"))))
     assert objects[0][:3] == ["รหัสวัตถุ", "ชนิด", "ชื่อ"]
     assert objects[1] == ["54", "ชุดประกอบ", "งานประกอบ ทดสอบ", "6", "11", "ชุดประกอบบนสุด"]

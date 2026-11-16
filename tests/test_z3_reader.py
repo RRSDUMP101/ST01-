@@ -10,6 +10,10 @@ previous) and the extra bytes after the fields; everything in the root record of
 integers of a component record other than the fourth (the owner); the body of a 2D drawing and of the HQR backup
 entries; the codes that pad the last control word of a packed record. The reader was checked on the real files by
 hand (every file passes its checks, object names equal the STEP product names); these tests pin the behaviour.
+
+`Z3Builder32` writes the same records into the container of format 3200 (one segment per object, zstd indexes).
+Stand-ins there: the unused and hash-like bytes of the headers, the GUIDs, the flags block, the side stream with
+its table, the GUID block and the partitions of the geometry kernel - the reader checks only where they lie.
 """
 
 import csv
@@ -19,6 +23,7 @@ import io
 import json
 import random
 import struct
+import sys
 import time
 import zlib
 from pathlib import Path
@@ -112,6 +117,8 @@ def bmp24(width: int, height: int, pixel) -> bytes:
 
 
 class Z3Builder:
+    platform = "ZWSOFT,V1,WindowsNT,6.2,686,7,874,0,0"
+
     def __init__(self, fmt: int = 3000, build: str = "ZWSim,6.0,0123456789ab", author: str = "TESTER"):
         self.fmt, self.build_id, self.author = fmt, build, author
         self.roots: list[tuple[bytes, int]] = []
@@ -184,7 +191,7 @@ class Z3Builder:
         lines = [
             "Z3",
             f"@,{self.author},Mon Nov 16 09:30:05 2026,1794821405 Z3({self.build_id})",
-            "ZWSOFT,V1,WindowsNT,6.2,686,7,874,0,0",
+            self.platform,
             f"{self.fmt},0,,0,8,101010:0123456789a,@202020:ba9876543210" + (f",HQR={hqr}" if hqr is not None else ""),
         ]
         out = b"".join(line.encode(CP).ljust(127, b"*") + b"\n" for line in lines)
@@ -216,9 +223,109 @@ class Z3Builder:
         return self.text(0x300 + len(body) if hqr is not None else None) + body + (hqr or b"")
 
 
-def model() -> Z3Builder:
+class Z3Builder32(Z3Builder):
+    """Format 3200: every object has a segment of its own and the directory names them in full."""
+
+    platform = "ZWSOFT,V2,WindowsNT,6.2,686,8,874,0,0,0,0"
+
+    def __init__(self):
+        super().__init__(fmt=3200, build="ZWSim,7.0,0123456789ab")
+        self.default = self.cell = [0]  # a cell holds the root id of the object whose segment gets the new records
+        self.home: dict[int, list] = {}  # record id -> cell
+        self.cells: dict[int, list] = {}  # root id -> cell
+        self.names: dict[int, bytes] = {}  # root id -> name in the directory and in the segment header
+        self.header_names: dict[int, bytes] = {}  # ... a segment header that says something else
+        self.wrong_size_at: int | None = None  # this record's index entry is one byte too long
+        self.ragged_index = False  # the indexes are not a whole number of entries
+        self.record(z3.CLS_TABLE, struct.pack("<I28xI", 1, 1).ljust(396, b"\0"), 0x62, rid=0)  # always empty now
+        self.record(z3.CLS_STRING, "ทดสอบ.Z3".encode(CP) + b"\0", 0x7C, rid=2)
+        self.record(18, struct.pack("<II", 2, 1), 0x01, rid=3)
+
+    def record(self, cls: int, data: bytes, kind: int, rid: int | None = None) -> int:
+        rid = super().record(cls, data, kind, rid)
+        self.home[rid] = self.cell
+        return rid
+
+    def _own_segment(self, make, name: str) -> int:
+        self.cell = [None]  # the name of a long-named object is written before its root record has an id
+        rid = make()
+        self.cell[0], self.cells[rid], self.names[rid] = rid, self.cell, name.encode(CP)
+        return rid
+
+    def obj3d(self, name: str, listed: bool = True, string_id: int | None = None) -> int:
+        if not listed:  # a deleted object: its records stay behind in the segment that is open
+            return super().obj3d(name, False, string_id)
+        return self._own_segment(lambda: Z3Builder.obj3d(self, name, True, string_id), name)
+
+    def drawing(self, name: str) -> int:
+        return self._own_segment(lambda: Z3Builder.drawing(self, name), name)
+
+    def component(self, owner: int, target: str, file: str = "", instance: str | None = None, n: int = 1) -> None:
+        self.cell = self.cells.get(owner, self.cell)
+        super().component(owner, target, file, instance, n)
+
+    def preview(self, bmp: bytes) -> None:
+        keep, self.cell = self.cell, self.default
+        super().preview(bmp)
+        self.cell = keep
+
+    def build(self, hqr: bytes | None = None) -> bytes:
+        assert hqr is None  # no format-3200 file with an HQR part has been seen
+        zstd = pytest.importorskip("zstandard").ZstdCompressor()
+
+        def sized(blob: bytes) -> bytes:
+            return struct.pack("<I", len(blob)) + blob
+
+        def deflated(blob: bytes) -> bytes:
+            return sized(struct.pack("<I", len(blob)) + zlib.compress(blob))
+
+        def segment(start: int, name: bytes, rids: list[int]) -> bytes:
+            entries, last = b"", 0
+            for rid in rids:
+                cls, kind, blob = self.records[rid]
+                size = len(blob) + (rid == self.wrong_size_at)
+                entries += struct.pack("<QIIIiiiHHI", 0, rid - last, size, len(blob) * (kind & 1), -1, rid + 4, -2, cls, kind, 8)
+                last = rid
+            blocks = [b"".join(self.records[rid][2] for rid in rids), sized(zstd.compress(entries + b"\0" * 3 * self.ragged_index))]
+            blocks.append(deflated(b"\x01" * 700))
+            if rids[0]:  # not the default segment: side stream, its (id, size) table, GUID block
+                blocks += [sized(zstd.compress(b"\x07" * 44)), sized(zstd.compress(struct.pack("<II", 510, 44)))]
+                blocks.append(deflated(struct.pack("<4I", 11, 0x10001, 3, 36) + b"0A1B2C3D-0000-4000-8000-00000000TEST"))
+            at = [start + 136 + len(name)]
+            for blob in blocks:
+                at.append(at[-1] + len(blob))
+            where = [at[0], at[1], len(blocks[1]), at[2], len(blocks[2])]
+            where += [at[3], at[4], len(blocks[4]), at[5], len(blocks[5]), 0x1FF] if rids[0] else [0, 0, 0, 0, 0, -1]
+            head = struct.pack("<4I", 0x91, 3, 0, 1) + b"\x6b" * 16 + struct.pack("<9QIi", *where)
+            return head + b"\xd5" * 16 + struct.pack("<Q", len(name)) + name + b"".join(blocks)
+
+        members: dict[int, list[int]] = {}
+        for rid in sorted(self.records):
+            members.setdefault(self.home[rid][0], []).append(rid)
+        first = segment(0x328, b"default segment", members.pop(0))
+        order = sorted(self.names)
+        assert set(members) <= set(order)
+        dir_at = 0x328 + len(first)
+        pos = dir_at + sum(29 + len(self.names[rid]) for rid in order)
+        directory = segments = b""
+        for rid in order:
+            name = self.names[rid]
+            seg = segment(pos, self.header_names.get(rid, name), members[rid])
+            directory += struct.pack("<II", 29 + len(name), len(name)) + name + struct.pack("<BIQII", 0, rid, pos, 1, len(seg))
+            segments += seg
+            pos += len(seg)
+        partitions = [b"\x91" * 50, b"\x92" * 7]
+        starts = [pos + 8 + 8 * len(partitions)]
+        for blob in partitions:
+            starts.append(starts[-1] + 4 + len(blob))
+        kernel = struct.pack("<3Q", starts[-1], *starts[:-1]) + b"".join(sized(blob) for blob in partitions)
+        top = struct.pack("<IIQI", 0, len(order), dir_at, len(directory)) + b"\xe7" * 16 + b"\0" * 4
+        return self.text(None) + top + first + directory + segments + kernel + b"\0" * 64
+
+
+def model(b: Z3Builder | None = None) -> Z3Builder:
     """Two levels: top -> 2 x post (3 bolts + 1 rail each), 1 floor, 4 bolts, 1 rail, 3 uses of other files."""
-    b = Z3Builder()
+    b = b or Z3Builder()
     top = b.obj3d("งานประกอบ ทดสอบ")
     post = b.obj3d("ชุดเสา")
     b.obj3d("แผ่นพื้น")
@@ -585,6 +692,134 @@ def test_object_whose_root_record_or_name_is_wrong_makes_the_file_unsupported(tm
     b.records[sid] = (z3.CLS_STRING, 0x3F, b.records[sid][2][:-3] + b"\0")  # the long name lost its end
     f = z3.read_z3(write(tmp_path, b.build(), "ยาว.Z3"), strict=False)
     assert f.status == "unsupported" and [c.key for c in f.failed_checks] == ["objects"]
+
+
+# ------------------------------------------------------------------------------------------------ format 3200
+
+
+def listing(f: z3.Z3File) -> list:
+    return [(o.kind, o.name, [(u.name, u.file, u.count, u.instances) for u in o.components]) for o in f.objects]
+
+
+def test_format_3200_gives_the_same_result_as_the_old_container(main_file, tmp_path):
+    old = z3.read_z3(main_file)
+    new = z3.read_z3(write(tmp_path, model(Z3Builder32()).build(), main_file.name.replace(".Z3", " ใหม่.Z3")))
+    assert new.ok and not new.failed_checks and new.warnings == []
+    assert new.header.segmented and new.header.format_version == 3200 and not old.header.segmented
+    assert {c.key for c in new.checks} >= {"header", "layout", "directory", "segments", "kernel", "index", "tiling"}
+    assert all(c.label and not c.label.isascii() for c in new.checks)
+    assert listing(new) == listing(old) and len(new.objects) == 9
+    assert (new.layers, new.loose_references, new.preview_png) == (old.layers, old.loose_references, old.preview_png)
+    assert new.records == old.records - 1 + 3  # the table is a record in both; the default segment has three more
+    a, b = z3.bom(new), z3.bom(old)
+    assert flat(a) == flat(b) and a.root.name == b.root.name and a.missing_files == b.missing_files
+
+
+def test_format_3200_deleted_object_and_object_without_records_of_its_own(tmp_path):
+    b = Z3Builder32()
+    b.obj3d("ชุดบน")
+    b.obj3d("ของเก่า", listed=False)
+    b.drawing("ชุดบน_2D")
+    f = z3.read_z3(write(tmp_path, b.build()))
+    assert [(o.kind, o.name) for o in f.objects] == [("part", "ชุดบน"), ("drawing", "ชุดบน_2D")]
+    assert len(f.warnings) == 1 and "ถูกลบ" in f.warnings[0] and f.preview_png is None
+
+
+def spots(data: bytes) -> tuple[int, int, int, int]:
+    """Offsets in a format-3200 file: directory, first object segment, its index block, the kernel's part."""
+    (dir_at,) = struct.unpack_from("<Q", data, 0x308)
+    (n,) = struct.unpack_from("<I", data, dir_at + 4)
+    (seg_at,) = struct.unpack_from("<Q", data, dir_at + 8 + n + 5)
+    end = len(data) - 64
+    kernel_at = data.rfind(struct.pack("<Q", end), 0, end)  # it starts with the offset of its own end
+    return dir_at, seg_at, struct.unpack_from("<Q", data, seg_at + 40)[0], kernel_at
+
+
+DAMAGE32 = {
+    "object count": (lambda d: d[:0x304] + bytes([d[0x304] + 1]) + d[0x305:], "directory"),
+    "absurd object count": (lambda d: flip(d, 0x306), "layout"),
+    "directory entry": (lambda d: flip(d, spots(d)[0]), "directory"),
+    "segment offset": (lambda d: flip(d, spots(d)[0] + 8 + struct.unpack_from("<I", d, spots(d)[0] + 4)[0] + 5), "directory"),
+    "default segment": (lambda d: flip(d, 0x328 + 48), "segments"),
+    "index size": (lambda d: flip(d, spots(d)[1] + 48), "segments"),
+    "name in the segment": (lambda d: flip(d, spots(d)[1] + 137), "segments"),
+    "zstd magic": (lambda d: flip(d, spots(d)[2] + 4), "segments"),
+    "side stream size": (lambda d: flip(d, struct.unpack_from("<Q", d, spots(d)[1] + 72)[0]), "segments"),
+    "kernel offset": (lambda d: flip(d, spots(d)[3] + 8), "kernel"),
+    "kernel partition": (lambda d: flip(d, struct.unpack_from("<Q", d, spots(d)[3] + 8)[0]), "kernel"),
+    "tail cut": (lambda d: d[:-100], "kernel"),
+    "half": (lambda d: d[: len(d) // 2], "directory"),
+    "directory cut off": (lambda d: d[: spots(d)[0] + 20], "layout"),
+    "trailer": (lambda d: flip(d, len(d) - 10), "trailer"),
+    "junk appended": (lambda d: d + b"junk", "end"),
+    "header text": (lambda d: d[:128] + b"?" * 127 + b"\n" + d[256:], "header"),
+}
+
+
+@pytest.mark.parametrize("what", DAMAGE32)
+def test_damaged_format_3200_file_is_refused_in_thai(tmp_path, what):
+    change, key = DAMAGE32[what]
+    path = write(tmp_path, change(model(Z3Builder32()).build()))
+    with pytest.raises(z3.Z3Error) as err:
+        z3.read_z3(path)
+    assert err.value.status == "damaged" and "เสียหาย" in str(err.value) and path.name in str(err.value)
+    assert key in [c.key for c in err.value.checks if not c.ok]
+    f = z3.read_z3(path, strict=False)
+    assert not f.ok and f.objects == [] and f.preview_png is None and f.layers == [] and f.message == str(err.value)
+
+
+def test_format_3200_index_that_does_not_fit_its_records(tmp_path):
+    b = model(Z3Builder32())
+    b.wrong_size_at = sorted(b.records)[20]
+    f = z3.read_z3(write(tmp_path, b.build()), strict=False)
+    assert f.status == "damaged" and [c.key for c in f.failed_checks] == ["tiling"] and f.objects == []
+    b = model(Z3Builder32())
+    b.ragged_index = True
+    f = z3.read_z3(write(tmp_path, b.build(), "เศษ.Z3"), strict=False)
+    assert f.status == "damaged" and [c.key for c in f.failed_checks] == ["index"]
+    data = model(Z3Builder32()).build()
+    at = spots(data)[2]  # an index block whose frame was cut and padded: the right place, but not a zstd frame
+    (n,) = struct.unpack_from("<I", data, at)
+    f = z3.read_z3(write(tmp_path, data[: at + 12] + b"\0" * (n - 8) + data[at + 4 + n :], "ตัด.Z3"), strict=False)
+    assert f.status == "damaged" and [c.key for c in f.failed_checks] == ["index"]
+
+
+def test_format_3200_names_must_agree_everywhere(tmp_path):
+    b = Z3Builder32()
+    top = b.obj3d("ชุดบน")
+    b.header_names[top] = "ชุดล่าง".encode(CP)  # directory and segment header disagree
+    f = z3.read_z3(write(tmp_path, b.build()), strict=False)
+    assert f.status == "damaged" and [c.key for c in f.failed_checks] == ["segments"]
+    b = Z3Builder32()
+    top = b.obj3d("ชุดบน")
+    b.names[top] = "ชื่ออื่น".encode(CP)  # both say one name, the root record another
+    f = z3.read_z3(write(tmp_path, b.build(), "ชื่อ.Z3"), strict=False)
+    assert f.status == "unsupported" and [c.key for c in f.failed_checks] == ["objects"]
+    b = Z3Builder32()
+    b.obj3d("ชุดบน")
+    b.component(123456, "ฝา")
+    f = z3.read_z3(write(tmp_path, b.build(), "เจ้าของ.Z3"), strict=False)
+    assert f.status == "unsupported" and [c.key for c in f.failed_checks] == ["components"]
+
+
+def test_format_3200_damage_in_the_records_is_not_noticed(tmp_path):
+    # nothing in the container checks the bytes of a record (nor of an index): documented, not wished for
+    b = model(Z3Builder32())
+    b.record(8, b"\x11" * 40, 0x3F)
+    data = b.build()
+    assert z3.read_z3(write(tmp_path, flip(data, data.rfind(b"\x11" * 40) + 10))).ok
+
+
+def test_format_3200_without_zstandard_says_how_to_install_it(tmp_path, main_file, monkeypatch):
+    path = write(tmp_path, model(Z3Builder32()).build())
+    monkeypatch.setitem(sys.modules, "zstandard", None)  # makes "import zstandard" fail
+    with pytest.raises(z3.Z3Error) as err:
+        z3.read_z3(path)
+    assert err.value.status == "unsupported" and "pip install zstandard" in str(err.value) and "3200" in str(err.value)
+    assert path.name in str(err.value) and not str(err.value).isascii()
+    f = z3.read_z3(path, strict=False)
+    assert f.status == "unsupported" and f.objects == [] and f.message == str(err.value)
+    assert z3.read_z3(main_file).ok  # the old container needs no zstd
 
 
 # ------------------------------------------------------------------------------------------------ BOM

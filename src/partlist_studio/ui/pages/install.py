@@ -14,6 +14,7 @@ from .. import theme
 from ..state import AppState
 from ..widgets import PageHeader, StatusChipRow, button, fill, table
 from .assembly3d import AssemblyTab
+from .z3_files import Z3Tab
 
 # field of InstallJob → (label, kind, (min, max), suffix) – kind: int · float · bool · text · combo name
 FORM = {
@@ -104,6 +105,8 @@ class InstallPage(QWidget):
         self.tabs.addTab(self._steps_tab(), "ขั้นตอนติดตั้ง")
         self.assembly = AssemblyTab(state, lambda: self.job)
         self.tabs.addTab(self.assembly, "ประกอบ 3D")
+        self.z3 = Z3Tab(state)
+        self.tabs.addTab(self.z3, "ไฟล์ ZW3D")
         self.tabs.addTab(self._reference_tab(), "ข้อมูลอ้างอิง")
         lay.addWidget(self.tabs, 1)
         self.load_job(self.job)

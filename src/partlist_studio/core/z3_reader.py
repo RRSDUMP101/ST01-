@@ -35,6 +35,36 @@ id of the object that owns the component (-1: not part of an assembly, e.g. a pa
 
 Names are in the Windows code page given on text line 2 (874 = Thai); a few layer names are UTF-8 instead.
 
+Format 3200 (ZW3D 2027, "ZWSim 7.0"; text line 2 says "ZWSOFT,V2,...") keeps the same records - same classes, same
+packed streams - in another container: one segment per object, the record indexes compressed with zstd (package
+`zstandard`, imported only when such a file is read). All offsets are absolute:
+
+    0x300  u32 0, u32 number of objects, u64 offset of the directory, u32 its size, 16 bytes (a hash of something:
+           what it covers could not be found, not used), u32 0
+    0x328  the "default segment": a segment header (below), then its records - the root table (now always empty),
+           the file name, the preview - its index block and its flags block
+    ....   directory, one entry per object: u32 size of the entry, u32 length of the name, the name in full (no
+           32-byte limit), u8 0, u32 id of the root record, u64 offset of the object's segment, u32 1, u32 its size
+    ....   the segments back to back in directory order, each:
+             header: 16 bytes (not used), a random GUID, u64 start of the records, u64 offset and u64 size of the
+               index block, the same for the flags block, u64 offset of the side stream, u64 offset and u64 size of
+               its table, u64 offset and u32 size of the GUID block, i32 first id of the side stream (-1: none),
+               16 bytes (hash-like, not used), u64 length of the name, the name (the same as in the directory)
+             records back to back
+             index block: u32 size, one zstd frame = 40 bytes per record: u64 0, u32 id step, u32 size, u32 element
+               size, i32 link, i32 next, i32 previous, u16 class, u16 storage kind, u32
+             flags block (u32 size, u32 unpacked size, zlib), side stream (u32 size, zstd frame: records of ZW3D's
+               history, not read), its table (u32 size, zstd frame of (id, size) pairs), GUID block (like flags)
+    ....   the geometry kernel's part: u64 E = its end, u64 offsets of its partitions, then the partitions (u32
+           size, data) back to back up to E
+    E      64 zero bytes, and the file ends
+
+Record ids are unique over the whole file, so one index serves all segments. There is no checksum over the index
+or the directory that could be verified (zstd frames are written without one): what is checked instead is that
+every block starts where the one before it ends, from the header to the last byte, that every index decompresses
+to whole entries whose sizes add up to exactly the record area, and - as in the old format - that every name and
+component record decodes and agrees with the directory.
+
 What is NOT read: geometry, placements, user attributes (class 302 holds name/value pairs such as "Material", but
 which object a list of them belongs to could not be established), per-object layers (only the layer names of the
 whole file are listed), suppressed / excluded-from-BOM flags of components.
@@ -56,7 +86,8 @@ from pathlib import Path
 import numpy as np
 
 Z3_SUFFIXES = (".z3", ".z3prt", ".z3asm")
-KNOWN_FORMATS = (2900, 3000)  # ZW3D 2025 (ZWSim 5.0) and 2026 (ZWSim 6.0): the versions the checks were proven on
+# ZW3D 2025 (ZWSim 5.0), 2026 (ZWSim 6.0) and 3200 (ZWSim 7.0): the versions the checks were proven on
+KNOWN_FORMATS = (2900, 3000, 3200)
 
 _LINE = 128
 _TEXT_END = 0x300
@@ -64,6 +95,15 @@ _BINHDR = 72
 _TABLE_AT = 0x390
 _ENTRY = 36
 _TRAILER = 64
+_SEG0 = 0x328  # format 3200: header of the default segment
+_SEG_HEAD = 136  # fixed part of a segment header; the name follows
+_DIR_FIXED = 29  # bytes of a directory entry besides the name
+_INDEX_CAP = 1 << 30  # a damaged size field must not make the reader ask for more memory than this
+_ZSTD_MAGIC = b"\x28\xb5\x2f\xfd"
+_SEG_ENTRY = np.dtype(
+    [("off", "<u8"), ("step", "<u4"), ("size", "<u4"), ("esize", "<u4"), ("link", "<i4"), ("next", "<i4")]
+    + [("prev", "<i4"), ("cls", "<u2"), ("kind", "<u2"), ("more", "<u4")]
+)
 
 CLS_TABLE, CLS_STRING, CLS_PREVIEW, CLS_LAYER, CLS_COMPONENT, CLS_OBJECT3D, CLS_DRAWING = 2, 3, 13, 67, 88, 89, 90
 _KEEP = (CLS_TABLE, CLS_STRING, CLS_PREVIEW, CLS_LAYER, CLS_COMPONENT, CLS_OBJECT3D, CLS_DRAWING)
@@ -100,6 +140,7 @@ class Z3Header:
     platform: str = ""
     code_page: str = "cp874"
     format_version: int = 0
+    segmented: bool = False  # text line 2 says "V2": the container of format 3200, one segment per object
     hqr_offset: int | None = None
     lines: list[str] = field(default_factory=list)
 
@@ -454,6 +495,8 @@ class _Container:
     checks: list[Z3Check]
     index: _Index | None = None
     entries: list[tuple[bytes, int]] = field(default_factory=list)  # (raw 32-byte name field, root record id)
+    full_names: bool = False  # format 3200: the entries hold whole names, never a descriptor
+    no_zstd: bool = False  # format 3200 and the zstandard package is not installed
     fatal: bool = False
 
 
@@ -472,6 +515,7 @@ def _parse_header(text: bytes) -> Z3Header:
                 h.saved = None
     h.platform = lines[2]
     parts = lines[2].split(",")
+    h.segmented = len(parts) > 1 and parts[1] == "V2"
     if len(parts) > 6 and parts[6].isdigit():
         try:
             "".encode("cp" + parts[6])
@@ -516,6 +560,8 @@ def _read_container(mm, base: int, end: int, tag: str = "") -> _Container:
     if not check("header", "ส่วนหัวข้อความของไฟล์ Z3", well_formed, header.lines[1] if header.lines else ""):
         box.fatal = True
         return box
+    if header.segmented:
+        return _read_segments(mm, base, end, box, check)
     hb = bytes(mm[base + _TEXT_END : base + _TEXT_END + _BINHDR])
     check("header_copy", "ส่วนหัวสองชุดตรงกัน", hb == bytes(mm[base + _TEXT_END + _BINHDR : base + _TABLE_AT]))
     a, b = struct.unpack_from("<QQ", hb, 16)
@@ -553,6 +599,182 @@ def _read_container(mm, base: int, end: int, tag: str = "") -> _Container:
     tiled = tiled and ix.data_end == (a if ix.records > 1 else _TABLE_AT + c)
     check("tiling", "ระเบียนข้อมูลเรียงต่อกันพอดีจนถึงดัชนี", tiled, f"จบที่ {ix.data_end} ดัชนีเริ่มที่ {a} ช่องว่าง {ix.n_gaps}")
     box.fatal = any(not k.ok for k in checks)
+    return box
+
+
+# ------------------------------------------------------------------------------------------------ format 3200
+
+
+def _zstd():
+    """The zstandard package, or None. Python 3.13 has no zstd of its own; old-format files never get here."""
+    try:
+        import zstandard
+    except ImportError:
+        return None
+    return zstandard
+
+
+@dataclass
+class _Segment:
+    name: bytes
+    data: int  # where its records start
+    index_at: int  # the index block: u32 size, zstd frame
+    index_size: int
+
+
+def _segment(mm, base: int, start: int, end: int, default: bool = False) -> _Segment | None:
+    """The header of the segment at [start, end) of the container, or None when its blocks do not fill exactly
+    that range: records, index, flags and - not in the default segment - side stream, its table, GUID block."""
+    if start + _SEG_HEAD > end:
+        return None
+    data, ix, ix_size, flags, flags_size, side, table, table_size, guids = struct.unpack_from(
+        "<9Q", mm, base + start + 32
+    )
+    guids_size, name_len = struct.unpack_from("<I20xQ", mm, base + start + 104)
+
+    def sized(at: int, size: int | None = None) -> int:
+        """End of the block at `at` (u32 length, then that many bytes), or -1 when it does not fit or lies."""
+        if not start + _SEG_HEAD <= at <= end - 4:
+            return -1
+        stop = at + 4 + struct.unpack_from("<I", mm, base + at)[0]
+        return stop if stop <= end and size in (None, stop - at) else -1
+
+    if data != start + _SEG_HEAD + name_len or not data <= ix <= end:
+        return None
+    if sized(ix, ix_size) != flags or bytes(mm[base + ix + 4 : base + ix + 8]) != _ZSTD_MAGIC:
+        return None
+    if default:
+        if (side, table, table_size, guids, guids_size) != (0, 0, 0, 0, 0) or sized(flags, flags_size) != end:
+            return None
+    elif (
+        sized(flags, flags_size) != side
+        or sized(side) != table
+        or sized(table, table_size) != guids
+        or sized(guids, guids_size) != end
+    ):
+        return None
+    return _Segment(bytes(mm[base + start + _SEG_HEAD : base + data]), data, ix, ix_size)
+
+
+def _segment_index(z, mm, base: int, seg: _Segment) -> np.ndarray | None:
+    """The index entries of one segment, or None when the zstd frame is not exactly a whole number of them."""
+    frame = bytes(mm[base + seg.index_at + 4 : base + seg.index_at + seg.index_size])
+    try:
+        n = z.frame_content_size(frame)
+        if n < 0 or n % _SEG_ENTRY.itemsize or n > _INDEX_CAP:
+            return None
+        raw = z.ZstdDecompressor().decompress(frame, max_output_size=max(n, 1), allow_extra_data=False)
+    except z.ZstdError:
+        return None
+    return np.frombuffer(raw, dtype=_SEG_ENTRY) if len(raw) == n else None
+
+
+def _kernel_end(mm, base: int, pos: int, limit: int) -> int:
+    """Follow the geometry kernel's part that starts at `pos` (u64 end, u64 offsets of the partitions, partitions
+    of u32 size + data back to back). Returns its end, or -1 when the chain does not arrive there."""
+    if pos + 8 > limit:
+        return -1
+    (stop,) = struct.unpack_from("<Q", mm, base + pos)
+    if not pos + 8 <= stop <= limit:
+        return -1
+    if stop == pos + 8:
+        return stop  # no partition at all
+    if pos + 16 > stop:
+        return -1
+    (first,) = struct.unpack_from("<Q", mm, base + pos + 8)
+    if not pos + 16 <= first <= stop or (first - pos) % 8:
+        return -1
+    at = first
+    for want in struct.unpack_from(f"<{(first - pos - 8) // 8}Q", mm, base + pos + 8):
+        if want != at or at + 4 > stop:
+            return -1
+        at += 4 + struct.unpack_from("<I", mm, base + at)[0]
+    return stop if at == stop else -1
+
+
+def _read_segments(mm, base: int, end: int, box: _Container, check) -> _Container:
+    """Format 3200: check the container at mm[base:end] and merge the record indexes of its segments into one."""
+    z = _zstd()
+    if z is None:
+        box.fatal = box.no_zstd = True
+        return box
+    size = end - base
+    count, dir_at, dir_size = struct.unpack_from("<4xIQI", mm, base + _TEXT_END) if size >= _SEG0 else (0, 0, 0)
+    fits = _SEG0 + _SEG_HEAD < dir_at and dir_at + dir_size + 8 + _TRAILER <= size and count * _DIR_FIXED <= dir_size
+    if not check(
+        "layout", "ขนาดไฟล์ตรงกับที่ส่วนหัวระบุ", fits, f"สารบัญวัตถุที่ {dir_at} ยาว {dir_size} มี {count} วัตถุ ไฟล์ส่วนนี้ยาว {size}"
+    ):
+        box.fatal = True
+        return box
+    # ---- directory: the entries fill it exactly, and the segments they name follow it back to back
+    table = bytes(mm[base + dir_at : base + dir_at + dir_size])
+    listed: list[tuple[bytes, int, int, int]] = []  # (name, root record id, offset of the segment, its size)
+    p, pos = 0, dir_at + dir_size
+    while p + 8 <= len(table):
+        entry, n = struct.unpack_from("<II", table, p)
+        if entry != n + _DIR_FIXED or p + entry > len(table):
+            break
+        rid, at, seg_size = struct.unpack_from("<xIQ4xI", table, p + 8 + n)
+        if at != pos or at + seg_size > size:
+            break
+        listed.append((table[p + 8 : p + 8 + n], rid, at, seg_size))
+        p, pos = p + entry, at + seg_size
+    whole = p == len(table) and len(listed) == count
+    check("directory", "สารบัญวัตถุอ่านได้ครบและตรงกับจำนวนในส่วนหัว", whole, f"{len(listed)} / {count} รายการ")
+    segments = [_segment(mm, base, _SEG0, dir_at, default=True)]
+    segments += [_segment(mm, base, at, at + seg_size) for _name, _rid, at, seg_size in listed]
+    bad = [i for i, s in enumerate(segments) if s is None or s.name != (listed[i - 1][0] if i else b"default segment")]
+    check(
+        "segments",
+        "ส่วนข้อมูลของวัตถุทุกตัวเรียงต่อกันพอดีและชื่อตรงกับสารบัญ",
+        not bad,
+        f"ผิด {len(bad)} ส่วน (ส่วนแรกที่ผิด: {bad[0]})" if bad else f"{len(segments)} ส่วน",
+    )
+    stop = _kernel_end(mm, base, pos, size) if whole else -1
+    check("kernel", "ส่วนข้อมูลรูปทรงเรียงต่อกันพอดีจนถึงท้ายไฟล์", stop >= 0, f"เริ่มที่ {pos}")
+    if stop >= 0:
+        check("trailer", "ท้ายไฟล์เป็นศูนย์ 64 ไบต์", not any(mm[base + stop : base + stop + _TRAILER]))
+        check("end", "ไฟล์จบตรงตำแหน่งที่ควรจบ", stop + _TRAILER == size, f"{stop + _TRAILER} / {size}")
+    if any(not k.ok for k in box.checks):
+        box.fatal = True  # offsets cannot be trusted: do not decompress anything
+        return box
+    # ---- indexes: ids are unique over the file, so the kept records of all segments go into one sorted index
+    keep_cls = np.zeros(65536, dtype=bool)
+    keep_cls[list(_KEEP)] = True
+    want = np.unique(np.array([rid for _name, rid, _at, _size in listed], dtype=np.int64))
+    kept: list[tuple[np.ndarray, ...]] = []
+    ix = _Index()
+    unread = untiled = 0
+    for seg in segments:
+        ent = _segment_index(z, mm, base, seg)
+        if ent is None:
+            unread += 1
+            continue
+        sizes = ent["size"].astype(np.int64)
+        ids = np.cumsum(ent["step"].astype(np.int64))
+        untiled += int(sizes.sum()) != seg.index_at - seg.data
+        # never seen: an explicit offset (the old index had them), ids that do not rise
+        ix.unknown_codes += int(np.count_nonzero(ent["off"])) + int(len(ids) > 1 and not (np.diff(ids) > 0).all())
+        keep = keep_cls[ent["cls"]]
+        if len(want):
+            keep |= np.isin(ids, want)
+        offs = seg.data + np.cumsum(sizes) - sizes
+        cls, kind = ent["cls"][keep].astype(np.int64), ent["kind"][keep].astype(np.int64)
+        kept.append((ids[keep], offs[keep], sizes[keep], cls, kind))
+        ix.records += len(ent)
+    if kept:
+        merged = [np.concatenate([k[i] for k in kept]) for i in range(5)]
+        order = np.argsort(merged[0], kind="stable")
+        ix.ids, ix.off, ix.sz, ix.cls, ix.kind = (m[order] for m in merged)
+        if len(ix.ids) > 1 and not (np.diff(ix.ids) > 0).all():
+            ix.unknown_codes += 1  # the same id in two segments: looking a record up by id is not safe
+    box.index = ix
+    check("index", "อ่านดัชนีระเบียนได้ครบ", not unread and ix.records > 0, f"อ่านไม่ได้ {unread} จาก {len(segments)} ส่วน")
+    check("index_codes", "รหัสในดัชนีเป็นแบบที่รู้จัก", ix.unknown_codes == 0, f"ไม่รู้จัก {ix.unknown_codes} จุด")
+    check("tiling", "ระเบียนข้อมูลเรียงต่อกันพอดีจนถึงดัชนี", not untiled, f"ไม่พอดี {untiled} จาก {len(segments)} ส่วน")
+    box.entries = [(name, rid) for name, rid, _at, _size in listed]
+    box.full_names = True
+    box.fatal = any(not k.ok for k in box.checks)
     return box
 
 
@@ -673,6 +895,14 @@ def _fail(result: Z3File, status: str) -> None:
     result.message = f"ไฟล์ “{result.path.name}” {what} – ไม่ผ่านการตรวจ: {failed}"
 
 
+def _need_zstd(result: Z3File) -> None:
+    result.status = "unsupported"
+    result.message = (
+        f"ไฟล์ “{result.path.name}” บันทึกจาก ZW3D รุ่นใหม่ (รูปแบบ {result.header.format_version}) ซึ่งต้องใช้ไลบรารี zstandard"
+        " ที่ยังไม่ได้ติดตั้ง – ติดตั้งด้วยคำสั่ง pip install zstandard แล้วเปิดไฟล์อีกครั้ง"
+    )
+
+
 def _read_into(result: Z3File, mm) -> None:
     size = len(mm)
     header = _parse_header(bytes(mm[:_TEXT_END]))
@@ -683,6 +913,8 @@ def _read_into(result: Z3File, mm) -> None:
         return _fail(result, "damaged")
     main = _read_container(mm, 0, hqr if hqr is not None else size)
     result.header, result.checks = main.header, main.checks
+    if main.no_zstd:
+        return _need_zstd(result)
     if main.fatal:
         return _fail(result, "damaged")
     ix = main.index
@@ -691,6 +923,8 @@ def _read_into(result: Z3File, mm) -> None:
     if hqr is not None:
         back = _read_container(mm, hqr, size, "hqr.")
         result.checks += back.checks
+        if back.no_zstd:
+            return _need_zstd(result)
         if back.fatal:
             return _fail(result, "damaged")
         result.embedded = Z3Embedded(hqr, size - hqr, len(back.entries), back.header)
@@ -701,7 +935,7 @@ def _read_into(result: Z3File, mm) -> None:
     lost: list[str] = []
     for raw, rid in main.entries:
         i = ix.lookup(rid)
-        if raw[:4] == b"\0\0\x03\0":
+        if not main.full_names and raw[:4] == b"\0\0\x03\0":
             length, _ptr, sid = struct.unpack_from("<IQI", raw, 4)
             name = _long_name(mm, 0, ix, length, sid, cp)
             if name is None:

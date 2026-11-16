@@ -264,3 +264,17 @@ def test_imported_mesh_is_filled_and_picked(app):
     view.selected = "m1"  # a selected mesh is tinted (it has no outline to thicken)
     r, g, b = view.render_image(600, 400).pixelColor(300, 200).getRgb()[:3]
     assert r > b + 15
+
+
+def test_a_long_import_note_stays_short(window):
+    tab = window.pages["install"].assembly
+    assert "ตัวอย่าง" in tab.note.text() and not tab.note.toolTip()  # the sample's own note fits
+    model = a3.build_for_job(_job())
+    model.source = "file"
+    model.note = " · ".join(f"บันทึกข้อที่ {n} " + "ก" * 60 for n in range(1, 9))
+    model.steps.append(a3.Step("ขั้นที่ไม่มีชิ้นส่วน"))
+    tab.set_model(model)
+    shown = tab.note.text()
+    assert "ข้อที่ 2" in shown and "ข้อที่ 3" not in shown and "ชี้เมาส์" in shown
+    assert "ไม่มีชิ้นส่วน" in shown  # what is wrong with the steps is never cut away
+    assert "ข้อที่ 8" in tab.note.toolTip()

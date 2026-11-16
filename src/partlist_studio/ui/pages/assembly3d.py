@@ -220,13 +220,24 @@ class AssemblyTab(QWidget):
         self.view.set_model(model, keep_view=keep_step and model is not None)
         self.title.setText(model.name if model else "ยังไม่มีโมเดล 3 มิติสำหรับผลิตภัณฑ์นี้")
         problems = model.problems() if model else []
-        self.note.setText(" · ".join(x for x in ((model.note if model else
-                          "หางลากยังไม่มีโมเดลตัวอย่าง – นำเข้าโมเดลจริงจาก CAD (STEP / IGES / OBJ / STL)"), *problems) if x))
+        self._show_note((model.note if model else
+                         "หางลากยังไม่มีโมเดลตัวอย่าง – นำเข้าโมเดลจริงจาก CAD (STEP / IGES / OBJ / STL)"), problems)
         self._fill_groups()
         self._fill_parts()
         self._options_changed()
         self.view.set_step(self.step or None, animate=False)
         self._show_step()
+
+    def _show_note(self, note: str, problems: list[str]) -> None:
+        """The note of the model in a line or two: the log of a CAD import is long and would push the picture down.
+        What is wrong with the steps always shows; the whole note is the tooltip."""
+        parts = [x for x in note.split(" · ") if x]
+        short = " · ".join(parts[:2])
+        if len(short) > 230:
+            short = short[:228].rstrip() + "…"
+        more = "  … (ชี้เมาส์เพื่อดูบันทึกการนำเข้าทั้งหมด)" if (len(parts) > 2 or len(short) < len(" · ".join(parts[:2]))) else ""
+        self.note.setText(" · ".join(x for x in (short + more, *problems) if x))
+        self.note.setToolTip("<qt>" + "<br>".join(parts) + "</qt>" if more else "")
 
     def _fill_groups(self) -> None:
         self.groups.blockSignals(True)
@@ -282,7 +293,7 @@ class AssemblyTab(QWidget):
             item.setText(str(part.step))
             self._loading = False
         self.model.source = "file"  # edited by hand: the job no longer rebuilds it
-        self.note.setText(" · ".join(x for x in (self.model.note, *self.model.problems()) if x))
+        self._show_note(self.model.note, self.model.problems())
         self._show_step()
         self.view.update()
 

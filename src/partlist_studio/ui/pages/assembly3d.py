@@ -224,7 +224,9 @@ class AssemblyTab(QWidget):
                                 ("+ หลัง", lambda: self.add_step(True), "เพิ่มขั้นว่างหลังขั้นนี้"),
                                 ("▲", lambda: self.shift_step(-1), "เลื่อนขั้นนี้ขึ้น (ทำก่อน)"),
                                 ("▼", lambda: self.shift_step(1), "เลื่อนขั้นนี้ลง (ทำทีหลัง)"),
-                                ("ลบขั้น", lambda: self.delete_step(), "ลบขั้นนี้ – ชิ้นส่วนย้ายไปขั้นก่อนหน้า")):
+                                ("ลบขั้น", lambda: self.delete_step(), "ลบขั้นนี้ – ชิ้นส่วนย้ายไปขั้นก่อนหน้า"),
+                                ("ลำดับ 13 ขั้น", lambda: self.use_tray_sequence(),
+                                 "แทนขั้นทั้งหมดด้วยลำดับประกอบกระบะพื้นเรียบ 13 ขั้นของ RRS – จัดชิ้นเข้าขั้นตามชื่อกลุ่ม")):
             b = button(text, tooltip=tip)
             b.clicked.connect(slot)
             row.addWidget(b)
@@ -502,7 +504,8 @@ class AssemblyTab(QWidget):
         self._loading = True
         total = len(model.steps) if model else 0
         step = model.steps[n - 1] if (model and 0 < n <= total) else None
-        self.step_no.setText(f"ขั้นที่ {n} / {total}" if step else f"ภาพรวม – {total} ขั้นตอน")
+        self.step_no.setText(f"ขั้นที่ {n} / {total}" + (f" · {step.phase}" if step.phase else "") if step
+                             else f"ภาพรวม – {total} ขั้นตอน")
         self.step_title.setEnabled(step is not None)
         self.step_detail.setEnabled(step is not None)
         self.step_title.setText(step.title if step else "ชิ้นส่วนทั้งหมด")
@@ -515,6 +518,7 @@ class AssemblyTab(QWidget):
             info += [f"<b>จุดตรวจ:</b> {step.check}"] if step.check else []
             info += [f"<span style='color:#D64545'><b>⚠ {step.warning}</b></span>"] if step.warning else []
             info += [f"<span style='color:#6B7A90'>BEMM {step.ref}</span>"] if step.ref else []
+            info += ["<span style='color:#6B7A90'>ขั้นนี้เป็นงาน / การตรวจ – ไม่มีชิ้นส่วนใหม่</span>"] if step.no_parts else []
         self.step_info.setText("<br>".join(info))
         self.step_info.setVisible(not self.edit_btn.isChecked())
         self.editor.setEnabled(step is not None)
@@ -602,6 +606,25 @@ class AssemblyTab(QWidget):
         self._edited()
         return True
 
+    def use_tray_sequence(self, ask: bool = True) -> dict[str, int]:
+        """The 13 steps of a flat tray in place of the steps of the model; the parts go to them by their groups."""
+        if not self.model:
+            return {}
+        other = [g for g in self.model.groups() if g != a3.REF_GROUP and not a3.tray_group_known(g)]
+        if ask and QMessageBox.question(
+                self, "ลำดับ 13 ขั้น", "แทนขั้นทั้งหมดของโมเดลนี้ด้วยลำดับประกอบกระบะพื้นเรียบ 13 ขั้นของ RRS?\n\n"
+                "• งานบนจิ๊ก 4 ขั้น → ยกขึ้นรถ 2 ขั้น → งานบนรถ 7 ขั้น – แก้ได้หลังจากนี้\n"
+                "• ชิ้นส่วนถูกจัดเข้าขั้นตามชื่อกลุ่ม ทิศแยกชิ้นถูกตั้งใหม่ เครื่องหมาย “ประกอบเสร็จ” ถูกล้าง\n"
+                + (f"• กลุ่มที่ชื่อไม่บอกว่าเป็นอะไร ({', '.join(other[:5])}) ไปรวมที่ขั้น 4 (ชิ้นเชื่อมย่อย)\n" if other else "")
+                ) != QMessageBox.Yes:
+            return {}
+        where = a3.apply_tray_sequence(self.model, self.get_job())
+        self._remap_done({n: None for n in range(1, 200)})
+        self.step = 0
+        self._edited(keep_rows=False)
+        self.state.notify("ใช้ลำดับ 13 ขั้นแล้ว" + (f" · กลุ่มที่ยังไม่ได้จัด ({len(other)}) อยู่ที่ขั้น 4" if other else ""))
+        return where
+
     def _done_toggled(self, checked: bool) -> None:
         if self._loading or not self.step:
             return
@@ -676,9 +699,13 @@ class AssemblyTab(QWidget):
 
         def done(model: a3.AssemblyModel) -> None:
             finish()
+            fits = a3.tray_sequence_fits(model)
+            if fits >= 4:  # the groups are named like the parts of a flat tray: start from the 13 steps
+                a3.apply_tray_sequence(model, self.get_job())
             self.set_model(model)
-            self.state.notify(f"นำเข้า {name}: {len(model.parts)} ชิ้น {a3.face_count(model):,} หน้า · {len(model.steps)} กลุ่ม/ขั้น – "
-                              "แก้ชื่อ กลุ่ม และขั้นในตารางได้")
+            self.state.notify(f"นำเข้า {name}: {len(model.parts)} ชิ้น {a3.face_count(model):,} หน้า · {len(model.steps)} ขั้น"
+                              + (" (ลำดับกระบะพื้นเรียบ 13 ขั้น จัดตามชื่อกลุ่ม)" if fits >= 4 else "")
+                              + " – แก้ชื่อ กลุ่ม และขั้นในตารางได้")
 
         def failed(message: str) -> None:
             finish()

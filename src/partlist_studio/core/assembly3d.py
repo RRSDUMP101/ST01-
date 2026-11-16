@@ -125,6 +125,8 @@ class Step:
     tools: str = ""
     check: str = ""  # what to look at / measure before the next step
     ref: str = ""  # BEMM section
+    no_parts: bool = False  # a step of work or checking that fits no new part (it is not a mistake that it is empty)
+    phase: str = ""  # the part of the work the step belongs to: 'งานบนจิ๊ก' · 'ยกขึ้นรถ' · 'งานบนรถ'
 
     @classmethod
     def from_dict(cls, d: dict) -> Step:
@@ -187,7 +189,7 @@ class AssemblyModel:
     def problems(self) -> list[str]:
         out = []
         for n, s in enumerate(self.steps, 1):
-            if not self.parts_of_step(n):
+            if not s.no_parts and not self.parts_of_step(n):
                 out.append(f"ขั้นที่ {n} “{s.title}” ไม่มีชิ้นส่วน")
         late = sorted({p.step for p in self.parts if p.step > len(self.steps)})
         if late:
@@ -295,6 +297,140 @@ def set_explode(parts: list[Part3D], direction: str, distance: float) -> None:
     d = EXPLODE_DIRECTIONS[direction]
     for p in parts:
         p.explode = [float(c * distance) for c in d]
+
+
+# --------------------------------------------------------------------------- the 13 steps of a flat tray
+# The factory's order of work for กระบะพื้นเรียบ, as RRS gave it (16 Nov 2026): the body is welded complete on the
+# jig, lifted onto the chassis and bolted, and the rest is fitted on the vehicle. Each rule: (step number, words that
+# may be in the name of a group). Rules are tried in this order, so 'ขาป้ายทะเบียน' is a welded bracket and not the
+# plate itself, and 'กรอบพื้น' a frame and not a floor.
+TRAY_PHASES = ("งานบนจิ๊ก", "ยกขึ้นรถ", "งานบนรถ")
+TRAY_RULES = [
+    (4, ("รองขาเต่า", "บานพับ", "ตะขอ", "ขาป้าย", "ขาบ้าย", "hinge", "hook")),
+    (12, ("กล่องหลัง", "กล่องท้าย", "ไฟ", "ป้าย", "กล้อง", "lamp", "light", "licen", "camera")),
+    (9, ("โรบา",)),
+    (8, ("ฝาข้าง", "ฝาท้าย", "side", "tail")),
+    (7, ("ตะแกรง", "กันหัว", "head")),
+    (2, ("โครงตัวบน", "กรอบพื้น")),
+    (3, ("พื้น", "พิ้น", "floor")),  # 'พิ้น': as the level is spelt in the customer's file
+    (1, ("โครงตัวล่าง", "ซับเฟรม", "คานขวาง", "subframe", "sub-frame")),
+    (6, ("สลัก", "น็อต", "แหวน", "bolt", "nut", "washer")),
+    (5, ("แท่นยึด",)),
+    (10, ("บังโคลน", "บังโครน", "fender")),
+    (11, ("ฝาถัง", "ฝาทัง", "คอเติม", "คอถัง", "น้ำมัน", "fuel")),  # 'ฝาทังนำ้ม้น': as named in the customer's file
+]
+TRAY_OTHER = 4  # groups no rule knows (Layer0000 …) wait with the small welded parts until someone sorts them
+
+
+def tray_sequence(job=None, width: float | None = None) -> list[Step]:
+    """The 13 steps. `job` gives the bolts and their torque, the cab gap and the lamp height of this vehicle;
+    `width` the measured width of the upper frame (mm)."""
+    torque = _torque_text(job) if job is not None else "M12 เกรด 10.9: 95–125 Nm"
+    gap = f" – งานนี้ {job.cab_gap:g} มม." if job is not None else ""
+    lamp = f" – งานนี้ {job.lamp_low} มม." if job is not None else ""
+    wide = f" กว้าง {width:,.0f} มม." if width else ""
+    rigid = bool(job is not None and job.rigid_subframe)
+    jig, lift, on = TRAY_PHASES
+    return [
+        Step("วางและเชื่อมโครงตัวล่าง",
+             "วางชิ้นส่วนโครงตัวล่างบนจิ๊กตามตำแหน่ง แต้มเชื่อม ตรวจระยะทแยงมุม แล้วเชื่อมจริง",
+             check="ระยะทแยงมุมสองแนวเท่ากัน", tools="จิ๊ก ฉาก ตลับเมตร เครื่องเชื่อม", phase=jig),
+        Step("เชื่อมโครงตัวบนเข้ากับโครงตัวล่าง",
+             "วางโครงตัวบนบนโครงตัวล่าง จัดกึ่งกลาง ตรวจระนาบผิวบนและความกว้าง แล้วเชื่อม",
+             check=f"ผิวบนอยู่ระนาบเดียวกัน{wide}", tools="ระดับน้ำ ปากกาจับ C เครื่องเชื่อม", ref="1.11.1 J", phase=jig),
+        Step("ปูและเชื่อมแผ่นพื้น", "ปูแผ่นพื้นบนโครงตัวบน กดให้แนบ แล้วเชื่อม ตรวจตำแหน่งช่องตะขอ",
+             check="แนบสนิท ไม่กระดก ช่องตะขอ 8 จุดตรงตำแหน่ง", tools="ปากกาจับ เครื่องเชื่อม", phase=jig),
+        Step("ติดชิ้นเชื่อมย่อยใต้โครง", "เชื่อมรองขาเต่า บานพับ ตะขอผ้าใบ และขาป้ายทะเบียนตามตำแหน่งในภาพ ทาสีกันสนิมรอยเชื่อม",
+             check="ตำแหน่งบานพับข้างละ 3 จุด ห่าง 900 มม.", tools="ตลับเมตร เครื่องเชื่อม สีกันสนิม", ref="5.5", phase=jig),
+        Step("ตรวจแท่นยึดบนแชสซี แล้วยกโครงวาง",
+             "ทำความสะอาดหน้าแท่นยึดบนแชสซีทุกจุด ตรวจแนวท่อ DEF และสายไฟใต้รางแชสซี แล้วยกโครงวางให้นั่งบนแท่นยึด"
+             "เต็มหน้าทุกจุดโดยไม่ต้องงัด จัดกึ่งกลางรถ",
+             check=f"ช่องห่างหลังเก๋งอย่างน้อย 28 มม. (Ford){gap}", tools="เครน/รอก ตลับเมตร", ref="1.11.3 / 5.1.4 / 3.2.1",
+             warning="ห้ามเจาะหรือเชื่อมแชสซีเพิ่ม เว้นแต่ตามคู่มือ Ford ข้อ 5.6.4", phase=lift),
+        Step("ขันสลักยึดกับแท่นยึด",
+             "ใส่สลักพร้อมแหวนและน็อตล็อกทุกแท่น ขันมือให้ครบก่อน แล้วขันแรงบิดไล่จากกลางออกหัว–ท้าย ทำเครื่องหมายสีเมื่อขันครบ",
+             torque=torque, check="ตามคู่มือ Ford: ขั้นต่ำ M12 เกรด 10.9 ขัน 95–125 Nm · ขันครบทุกตัว",
+             tools="ประแจวัดแรงบิด บล็อก ปากกาเคมี", ref="5.1.4 / 1.12",
+             warning=("ซับเฟรมแข็ง: แท่นคู่หน้าใช้แบบยืดหยุ่น ~1 kN/มม. จำกัด ±12 มม. – แท่นอื่นยึดแข็ง" if rigid
+                      else "ใช้จุดยึดบนแชสซีครบทุกจุด – ผิวสัมผัสห้ามเป็นสีฝุ่น"), phase=lift),
+        Step("ติดตะแกรงกันหัว", "ตั้งตะแกรงกันหัวด้านหน้า ยึดกับโครง ตรวจฉากกับพื้น",
+             check="ตั้งฉากกับพื้น ไม่แตะเก๋ง", tools="ฉาก ระดับน้ำ ประแจ", ref="1.11.3", phase=on),
+        Step("แขวนฝาข้างและฝาท้าย", "แขวนฝาข้างซ้าย–ขวาและฝาท้ายเข้ากับบานพับ ปรับกลอน เปิด–ปิดทดสอบ",
+             check="ปิดสนิท กลอนล็อกครบ", tools="ประแจ", phase=on),
+        Step("ติดโรบาหลัง", "ยึดโรบาหลังเข้ากับโครงด้านท้าย", tools="ประแจ", phase=on),
+        Step("ติดบังโคลน", "ยึดบังโคลนซ้าย–ขวา ตรวจระยะห่างจากยางตลอดช่วงยุบ–ยืดของช่วงล่าง",
+             check="ระยะห่างยางตามคู่มือ Ford", tools="ประแจ ตลับเมตร", ref="5.1.3", phase=on),
+        Step("ติดคอเติมน้ำมันและท่อหายใจ",
+             "ยึดคอเติมน้ำมันกับตัวถัง เดินท่อหายใจถังน้ำมันและเฟืองท้าย ท่อต้องไม่ตกท้องช้าง ไม่หักพับ",
+             check="มุมปากเติมอย่างน้อย 30° ปลายท่อหายใจสูงจากพื้นอย่างน้อย 850 มม. (Ford)", tools="ตลับเมตร ระดับองศา",
+             ref="3.3.2 / 3.3.3 / 3.3.4", warning="ขายึดคอเติมต้องนำไฟฟ้าและต่อกราวด์ถึงแชสซี", phase=on),
+        Step("ติดกล่องหลัง ไฟท้าย ป้ายทะเบียน กล้องถอย เดินสายไฟ",
+             "ยึดกล่องหลัง ชุดไฟท้าย Ford ป้ายทะเบียน และกล้องถอย เดินสายผ่านยางกันน้ำ ต่อสัญญาณจากสายที่รถเตรียมไว้ ทดสอบไฟทุกดวง",
+             check=f"ไฟติดครบ ขอบล่างโคมสูงจากพื้นอย่างน้อย 500 มม. (Ford){lamp}", tools="ชุดย้ำสาย ท่อหด มัลติมิเตอร์",
+             ref="4.6.3 / 4.6.9 / 4.6.10 / 4.5.2", warning="ห้ามต่อไฟท้ายใหม่เข้าวงจรไฟท้ายเดิมโดยตรง", phase=on),
+        Step("ตรวจขั้นสุดท้าย", "ขันซ้ำทุกจุดยึด ชั่งน้ำหนักเพลาหน้า/หลัง สแกนรหัสเสีย แล้วบันทึกผล",
+             check="ขันซ้ำทุกจุด ชั่งน้ำหนัก สแกนรหัสเสีย", tools="ประแจวัดแรงบิด เครื่องชั่ง เครื่องสแกน", ref="1.12 / 1.13.3",
+             phase=on, no_parts=True),
+    ]
+
+
+def tray_step_of(group: str) -> int:
+    """The step of the 13 that the parts of a group belong to, by the words in its name."""
+    name = group.lower()
+    for step, words in TRAY_RULES:
+        if any(w in name for w in words):
+            return step
+    return TRAY_OTHER
+
+
+def tray_group_known(group: str) -> bool:
+    return any(w in group.lower() for _step, words in TRAY_RULES for w in words)
+
+
+def tray_sequence_fits(model: AssemblyModel) -> int:
+    """How many of the 13 steps would get parts by the names of the groups (0 = the names say nothing)."""
+    return len({tray_step_of(g) for g in model.groups() if g != REF_GROUP and tray_group_known(g)})
+
+
+def apply_tray_sequence(model: AssemblyModel, job=None, explode: bool = True) -> dict[str, int]:
+    """The 13 steps put on a model: every group goes to its step by its name (the vehicle stays step 0), groups no
+    rule knows go to step 4. A step that gets no part becomes a step of work only. With `explode` the parts of
+    each step wait in the direction they are fitted from. Returns {group: step}."""
+    where = {g: (0 if g == REF_GROUP else tray_step_of(g)) for g in model.groups()}
+    for p in model.parts:
+        if p.step != 0 or p.group != REF_GROUP:
+            p.step = where[p.group]
+    upper = [p for p in model.parts if p.step == 2]
+    width = None
+    if upper:
+        lo, hi = model.bounds(upper)
+        width = hi[1] - lo[1]
+    model.steps = tray_sequence(job, width)
+    for n, step in enumerate(model.steps, 1):
+        if not model.parts_of_step(n):
+            step.no_parts = True
+    real = [p for p in model.parts if p.step > 0]
+    if explode and real:
+        auto_explode(model)  # what no rule below covers (small parts, bolts) moves away from the middle
+        lo, hi = model.bounds(real)
+        mid = [(lo[i] + hi[i]) / 2 for i in range(3)]
+        half = [max((hi[i] - lo[i]) / 2, 1.0) for i in range(3)]
+        tail = [p for p in real if p.step in (9, 12)]  # the rear is where the tail bar and the lamps are
+        rear = -1.0 if tail and sum(p.centre()[0] for p in tail) / len(tail) < mid[0] else 1.0
+        lift = {1: 0.0, 2: 450.0, 3: 650.0, 7: 800.0}  # the lower frame lies on the jig; the rest comes down onto it
+        for p in real:
+            c = p.centre()
+            if p.step in lift:
+                p.explode = [0.0, 0.0, lift[p.step]]
+            elif p.step in (8, 10):  # sides out to their side; a tailgate out to the rear
+                along, across = (c[0] - mid[0]) / half[0], (c[1] - mid[1]) / half[1]
+                if p.step == 8 and abs(along) > abs(across) and along * rear > 0:
+                    p.explode = [rear * 600.0, 0.0, 0.0]
+                else:
+                    p.explode = [0.0, 550.0 if across >= 0 else -550.0, 0.0]
+            elif p.step in (9, 12):
+                p.explode = [rear * 600.0, 0.0, 0.0]
+    return where
 
 
 def _clean_name(text: str, fallback: str) -> str:
@@ -538,12 +674,13 @@ def build_tray(job) -> AssemblyModel:
     b.next_step("ติดตั้งฝาข้างและฝาท้าย", "ยึดบานพับกับกรอบพื้น แขวนฝาข้างซ้าย–ขวาและฝาท้าย ปรับกลอนให้ล็อกสนิททุกจุด "
                 "เปิด–ปิดทดสอบ", check="ฝาปิดสนิท กลอนล็อกครบ ช่องไฟเท่ากัน", tools="ประแจ สว่าน")
     for side in (-1, 1):
-        b.add("ฝาข้าง " + ("ขวา" if side < 0 else "ซ้าย"), "ฝาข้าง & ฝาท้าย", "box", (length - 70, 20, gate),
+        b.add("ฝาข้าง " + ("ขวา" if side < 0 else "ซ้าย"), "ฝาข้าง", "box", (length - 70, 20, gate),
               (50, side * (width / 2 - 10) - 10, z), color=PLATE, explode=(0, side * 600, 0),
               size=f"{length - 70:g}×{gate:g}")
-    b.add("ฝาท้าย", "ฝาข้าง & ฝาท้าย", "box", (20, width - 40, gate), (length - 20, -(width - 40) / 2, z), color=PLATE,
+    b.add("ฝาท้าย", "ฝาท้าย", "box", (20, width - 40, gate), (length - 20, -(width - 40) / 2, z), color=PLATE,
           explode=(650, 0, 0), size=f"{width - 40:g}×{gate:g}")
     _lamps(b, job, z)
+    apply_tray_sequence(b.model, job, explode=False)  # the builder's own steps were only the order of building
     b.model.note = SAMPLE_NOTE
     return b.model
 
@@ -606,6 +743,8 @@ def render_steps_html(model: AssemblyModel, images: dict[int, str], job_no: str 
     for n, s in enumerate(model.steps, 1):
         rows = "".join(f"<tr><td align='center'>{b.no}</td><td>{e(b.name)}</td><td>{e(b.size)}</td><td>{e(b.part_no)}</td>"
                        f"<td align='center'>{b.qty}</td></tr>" for b in model.bom(n))
+        if not rows and s.no_parts:
+            rows = "<tr><td colspan='5' style='color:#6B7A90'>ขั้นนี้เป็นงาน / การตรวจ – ไม่มีชิ้นส่วนใหม่</td></tr>"
         extra = "".join(x for x in (
             f"<p><b>แรงขัน:</b> {e(s.torque)}</p>" if s.torque else "",
             f"<p><b>เครื่องมือ:</b> {e(s.tools)}</p>" if s.tools else "",
@@ -613,7 +752,7 @@ def render_steps_html(model: AssemblyModel, images: dict[int, str], job_no: str 
             f"<p style='color:#D64545'><b>⚠ {e(s.warning)}</b></p>" if s.warning else ""))
         img = f"<p><img src='{e(images[n])}' width='640'></p>" if n in images else ""
         blocks.append(
-            f"<h2 style='page-break-before:always'>ขั้นที่ {n} / {len(model.steps)} – {e(s.title)} "
+            f"<h2 style='page-break-before:always'>{e(s.phase) + ' · ' if s.phase else ''}ขั้นที่ {n} / {len(model.steps)} – {e(s.title)} "
             f"{'☑' if n in done else '☐'}</h2>{img}<p>{e(s.detail)}</p>{extra}"
             f"<table width='100%' cellspacing='0' cellpadding='3' border='1'><tr><th width='8%'>#</th><th width='40%'>ชิ้นส่วน</th>"
             f"<th width='27%'>ขนาด</th><th width='15%'>Part No.</th><th width='10%'>จำนวน</th></tr>{rows}</table>"

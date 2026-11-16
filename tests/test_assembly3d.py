@@ -20,26 +20,67 @@ def _job(**kw) -> im.InstallJob:
 def test_tray_model_follows_the_job():
     model = a3.build_for_job(_job())
     assert "1.96 × 2.60" in model.name and model.source == "auto" and model.problems() == []
-    assert [s.title for s in model.steps][1:4] == ["วางคานตามยาว (ซับเฟรม) ซ้าย–ขวา",
-                                                    "ยึดคานตามยาวกับแท่นยึด – สลัก M14 เกรด 10.9", "วางคานขวาง"]
-    assert model.steps[2].torque == "M14 เกรด 10.9: 150–200 Nm"
+    # the factory's 13 steps: on the jig, onto the vehicle, on the vehicle
+    assert len(model.steps) == 13
+    assert [s.phase for s in model.steps] == ["งานบนจิ๊ก"] * 4 + ["ยกขึ้นรถ"] * 2 + ["งานบนรถ"] * 7
+    assert [s.title for s in model.steps][:6] == [
+        "วางและเชื่อมโครงตัวล่าง", "เชื่อมโครงตัวบนเข้ากับโครงตัวล่าง", "ปูและเชื่อมแผ่นพื้น", "ติดชิ้นเชื่อมย่อยใต้โครง",
+        "ตรวจแท่นยึดบนแชสซี แล้วยกโครงวาง", "ขันสลักยึดกับแท่นยึด"]
+    assert model.steps[12].title == "ตรวจขั้นสุดท้าย" and model.steps[12].no_parts
+    assert [len(model.parts_of_step(n)) for n in range(1, 14)] == [8, 4, 2, 0, 6, 24, 4, 3, 0, 0, 0, 6, 0]
+    assert [n for n, s in enumerate(model.steps, 1) if s.no_parts] == [4, 9, 10, 11, 13]  # work only: no part to show
+    assert model.steps[5].torque == "M14 เกรด 10.9: 150–200 Nm" and "ขั้นต่ำ M12 เกรด 10.9" in model.steps[5].check
+    assert model.steps[1].check == "ผิวบนอยู่ระนาบเดียวกัน กว้าง 1,960 มม." and "28 มม." in model.steps[4].check
     groups = model.groups()
-    assert groups[0] == a3.REF_GROUP and {"ซับเฟรม", "สลักยึด", "คานขวาง", "พื้น", "โครงกันหัว"} <= set(groups)
+    assert groups[0] == a3.REF_GROUP and {"ซับเฟรม", "สลักยึด", "คานขวาง", "พื้น", "โครงกันหัว", "ฝาข้าง", "ฝาท้าย"} <= set(groups)
     rails = [p for p in model.parts if p.group == "ซับเฟรม"]
-    assert len(rails) == 2 and rails[0].dims[0] == 2600 and rails[0].size == "C100×50×5 L=2600"
+    assert len(rails) == 2 and rails[0].dims[0] == 2600 and rails[0].size == "C100×50×5 L=2600" and rails[0].step == 1
     cross = [p for p in model.parts if p.name == "คานขวาง"]
     xs = sorted(p.pos[0] for p in cross)
     assert len(cross) == 6 and max(b - a for a, b in zip(xs, xs[1:])) <= 600  # BEMM 5.6.3: 600 mm at most
-    assert [(b.no, b.name, b.qty) for b in model.bom(3)] == [(1, "แหวนรอง Ø50×5", 12), (2, "สลัก M14 เกรด 10.9 + น็อตล็อก", 12)]
+    assert [(b.no, b.name, b.qty) for b in model.bom(6)] == [(1, "แหวนรอง Ø50×5", 12), (2, "สลัก M14 เกรด 10.9 + น็อตล็อก", 12)]
     assert model.bom_no(next(p for p in model.parts if p.name.startswith("สลัก"))) == 2
     lo, hi = model.bounds([p for p in model.parts if p.step > 0])
     assert (hi[0] - lo[0], hi[1] - lo[1]) == (2600, 1960)  # the body is as long and as wide as the job says
     shorter = a3.build_for_job(_job(cab="double", body_length=1850, bolt_size="M12"))
-    assert "Double Cab" in shorter.name and shorter.steps[2].torque.startswith("M12")
+    assert "Double Cab" in shorter.name and shorter.steps[5].torque == "M12 เกรด 10.9: 95–125 Nm"
     assert len([p for p in shorter.parts if p.name == "คานขวาง"]) == 4
     box = a3.build_for_job(_job(product="box_body"))
     assert any(p.name == "หลังคา" for p in box.parts) and "captive" in box.steps[2].warning and box.problems() == []
     assert a3.build_for_job(_job(product="trailer_5m")) is None
+
+
+def test_the_13_steps_on_an_imported_model():
+    """Groups named like the levels of the customer's IGES go to the factory's steps; the rest waits in step 4."""
+    def part(n, group, x, y, z):
+        return a3.Part3D(f"m{n}", f"{group} {n:02d}", group, "mesh", mesh=[[[x, y, z], [x + 50, y, z], [x, y + 50, z]]])
+
+    names = ["กล่องหลัง", "โครงตัวล่าง", "โครงตัวบน", "พิ้น", "Layer0000", "โรบาหลัง", "ฝาข้าง", "ตะแกรงมีลาย", "Layer0001",
+             "บังโครน ใหม่", "ขาบ้ายะเบียน", "ฝาทังนำ้ม้น", "ไฟท้าย", "กรอบพื้น", "บานพับหลัง", "Hexagon nut M12"]
+    spots = {"โรบาหลัง": (1200, 0, 300), "ไฟท้าย": (1300, -800, -100), "กล่องหลัง": (1250, 0, -150)}
+    parts = [part(n, g, *spots.get(g, (-1000 + 100 * n, (-1) ** n * 600, 10 * n))) for n, g in enumerate(names, 1)]
+    parts.insert(2, part(40, "ฝาข้าง", 0, -950, 200))  # the right side gate
+    model = a3.AssemblyModel("tray", parts, source="file")
+    assert a3.tray_sequence_fits(model) == 11 and a3.tray_sequence_fits(a3.AssemblyModel("x", [part(1, "Layer0000", 0, 0, 0)])) == 0
+    where = a3.apply_tray_sequence(model)
+    assert where == {"กล่องหลัง": 12, "โครงตัวล่าง": 1, "โครงตัวบน": 2, "พิ้น": 3, "Layer0000": 4, "โรบาหลัง": 9, "ฝาข้าง": 8,
+                     "ตะแกรงมีลาย": 7, "Layer0001": 4, "บังโครน ใหม่": 10, "ขาบ้ายะเบียน": 4, "ฝาทังนำ้ม้น": 11, "ไฟท้าย": 12,
+                     "กรอบพื้น": 2, "บานพับหลัง": 4, "Hexagon nut M12": 6}
+    assert len(model.steps) == 13 and model.problems() == []
+    assert [n for n, s in enumerate(model.steps, 1) if s.no_parts] == [5, 13]
+    assert model.steps[5].torque == "M12 เกรด 10.9: 95–125 Nm"  # no job: the minimum of Ford's manual
+    by_group = {p.group: p for p in model.parts}
+    assert by_group["โครงตัวล่าง"].explode == [0.0, 0.0, 0.0] and by_group["พิ้น"].explode == [0.0, 0.0, 650.0]
+    assert by_group["โรบาหลัง"].explode == [600.0, 0.0, 0.0] and by_group["ไฟท้าย"].explode == [600.0, 0.0, 0.0]
+    assert model.part("m40").explode == [0.0, -550.0, 0.0]  # a side gate goes out to its own side
+    mirrored = a3.AssemblyModel("m", [part(1, "โรบาหลัง", -1200, 0, 0), part(2, "โครงตัวล่าง", 0, 0, 0),
+                                      part(3, "โครงตัวล่าง", 1300, 0, 0)])
+    a3.apply_tray_sequence(mirrored)
+    assert mirrored.parts[0].explode == [-600.0, 0.0, 0.0]  # a model drawn with its rear towards −X
+    job = _job(bolt_size="M12", cab_gap=35, lamp_low=620)
+    a3.apply_tray_sequence(model, job, explode=False)
+    assert "งานนี้ 35 มม." in model.steps[4].check and "งานนี้ 620 มม." in model.steps[11].check
+    assert by_group["พิ้น"].explode == [0.0, 0.0, 650.0]  # left as they were
 
 
 def test_faces_wind_outwards():
@@ -87,7 +128,8 @@ def test_imported_models(tmp_path):
     with pytest.raises(ValueError):
         a3.model_from_files([tmp_path / "empty.obj"])
     page = a3.render_steps_html(a3.build_for_job(_job()), {1: "a.png"}, "SO-1", {1})
-    assert "ขั้นที่ 1 / 9" in page and "a.png" in page and "☑" in page and "150–200 Nm" in page
+    assert "งานบนจิ๊ก · ขั้นที่ 1 / 13" in page and "a.png" in page and "☑" in page and "150–200 Nm" in page
+    assert "ไม่มีชิ้นส่วนใหม่" in page  # a step of work only says so in place of an empty table
 
 
 @pytest.fixture(scope="module")
@@ -132,13 +174,13 @@ def test_view_steps_and_picking(app):
     assert picked is not None and picked.step > 0
     view.set_step(2, animate=False)
     states = {p.name: view._state(p) for p in model.parts}
-    assert states["คานตามยาว ซ้าย"] == "current" and states["แท่นยึดบนแชสซี (ของรถ)"] == "done"
+    assert states["คานข้าง ซ้าย"] == "current" and states["คานตามยาว ซ้าย"] == "done"
     assert states["แผ่นพื้น ซ้าย"] == "" and states["ผนังหลังเก๋ง"] == "ref"
     view.ghost_later = True
     assert view._state(floor) == "ghost"
     view.set_explode(0.5)
     assert list(view._offset(floor, "normal")) == [0, 75, 300] and not view._offset(model.parts[0], "ref").any()
-    view.set_step(6)  # the floor flies in
+    view.set_step(3)  # the floor flies in
     assert view._anim == 1 and view._timer.isActive() and list(view._offset(floor, "current")) == list(floor.explode)
     view.finish_animation()
     zoom = view.zoom
@@ -167,12 +209,13 @@ def test_assembly_tab(window, tmp_path):
     tab = page.assembly
     assert "Single Cab" in tab.title.text() and tab.step == 0 and tab.bom.rowCount() > 10
     assert tab.groups.count() == len(tab.model.groups())  # 'ทุกกลุ่ม' in place of the vehicle
-    tab.go(3, animate=False)
-    assert tab.step_no.text() == "ขั้นที่ 3 / 9" and tab.bom.rowCount() == 2 and "150–200 Nm" in tab.step_info.text()
+    tab.go(6, animate=False)
+    assert tab.step_no.text() == "ขั้นที่ 6 / 13 · ยกขึ้นรถ" and tab.bom.rowCount() == 2
+    assert "150–200 Nm" in tab.step_info.text() and "ไม่มีชิ้นส่วนใหม่" not in tab.step_info.text()
     tab.done.setChecked(True)
-    assert page.job.record["asm:3"]["done"] and "1 / 9" in tab.progress.text()
+    assert page.job.record["asm:6"]["done"] and "1 / 13" in tab.progress.text()
     tab.go(99)
-    assert tab.step == 9
+    assert tab.step == 13 and "ไม่มีชิ้นส่วนใหม่" in tab.step_info.text() and tab.bom.rowCount() == 0
     tab.go(-5)
     assert tab.step == 0 and tab.step_no.text().startswith("ภาพรวม")
     # one group alone
@@ -184,15 +227,15 @@ def test_assembly_tab(window, tmp_path):
     # the job changes: the model follows (the 2.60 m tray on a double cab is still drawn - the BEMM tab says it fails)
     page.inputs["body_length"].setValue(1850)
     assert "1.85" in tab.title.text() and len([p for p in tab.model.parts if p.name == "คานขวาง"]) == 4
-    assert "asm:3" in page.job.record  # the marks stay with the job
+    assert "asm:6" in page.job.record  # the marks stay with the job
     # a part moved to another step by hand: the model is no longer rebuilt from the job
     row = next(r for r in range(tab.parts.rowCount()) if tab.parts.item(r, 1).text() == "คานท้าย")
-    tab.parts.item(row, 3).setText("6")
+    tab.parts.item(row, 3).setText("3")
     tab.parts.item(row, 5).setText("RRS-F-900")
-    assert tab.model.source == "file" and [b.name for b in tab.model.bom(6)][0] == "คานท้าย"
+    assert tab.model.source == "file" and [b.name for b in tab.model.bom(3)][0] == "คานท้าย"
     page.inputs["body_length"].setValue(2000)
     assert "1.85" in tab.title.text()
-    tab.go(6, animate=False)
+    tab.go(3, animate=False)
     assert tab.bom.rowCount() == 3 and tab.bom.item(0, 3).text() == "RRS-F-900"
     tab.step_title.setText("ปูพื้น + คานท้าย")
     tab._step_text_edited()
@@ -200,11 +243,12 @@ def test_assembly_tab(window, tmp_path):
     tab.rebuild(force=True)
     assert "2.00" in tab.title.text() and tab.model.source == "auto"
     tab.open_model(saved)
-    assert tab.model.steps[5].title == "ปูพื้น + คานท้าย" and tab.model.source == "file"
+    assert tab.model.steps[2].title == "ปูพื้น + คานท้าย" and tab.model.source == "file"
     pdf = tab.export_pdf(str(tmp_path / "manual.pdf"))
     assert (tmp_path / "manual.pdf").read_bytes()[:4] == b"%PDF" and pdf
     tab.export_pdf(str(tmp_path / "manual.html"))
-    assert len(list((tmp_path / "manual").glob("step_*.png"))) == 9 and "ขั้นที่ 9 / 9" in (tmp_path / "manual.html").read_text("utf-8")
+    assert len(list((tmp_path / "manual").glob("step_*.png"))) == 13
+    assert "งานบนรถ · ขั้นที่ 13 / 13" in (tmp_path / "manual.html").read_text("utf-8")
     # the demonstration
     tab.go(0)
     tab.toggle_play()
@@ -283,21 +327,21 @@ def test_a_long_import_note_stays_short(window):
 def test_steps_can_be_added_removed_and_moved():
     model = a3.build_for_job(_job())
     titles = [s.title for s in model.steps]
-    floor = [p.id for p in model.parts_of_step(6)]
-    assert a3.insert_step(model, 3, a3.Step("ตรวจระดับ")) == {n: n + 1 for n in range(3, 10)}
-    assert [s.title for s in model.steps] == [*titles[:2], "ตรวจระดับ", *titles[2:]] and model.parts_of_step(3) == []
-    assert [p.id for p in model.parts_of_step(7)] == floor and len(model.problems()) == 1  # the new step is empty
-    assert a3.move_step(model, 7, -1) == {7: 6, 6: 7}
-    assert [p.id for p in model.parts_of_step(6)] == floor and model.steps[5].title == "ปูพื้นกระบะ"
-    assert a3.move_step(model, 1, -1) == {} and a3.move_step(model, 10, 1) == {} and a3.move_step(model, 2, 3) == {}
-    assert a3.remove_step(model, 3)[3] is None and [s.title for s in model.steps][:3] == titles[:3]
-    bolts = len(model.parts_of_step(3))
-    rails = len(model.parts_of_step(2))
-    moved = a3.remove_step(model, 3)  # the bolts join the rails
-    assert moved == {3: None, **{n: n - 1 for n in range(4, 10)}} and len(model.parts_of_step(2)) == rails + bolts
-    pads = len(model.parts_of_step(1))
+    floor = [p.id for p in model.parts_of_step(3)]
+    assert a3.insert_step(model, 2, a3.Step("ตรวจระดับ")) == {n: n + 1 for n in range(2, 14)}
+    assert [s.title for s in model.steps] == [titles[0], "ตรวจระดับ", *titles[1:]] and model.parts_of_step(2) == []
+    assert [p.id for p in model.parts_of_step(4)] == floor
+    assert model.problems() == ["ขั้นที่ 2 “ตรวจระดับ” ไม่มีชิ้นส่วน"]  # a new step is expected to get parts
+    assert a3.move_step(model, 4, -1) == {4: 3, 3: 4}
+    assert [p.id for p in model.parts_of_step(3)] == floor and model.steps[2].title == "ปูและเชื่อมแผ่นพื้น"
+    assert a3.move_step(model, 1, -1) == {} and a3.move_step(model, 14, 1) == {} and a3.move_step(model, 2, 3) == {}
+    assert a3.remove_step(model, 2)[2] is None and [s.title for s in model.steps][:2] == [titles[0], titles[2]]
+    frame, plates = len(model.parts_of_step(1)), len(model.parts_of_step(2))
+    moved = a3.remove_step(model, 2)  # the floor joins the lower frame
+    assert moved == {2: None, **{n: n - 1 for n in range(3, 14)}} and len(model.parts_of_step(1)) == frame + plates
+    upper = len(model.parts_of_step(2))
     a3.remove_step(model, 1)  # the first step: its parts join what is now the first
-    assert len(model.parts_of_step(1)) == pads + rails + bolts and model.problems() == []
+    assert len(model.parts_of_step(1)) == frame + plates + upper and model.problems() == [] and len(model.steps) == 11
     one = a3.AssemblyModel("x", [a3.Part3D("a", "a", "g", step=1)], [a3.Step("เดียว")])
     assert a3.remove_step(one, 1) == {} and len(one.steps) == 1  # the last step stays
     a3.set_explode(one.parts, "ไปทางขวา (−Y)", 250)
@@ -317,7 +361,7 @@ def test_tab_tools_for_many_parts_and_steps(window, monkeypatch):
     assert tab.move_selected_to_step() == 0  # the overview is no step
     tab.go(5, animate=False)
     assert tab.move_selected_to_step() == 6 and tab.model.source == "file"
-    assert sum(1 for p in model.parts_of_step(5) if p.name == "คานขวาง") == 6 and "ขั้นที่ 4" in tab.note.text()
+    assert sum(1 for p in model.parts_of_step(5) if p.name == "คานขวาง") == 6 and len(model.parts_of_step(1)) == 2
     assert len(tab.selected_parts()) == 6  # the selection stays for the next action
     assert tab.set_group_selected("กรอบพื้น") == 6 and "คานขวาง" not in model.groups()
     tab.explode_dir.setCurrentText("ลง (−Z)")
@@ -336,12 +380,34 @@ def test_tab_tools_for_many_parts_and_steps(window, monkeypatch):
     assert page.job.record["asm:5"]["done"]
     assert tab.shift_step(-1) and tab.step == 4 and model.steps[3].torque.startswith("M10")
     assert page.job.record["asm:4"]["done"] and "asm:5" not in page.job.record
-    assert tab.add_step(after=False) == 4 and model.steps[3].title == "ขั้นตอนใหม่" and len(model.steps) == 10
+    assert tab.add_step(after=False) == 4 and model.steps[3].title == "ขั้นตอนใหม่" and len(model.steps) == 14
+    assert "ขั้นที่ 4 “ขั้นตอนใหม่” ไม่มีชิ้นส่วน" in tab.note.text()
     assert page.job.record["asm:5"]["done"] and tab.bom.rowCount() == 0
     monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.Yes)
-    assert tab.delete_step() and len(model.steps) == 9 and page.job.record["asm:4"]["done"]
+    assert tab.delete_step() and len(model.steps) == 13 and page.job.record["asm:4"]["done"]
     tab.go(4, animate=False)
     assert tab.done.isChecked() and tab.step_fields["torque"].text().startswith("M10")
     assert not tab.shift_step(9)
     pdf_note = a3.render_steps_html(model, {}, "SO-9", tab.done_steps())
     assert "41–55 Nm" in pdf_note and "ระยะทแยงมุม" in pdf_note
+
+
+def test_tab_puts_the_13_steps_on_an_imported_model(window, tmp_path):
+    page = window.pages["install"]
+    tab = page.assembly
+    obj = tmp_path / "tray.obj"
+    obj.write_text("".join(f"o {name}\nv {x} 0 {z}\nv {x + 100} 0 {z}\nv {x} 100 {z}\nf -3 -2 -1\n" for name, x, z in (
+        ("โครงตัวล่าง_1", 0, 0), ("โครงตัวล่าง_2", 500, 0), ("โครงตัวบน_1", 0, 100), ("พิ้น_1", 0, 180),
+        ("Layer0000_1", 200, 50), ("ฝาข้าง_1", 0, 300), ("โรบาหลัง_1", 2500, 300), ("กล่องหลัง_1", 2550, -100))), encoding="utf-8")
+    model = tab.import_files([str(obj)])
+    assert len(model.steps) == 7 and a3.tray_sequence_fits(model) == 6  # an OBJ comes in with a step per group
+    tab.go(2, animate=False)
+    tab.done.setChecked(True)
+    where = tab.use_tray_sequence(ask=False)
+    assert where["Layer0000"] == 4 and where["โรบาหลัง"] == 9 and len(tab.model.steps) == 13 and tab.step == 0
+    assert not any(k.startswith("asm:") for k in page.job.record)  # the marks were of the old steps
+    assert "ขั้น 4" in window.statusBar().currentMessage() or tab.model.problems() == []
+    tab.go(1, animate=False)
+    assert tab.step_no.text() == "ขั้นที่ 1 / 13 · งานบนจิ๊ก" and tab.bom.rowCount() == 2
+    tab.go(5, animate=False)
+    assert "28 มม." in tab.step_info.text() and "ไม่มีชิ้นส่วนใหม่" in tab.step_info.text()

@@ -938,6 +938,37 @@ def test_the_program_started_as_the_reader_of_one_file(tmp_path):
     assert subprocess.run([*program, "--cad-check"], env=env, check=False).returncode == 0  # the reader is found
 
 
+def test_reader_reports_any_failure_and_ends_with_the_program(tmp_path, monkeypatch):
+    path = _tray(tmp_path / "tray.step")
+    log = tmp_path / "log.txt"
+    # the model cannot be written (a full disk, a folder that is gone): an error line, not an exception out of the child
+    code = ci._child([str(path), str(tmp_path / "no such folder" / "out.rrsasm"), "60000", "", str(log)])
+    last = json.loads(log.read_text(encoding="utf-8").splitlines()[-1][len(ci._MARK):])
+    assert code == 3 and last["kind"] == "error" and "FileNotFoundError" in last["message"]
+    # the program closes while a file is being read: the reader is ended, the waiting thread comes back at once
+    import threading
+
+    monkeypatch.setattr(ci, "_CHILD", "import time; time.sleep(60)")
+    monkeypatch.setattr(ci, "_STOPPED", False)
+    said = []
+
+    def run():
+        try:
+            ci.read_cad_isolated(path)
+        except ci.CadImportError as e:
+            said.append(str(e))
+
+    thread = threading.Thread(target=run)
+    start = time.monotonic()
+    thread.start()
+    while not ci._CHILDREN and time.monotonic() - start < 10:
+        time.sleep(0.02)
+    ci.stop_children()
+    thread.join(10)
+    assert not thread.is_alive() and time.monotonic() - start < 10 and "ยกเลิกการนำเข้า" in said[0] and not ci._CHILDREN
+    assert not list(Path(ci.tempfile.gettempdir()).glob("rrs_cad_*"))
+
+
 def test_command_line_tool(tmp_path):
     path = _tray(tmp_path / "tray.step")
     out = tmp_path / "tray.rrsasm"

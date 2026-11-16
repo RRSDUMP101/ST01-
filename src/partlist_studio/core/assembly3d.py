@@ -84,6 +84,9 @@ class Part3D:
     note: str = ""
     mesh: list = field(default_factory=list)  # shape 'mesh': [[(x, y, z), …], …] faces
     cull: bool = False  # shape 'mesh': a closed skin whose faces all wind outwards – the view hides its back faces
+    level: str = ""  # the designer's level, taken from another file of the same assembly (adopt_groups)
+    file_group: str = ""  # the group before the 13 steps gave the part the group the technician reads …
+    auto_group: str = ""  # … and that group: while `group` still is this one, sorting again starts from file_group
 
     def chunks(self) -> list[list[Face]]:
         """The faces in convex pieces (a box: one; a channel: three; an imported mesh: one, of any form)."""
@@ -482,57 +485,68 @@ def adopt_groups(model: AssemblyModel, other: AssemblyModel, tol: float = 1.0) -
     return out
 
 
+def _base_group(p: Part3D) -> str:
+    """The group to sort a part by: what the file (or the user) said, not what an earlier sorting made of it –
+    else a bolt put with its neighbour by a guess would count as a member of that sub-assembly the next time."""
+    return p.file_group if p.file_group and p.group == p.auto_group else p.group
+
+
 def tray_steps(model: AssemblyModel, levels: dict[str, str] | None = None) -> dict[str, tuple[int, str, str]]:
     """Every part of a flat tray → (step, group for the technician, how it was found: 'ชื่อ' · 'เลเยอร์' · 'กลุ่ม' ·
     'ชิ้นข้างเคียง' · 'ไม่ทราบ'). In this order: a name RRS sorts by; the designer's level (`levels`, from
-    adopt_groups); the group. A screw, nut or washer follows its sub-assembly, then its level, then the part it sits
-    on – the size of a bolt does not say what it fastens. What nothing tells stays at step 4, not guessed."""
+    adopt_groups, or the level the part got from an earlier run); the group. A screw, nut or washer follows its
+    sub-assembly, then its level, then the part it sits on – the size of a bolt does not say what it fastens. What
+    nothing tells stays at step 4, not guessed."""
     levels = levels or {}
     out: dict[str, tuple[int, str, str]] = {}
     bolts: list[Part3D] = []
+    loose: set[str] = set()  # the bolts, nuts and washers: they do not say what a step's parts are called
     for p in model.parts:
         if p.group == REF_GROUP:
             continue
-        level = levels.get(p.id, "")
+        level, group = levels.get(p.id, "") or p.level, _base_group(p)
         bolt = bool(FASTENER.search(_own_words(p.name)))
-        named = _rule(TRAY_NAMED, p.name) or (None if bolt else _rule(TRAY_NAMED, p.group))  # a bolt is not a hinge
-        if named is None and (FORD_PART.match(_own_words(p.name)) or FORD_PART.match(_own_words(p.group))):
+        if bolt:
+            loose.add(p.id)
+        named = _rule(TRAY_NAMED, p.name) or (None if bolt else _rule(TRAY_NAMED, group))  # a bolt is not a hinge
+        if named is None and (FORD_PART.match(_own_words(p.name)) or FORD_PART.match(_own_words(group))):
             named = (FORD_GROUP, 12)
-        by_level, by_group = _rule(TRAY_RULES, level), _rule(TRAY_RULES, p.group)
+        by_level, by_group = _rule(TRAY_RULES, level), _rule(TRAY_RULES, group)
         if named:
             out[p.id] = (named[1], named[0], "ชื่อ")
         elif bolt:
-            if FASTENER.search(_own_words(p.group)):  # a group that is only the bolt's own name says nothing
+            if FASTENER.search(_own_words(group)):  # a group that is only the bolt's own name says nothing
                 by_group = None
             found = by_group or by_level
             if found:
-                own = tidy_name(MIRROR.sub("", p.group)) if by_group else tidy_name(level)
+                own = tidy_name(MIRROR.sub("", group)) if by_group else tidy_name(level)
                 out[p.id] = (found[1], FASTENER_GROUPS.get(found[1], own), "กลุ่ม" if by_group else "เลเยอร์")
             else:
                 bolts.append(p)
         elif by_level:
             out[p.id] = (by_level[1], tidy_name(level), "เลเยอร์")
         elif by_group:
-            out[p.id] = (by_group[1], tidy_name(MIRROR.sub("", p.group)), "กลุ่ม")
+            out[p.id] = (by_group[1], tidy_name(MIRROR.sub("", group)), "กลุ่ม")
         else:
-            group = UNSORTED_GROUP if DEFAULT_NAME.match(_own_words(p.group)) else tidy_name(MIRROR.sub("", p.group))
-            out[p.id] = (TRAY_OTHER, group, "ไม่ทราบ")
+            name = UNSORTED_GROUP if DEFAULT_NAME.match(_own_words(group)) else tidy_name(MIRROR.sub("", group))
+            out[p.id] = (TRAY_OTHER, name, "ไม่ทราบ")
     # a sub-assembly keeps the name of the designer's level its step is drawn on ('ตะแกรงมีลาย', not a second group)
     count: dict[int, dict[str, int]] = {}
-    for step, group, how in out.values():
-        if how == "เลเยอร์":
+    for pid, (step, group, how) in out.items():
+        if how == "เลเยอร์" and pid not in loose:
             count.setdefault(step, {})[group] = count.get(step, {}).get(group, 0) + 1
     main = {step: max(c, key=c.get) for step, c in count.items()}
-    for pid, (step, group, how) in out.items():
-        if how == "กลุ่ม" and step in main and group not in FASTENER_GROUPS.values():
+    for pid, (step, _group, how) in out.items():
+        if how == "กลุ่ม" and step in main and pid not in loose:
             out[pid] = (step, main[step], how)
-    held = [(p.bounds(), out[p.id]) for p in model.parts if p.id in out and out[p.id][2] != "ไม่ทราบ"
-            and not FASTENER.search(_own_words(p.name))]
+    held = [(p.bounds(), out[p.id]) for p in model.parts if p.id in out and out[p.id][2] != "ไม่ทราบ" and p.id not in loose]
     for p in bolts:  # a bolt belongs to what it fastens
         box = p.bounds()
-        near = min(held, key=lambda k: _gap(box, k[0]), default=None)
-        if near is not None and _gap(box, near[0]) <= 50.0:
-            step, group = near[1][0], near[1][1]
+        gaps = [(_gap(box, b), found) for b, found in held]
+        nearest = min((g for g, _f in gaps), default=None)
+        if nearest is not None and nearest <= 50.0:
+            # it touches the two parts it joins: it is fitted with the later one (not: with whichever is listed first)
+            step, group, _how = max((f for g, f in gaps if g <= nearest + 1.0), key=lambda f: f[0])
             out[p.id] = (step, FASTENER_GROUPS.get(step, group), "ชิ้นข้างเคียง")
         else:
             out[p.id] = (TRAY_OTHER, UNSORTED_GROUP, "ไม่ทราบ")
@@ -546,23 +560,35 @@ def tidy_name(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+SIDE = re.compile(r"ซ้าย|ขวา(?!ง)")  # the side as a word: not the ขวา of คานขวาง
+
+
 def _with_side(name: str, side: str) -> str:
     """'บานพับ_Mirror 02' + ขวา → 'บานพับ ขวา 02' · 'พื้น ซ้าย2_Mirror' + ขวา → 'พื้น ขวา2'."""
     name = MIRROR.sub("", name).strip()
     if not side:
         return name
-    if "ซ้าย" in name or "ขวา" in name:
-        return name.replace("ซ้าย", side).replace("ขวา", side) if side == "ซ้าย" else name.replace("ซ้าย", side)
+    if SIDE.search(name):
+        return SIDE.sub(side, name)
     m = re.match(r"^(.*?)(\s+\d+)?$", name)
     return f"{m.group(1)} {side}{m.group(2) or ''}"
+
+
+def rename_part(model: AssemblyModel, part: Part3D, name: str) -> None:
+    """A new name for a part; the photo of the real part, kept by name, goes with it."""
+    old, part.name = part.name, name
+    if old != name and old in model.photos:
+        model.photos.setdefault(name, model.photos[old])
+        if not any(p.name == old for p in model.parts):
+            del model.photos[old]
 
 
 def tidy_names(model: AssemblyModel, rear: float = 0.0) -> int:
     """Names for the technician: misspellings corrected, and ZW3D's '_Mirror' said as a side. With `rear` (+1: the
     rear of the body is at +X, −1: at −X) the side is where the part really is – left and right as seen from behind
     the vehicle looking forward – for a mirrored part and its original alike; without it a mirrored part is called
-    ขวา and its original ซ้าย, as RRS draws them. The name in the file stays in the part's note. Returns how many
-    names changed."""
+    ขวา and its original ซ้าย, as RRS draws them. A bolt, nut or washer gets no side: it is the same part on both.
+    The name in the file stays in the part's note. Returns how many names changed."""
     real = [p for p in model.parts if p.group != REF_GROUP]
     if not real:
         return 0
@@ -573,7 +599,7 @@ def tidy_names(model: AssemblyModel, rear: float = 0.0) -> int:
     for p in real:
         mirrored = bool(MIRROR.search(p.name) or MIRROR.search(p.group))
         side = ""
-        if mirrored or p.name in twins or p.group in twins:
+        if (mirrored or p.name in twins or p.group in twins) and not FASTENER.search(_own_words(p.name)):
             off = p.centre()[1] - mid
             if rear and abs(off) > clear:
                 side = "ซ้าย" if off * rear < 0 else "ขวา"
@@ -583,7 +609,7 @@ def tidy_names(model: AssemblyModel, rear: float = 0.0) -> int:
         if name != p.name:
             if "ชื่อในไฟล์:" not in p.note:
                 p.note = f"{p.note} · ชื่อในไฟล์: {p.name}".strip(" ·")
-            p.name = name
+            rename_part(model, p, name)
             changed += 1
         p.group = tidy_name(MIRROR.sub("", p.group).strip())
     return changed
@@ -595,6 +621,7 @@ def apply_tray_sequence(model: AssemblyModel, job=None, explode: bool = True,
     that gets no part becomes a step of work only. With `explode` the parts of each step wait in the direction they
     are fitted from. With `tidy` (a model from a CAD file) the parts also get the groups the technician reads and
     names without misspellings and '_Mirror'. Returns {group: the step most of its parts went to}."""
+    levels = levels or {}
     found = tray_steps(model, levels)
     for p in model.parts:
         if p.id in found:
@@ -636,11 +663,17 @@ def apply_tray_sequence(model: AssemblyModel, job=None, explode: bool = True,
                     p.explode = [0.0, 550.0 if across >= 0 else -550.0, 0.0]
             elif p.step in (9, 12):
                 p.explode = [back * 600.0, 0.0, 0.0]
+    for p in model.parts:
+        if p.id in levels:
+            p.level = levels[p.id]  # the next sorting knows it without the other file
     if tidy:
-        for p in model.parts:
-            if p.id in found:
-                p.group = found[p.id][1]
+        sorted_parts = [p for p in model.parts if p.id in found]
+        base = {p.id: _base_group(p) for p in sorted_parts}
+        for p in sorted_parts:
+            p.group = base[p.id]  # the sides are told from what the file calls a part and its sub-assembly …
         tidy_names(model, rear)
+        for p in sorted_parts:  # … and only then does the part get the group the technician reads
+            p.file_group, p.group, p.auto_group = base[p.id], found[p.id][1], found[p.id][1]
     where: dict[str, dict[int, int]] = {}
     for p in model.parts:
         count = where.setdefault(p.group, {})

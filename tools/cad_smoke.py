@@ -34,6 +34,9 @@ def write_step(path: Path) -> None:
 
 
 def main(argv: list[str]) -> int:
+    for stream in (sys.stdout, sys.stderr):  # the sizes are written with ×: not in every Windows code page
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
     program = Path(argv[0])
     wait = float(argv[1]) if len(argv) > 1 else 240.0
     with tempfile.TemporaryDirectory() as folder:

@@ -143,6 +143,7 @@ class AssemblyTab(QWidget):
         lay.setContentsMargins(0, 0, 0, 0)
         self.view = Assembly3DView()
         self.view.part_clicked.connect(self._part_clicked)
+        self.view.part_double_clicked.connect(lambda _id: self.popup.put_away())  # the view zooms: show it
         self.view.animation_done.connect(self._animation_done)
         self.popup = PartPopup(self.view)  # the detail card of the part that was tapped
         self.popup.saved.connect(self._popup_saved)
@@ -187,7 +188,7 @@ class AssemblyTab(QWidget):
         self.detail_on.setChecked(True)
         self.detail_on.setToolTip("คลิก / แตะชิ้นส่วนในภาพ → การ์ดรายละเอียด: รูป สเปก จุดตรวจ ปุ่มไปขั้นประกอบ\n"
                                   "Ctrl + คลิก = เลือกหลายชิ้นโดยไม่เปิดการ์ด")
-        self.detail_on.toggled.connect(lambda on: None if on else self.popup.hide())
+        self.detail_on.toggled.connect(lambda on: None if on else self.popup.put_away())
         for c in (self.labels, self.ghost, self.vehicle, self.detail_on):
             opts.addWidget(c)
         lay.addWidget(opt_box)
@@ -290,7 +291,7 @@ class AssemblyTab(QWidget):
 
     def set_model(self, model: a3.AssemblyModel | None, keep_step: bool = False) -> None:
         self.stop_play()
-        self.popup.hide()
+        self.popup.put_away()
         self.model = model
         self.step = min(self.step, len(model.steps)) if (model and keep_step) else 0
         self.view.hidden_groups, self.view.hidden_parts = set(), set()
@@ -352,8 +353,9 @@ class AssemblyTab(QWidget):
             (self.view.hidden_parts.discard if item.checkState() == Qt.Checked else self.view.hidden_parts.add)(part.id)
             self.view.update()
             return
+        self.popup.put_away()  # the card would keep the old name, step and Part No.
         if col == C_NAME and text:
-            part.name = text
+            a3.rename_part(self.model, part, text)  # its photo goes with the name
         elif col == C_GROUP and text:
             part.group = text
             self._fill_groups()
@@ -392,7 +394,7 @@ class AssemblyTab(QWidget):
         part = self.model.part(part_id) if self.model else None
         self._describe(part)
         if part is None:
-            self.popup.hide()  # a tap beside the model puts the card away
+            self.popup.put_away()  # a tap beside the model puts the card away
             return
         more = bool(QApplication.keyboardModifiers() & Qt.ControlModifier)  # Ctrl + click: one more part
         for r in range(self.parts.rowCount()):
@@ -400,29 +402,33 @@ class AssemblyTab(QWidget):
                 self.select_part_row(r, more)
                 break
         if more or not self.detail_on.isChecked():
-            self.popup.hide()
+            self.popup.put_away()
         else:
             self.show_part_card(part)
 
     # ---- the detail card of a part ----------------------------------------------
-    def show_part_card(self, part: a3.Part3D, media: int | None = None) -> None:
-        self.popup.show_part(self.model, part, self.get_job(), self.view.last_click.toPoint(), media)
+    def show_part_card(self, part: a3.Part3D, media: int | None = None, keep_edits: bool = False) -> None:
+        self.popup.show_part(self.model, part, self.get_job(), self.view.last_click.toPoint(), media, keep_edits)
 
     def _popup_saved(self, part_id: str, part_no: str, note: str, all_same: bool) -> None:
         part = self.model.part(part_id) if self.model else None
         if part is None:
             return
-        parts = [p for p in self.model.parts if p.name == part.name and p.size == part.size] if all_same else [part]
-        if all(p.part_no == part_no and p.note == note for p in parts):
+        new_no, new_note = self.popup.changed()  # only what was changed in the card: the other field of the
+        if not (new_no or new_note):             # other parts of that name may differ on purpose
             return
+        parts = [p for p in self.model.parts if p.name == part.name and p.size == part.size] if all_same else [part]
         for p in parts:
-            p.part_no, p.note = part_no, note
+            if new_no:
+                p.part_no = part_no
+            if new_note:
+                p.note = note
         self._edited()
         self._describe(part)
         self.state.notify(f"บันทึกรายละเอียดของ {part.name} แล้ว" + (f" ({len(parts)} ชิ้น)" if len(parts) > 1 else ""))
 
     def _popup_go(self, step: int) -> None:
-        self.popup.hide()
+        self.popup.put_away()
         self.go(step)
 
     def attach_photo(self, part_id: str, path: str = "", remove: bool = False) -> bool:
@@ -443,9 +449,10 @@ class AssemblyTab(QWidget):
                 QMessageBox.warning(self, "แนบรูปจริง", f"เปิดรูป {Path(path).name} ไม่ได้ – ใช้ไฟล์ JPG หรือ PNG")
                 return False
             self.model.photos[part.name] = data
-        self._edited()
-        if not self.popup.isHidden() and self.popup.part_id == part_id:
-            self.show_part_card(part, media=1)
+        shown = not self.popup.isHidden() and self.popup.part_id == part_id
+        self._edited(keep_card=shown)
+        if shown:
+            self.show_part_card(part, media=1, keep_edits=True)  # what was typed in the card stays
         self.state.notify(f"{'ลบ' if remove else 'แนบ'}รูปจริงของ {part.name} แล้ว – กด บันทึก… เพื่อเก็บลงไฟล์คู่มือประกอบ")
         return True
 
@@ -457,8 +464,11 @@ class AssemblyTab(QWidget):
         self.parts.scrollToItem(self.parts.item(row, 0))
 
     # ---- the chosen parts ---------------------------------------------------
-    def _edited(self, keep_rows: bool = True) -> None:
-        """The model was changed by hand: it stops following the job, and the table and the picture show it."""
+    def _edited(self, keep_rows: bool = True, keep_card: bool = False) -> None:
+        """The model was changed by hand: it stops following the job, and the table and the picture show it.
+        An open detail card would show what the part was before: it is put away."""
+        if not keep_card:
+            self.popup.put_away()
         ids = {p.id for p in self.selected_parts()} if keep_rows else set()
         self.model.source = "file"
         self._fill_groups()
@@ -550,7 +560,7 @@ class AssemblyTab(QWidget):
         if not self.model:
             return
         self.step = min(max(step, 0), len(self.model.steps))
-        self.popup.hide()  # the part of the card may not be in the picture of this step
+        self.popup.put_away()  # the part of the card may not be in the picture of this step
         self.view.set_step(self.step or None, animate=animate)
         self._show_step()
 

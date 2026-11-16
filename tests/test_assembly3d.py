@@ -584,6 +584,7 @@ def test_a_tap_on_a_part_opens_its_detail_card(window, tmp_path):
     from PySide6.QtCore import QPoint, QPointF, Qt
     from PySide6.QtGui import QColor, QImage
     from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QApplication
 
     tab = window.pages["install"].assembly
     window.resize(1500, 950)
@@ -598,12 +599,13 @@ def test_a_tap_on_a_part_opens_its_detail_card(window, tmp_path):
     tab.view.part_clicked.emit(bolt.id)  # what a click on the part in the picture sends
     assert popup.isVisible() and popup.part_id == bolt.id and popup.title.text() == bolt.name
     assert popup.subtitle.text() == "สลักยึด · ขั้นที่ 6" and popup.step_btn.text() == "ไปขั้นที่ 6"
-    assert popup.all_same.text() == "ใช้กับชิ้นชื่อเดียวกันทั้ง 12 ชิ้น" and popup.form.rowCount() >= 10
+    assert popup.all_same.text() == "ใช้ที่แก้กับชิ้นชื่อเดียวกันทั้ง 12 ชิ้น" and popup.form.rowCount() >= 10
     assert popup.mini.model.parts[0].name == bolt.name and len(popup.mini.model.parts) == 1  # the part alone, to turn
     assert popup.media.currentIndex() == 0 and "ยังไม่มีรูปจริง" in popup.photo.text() and not popup.has_photo()
     inside = tab.view.rect().adjusted(0, 0, -1, -1)
     assert inside.contains(popup.geometry().topLeft()) and popup.width() <= popup.WIDTH
     # a tap on the card is not a tap on the picture under it
+    QTest.qWait(QApplication.doubleClickInterval() + 80)  # for that long the card lets a second click through
     tab.view.selected = bolt.id
     QTest.mouseClick(popup, Qt.LeftButton, Qt.NoModifier, QPoint(8, 8))
     assert tab.view.selected == bolt.id and popup.isVisible()
@@ -658,3 +660,132 @@ def test_a_tap_on_a_part_opens_its_detail_card(window, tmp_path):
     tab.go(2, animate=False)
     assert not popup.isVisible()  # another step: the card goes
     window.state.dirty = False
+
+
+def test_card_keeps_what_differs_and_follows_the_model(window, tmp_path):
+    """What a review of the card found: only the changed field goes to the other parts of that name, typed text
+    survives a new photo, the card goes when the model is edited elsewhere, and a photo follows a new name."""
+    from PySide6.QtCore import QPointF
+    from PySide6.QtGui import QColor, QImage
+
+    tab = window.pages["install"].assembly
+    window.resize(1500, 950)
+    window.show()
+    window.go("install")
+    window.pages["install"].tabs.setCurrentWidget(tab)
+    tab.rebuild(force=True)
+    popup = tab.popup
+    bolts = [p for p in tab.model.parts if p.name.startswith("สลัก")]
+    a, b = bolts[0], bolts[1]
+    a.part_no, b.part_no, b.note = "RRS-A", "RRS-B", "ตัวหน้าซ้าย"  # different on purpose
+    tab.view.last_click = QPointF(60, 80)
+    tab.view.part_clicked.emit(a.id)
+    popup.note.setText("ทาเครื่องหมายสี")  # the note only; 'all of that name' is ticked
+    popup.save_btn.click()
+    assert (a.part_no, a.note) == ("RRS-A", "ทาเครื่องหมายสี") and (b.part_no, b.note) == ("RRS-B", "ทาเครื่องหมายสี")
+    tab.view.part_clicked.emit(a.id)
+    popup.save_btn.click()  # nothing changed: nothing written
+    assert b.part_no == "RRS-B"
+    # typed text stays when a photo is attached
+    picture = tmp_path / "bolt.png"
+    image = QImage(64, 48, QImage.Format_RGB888)
+    image.fill(QColor("#8a8f96"))
+    image.save(str(picture))
+    tab.view.part_clicked.emit(a.id)
+    popup.part_no.setText("RRS-TYPED")
+    popup.all_same.setChecked(False)
+    assert tab.attach_photo(a.id, str(picture))
+    assert not popup.isHidden() and popup.part_no.text() == "RRS-TYPED" and not popup.all_same.isChecked() and popup.has_photo()
+    popup.save_btn.click()
+    assert a.part_no == "RRS-TYPED" and b.part_no == "RRS-B"
+    # the photo goes with a new name (the name column of the table)
+    old = a.name
+    for row in range(tab.parts.rowCount()):
+        if tab.parts.item(row, 0).data(0x0100) in {p.id for p in bolts}:
+            tab.parts.item(row, 1).setText("สลักยึดแท่น M14")
+    assert tab.model.photos.keys() == {"สลักยึดแท่น M14"} and old not in tab.model.photos
+    # the card goes when the model is changed elsewhere
+    tab.go(3, animate=False)
+    tab.view.part_clicked.emit(a.id)
+    assert not popup.isHidden() and popup.has_photo()
+    assert tab.delete_step(ask=False) and popup.isHidden()
+    tab.view.part_clicked.emit(a.id)
+    tab.parts.item(0, 3).setText("2")  # a step typed in the table
+    assert popup.isHidden()
+    window.state.dirty = False
+
+
+def test_double_click_and_escape_with_the_card(window):
+    from PySide6.QtCore import QPoint, Qt
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QApplication
+
+    tab = window.pages["install"].assembly
+    window.resize(1500, 950)  # the picture is narrower than twice the card: the card lies over the tapped point
+    window.show()
+    window.activateWindow()
+    window.go("install")
+    window.pages["install"].tabs.setCurrentWidget(tab)
+    tab.rebuild(force=True)
+    QApplication.processEvents()
+    view, popup = tab.view, tab.popup
+    view.fit()
+    view.repaint()
+    spot = next(QPoint(x, y) for y in range(60, view.height() - 60, 6) for x in range(60, view.width() - 60, 6)
+                if (pid := view.pick(x, y)) and tab.model.part(pid).step > 0)
+    QTest.mouseClick(view, Qt.LeftButton, Qt.NoModifier, spot)
+    assert not popup.isHidden() and popup.part_id == view.selected
+    if QApplication.focusWidget() is not None:  # the offscreen platform may give no focus at all
+        assert QApplication.focusWidget() is popup
+    QTest.keyClick(QApplication.focusWidget() or popup, Qt.Key_Escape)
+    assert popup.isHidden()
+    zoom = view.zoom
+    QTest.mouseClick(view, Qt.LeftButton, Qt.NoModifier, spot)  # … and the second click of a double click
+    assert not popup.isHidden()
+    QTest.mouseDClick(view, Qt.LeftButton, Qt.NoModifier, spot)
+    assert popup.isHidden() and view.zoom != zoom  # the picture zoomed to the part, the card is out of the way
+    window.state.dirty = False
+
+
+def test_sorting_holds_for_what_a_review_found():
+    # 'ขวา' inside 'คานขวาง' is not a side
+    assert a3._with_side("คานขวาง_Mirror 02", "ซ้าย") == "คานขวาง ซ้าย 02" and a3._with_side("คานขวาง 01", "ขวา") == "คานขวาง ขวา 01"
+    assert a3._with_side("พื้น ซ้าย2_Mirror", "ขวา") == "พื้น ขวา2" and a3._with_side("ขาคานขวาง ขวา", "ซ้าย") == "ขาคานขวาง ซ้าย"
+    # bolts on a level do not give their group to the gates of that step
+    step, iges = _step_tray()
+    step.parts.append(_solid(60, "delux steel ฝาข้าง 01", "delux steel ฝาข้าง", 0, -970, 300, 1200, 20, 300))
+    found = a3.tray_steps(step, a3.adopt_groups(step, iges))
+    assert found["s60"] == (8, "delux steel ฝาข้าง", "กลุ่ม") or found["s60"][1] == "ฝาข้าง", found["s60"]
+    assert found["s60"][1] not in a3.FASTENER_GROUPS.values()
+    # a bolt through two parts goes with the later one, whichever is listed first
+    beam = _solid(1, "โครงตัวบน ข้าง 01", "โครงตัวบน", 0, -960, 0, 2400, 50, 50)
+    rail = _solid(2, "รางข้างแบบพับ 01", "รางข้างแบบพับ", 0, -960, 50, 2400, 20, 300)
+    screw = _solid(3, "Hex head screw ISO8676-M12x1.25x65-5.6", "Part004", 100, -990, 30, 18, 60, 40)
+    for order in ([beam, rail, screw], [rail, beam, screw], [screw, beam, rail]):
+        assert a3.tray_steps(a3.AssemblyModel("m", list(order)))["s3"] == (8, "สลักฝาข้าง / รางพับ", "ชิ้นข้างเคียง")
+    # the program's own order - import (the steps at once), then the levels - gives what the levels at once give
+    at_once, iges = _step_tray()
+    a3.apply_tray_sequence(at_once, levels=a3.adopt_groups(at_once, iges), tidy=True)
+    later, _ = _step_tray()
+    a3.apply_tray_sequence(later, tidy=True)
+    assert next(p for p in later.parts if p.id == "s3").step == 4  # 'Part015': nothing says what it is yet
+    a3.apply_tray_sequence(later, levels=a3.adopt_groups(later, iges), tidy=True)
+    assert [(p.name, p.group, p.step) for p in later.parts] == [(p.name, p.group, p.step) for p in at_once.parts]
+    a3.apply_tray_sequence(later, tidy=True)  # … and the levels are remembered without the other file
+    assert [(p.name, p.group, p.step) for p in later.parts] == [(p.name, p.group, p.step) for p in at_once.parts]
+    moved = next(p for p in later.parts if p.id == "s3")
+    moved.group = "บังโคลน"  # a group set by hand counts as what the file says
+    a3.apply_tray_sequence(later, tidy=True)
+    assert (moved.group, moved.step) == ("บังโคลน", 10)
+    # sides: not for bolts, and by the sub-assembly of the file, not by the group the part ends up in
+    hinges = a3.AssemblyModel("h", [
+        _solid(1, "บานพับ 01", "บานพับ", 0, -900, 0), _solid(2, "บานพับ_Mirror 01", "บานพับ_Mirror", 0, 850, 0),
+        _solid(3, "Hex head screw ISO8676-M8x1x16-5.6", "บานพับ", 10, -900, 0, 16, 8, 8),
+        _solid(4, "Hex head screw ISO8676-M8x1x16-5.6", "บานพับ_Mirror", 10, 850, 0, 16, 8, 8),
+        _solid(5, "โรบาหลัง 01", "โรบาหลัง", 1200, -25, 0)])
+    hinges.photos["บานพับ_Mirror 01"] = "QUJD"
+    a3.apply_tray_sequence(hinges, tidy=True)
+    assert [p.name for p in hinges.parts[:4]] == ["บานพับ ซ้าย 01", "บานพับ ขวา 01", "Hex head screw ISO8676-M8x1x16-5.6",
+                                                  "Hex head screw ISO8676-M8x1x16-5.6"]
+    assert a3.fastener_spec(hinges.parts[2].name)["grade"] == "5.6" and len(hinges.bom()) == 4
+    assert hinges.photos == {"บานพับ ขวา 01": "QUJD"}  # the photo went with the name

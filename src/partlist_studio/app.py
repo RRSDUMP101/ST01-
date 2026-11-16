@@ -25,6 +25,9 @@ def main(argv: list[str] | None = None) -> int:
     app.setStyle("Fusion")  # same look on Windows and macOS
     app.setFont(theme.app_font())
     app.setStyleSheet(theme.STYLE_SHEET)
+    from .core import cad_import
+
+    app.aboutToQuit.connect(cad_import.stop_children)  # a CAD file still being read does not keep the program alive
     window = MainWindow()
     window.restore_session()  # the size, place and page it was left with (maximized on a laptop screen)
     window.show()

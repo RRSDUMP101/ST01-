@@ -148,6 +148,7 @@ def draw_order(lo: np.ndarray, hi: np.ndarray, d: np.ndarray, r: np.ndarray | No
 
 class Assembly3DView(QWidget):
     part_clicked = Signal(str)  # id of the part under the mouse ('' = none)
+    part_double_clicked = Signal(str)  # … of the part that was double-clicked (the view zooms to it)
     animation_done = Signal()
 
     def __init__(self, parent=None):
@@ -171,6 +172,7 @@ class Assembly3DView(QWidget):
         self._meshes: dict[str, _Mesh] = {}
         self._drawn: list[tuple] = []  # (corners of a face, or the triangles of a mesh as an array; part id)
         self._drag = None
+        self._double = False
         self._moving = False
         self.last_click = QPointF(0, 0)  # where the picture was last clicked: a card about the part opens beside it
         self._text_scale = 1.0  # bigger numbers and axis names in a picture rendered larger than the widget
@@ -531,11 +533,12 @@ class Assembly3DView(QWidget):
 
     def mouseReleaseEvent(self, event) -> None:  # noqa: N802
         moved = bool(self._drag and self._drag[3])
+        second, self._double = self._double, False  # the release that ends a double click is not a click
         self._drag = None
         if self._moving:
             self._moving = False
             self.update()
-        if not moved and event.button() == Qt.LeftButton:
+        if not moved and not second and event.button() == Qt.LeftButton:
             self.last_click = event.position()
             self.selected = self.pick(event.position().x(), event.position().y())
             self.part_clicked.emit(self.selected)
@@ -543,6 +546,8 @@ class Assembly3DView(QWidget):
 
     def mouseDoubleClickEvent(self, event) -> None:  # noqa: N802
         part_id = self.pick(event.position().x(), event.position().y())
+        self._double = True
+        self.part_double_clicked.emit(part_id)
         if part_id:
             self.zoom_to([part_id])
         else:

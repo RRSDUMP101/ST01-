@@ -1625,6 +1625,32 @@ def _child(argv: list[str]) -> int:
     except CadImportError as e:
         tell("error", message=str(e))
         return 2
+    except Exception as e:  # noqa: BLE001 - a full disk, no memory left: the parent must hear of it, whatever it is.
+        # Nothing may leave here: a program built as a window would show it in a box of a process nobody sees.
+        import traceback
+
+        traceback.print_exc()
+        try:
+            tell("error", message=f"ตัวอ่าน CAD ทำงานไม่สำเร็จ – {type(e).__name__}: {e}")
+        except OSError:
+            pass
+        return 3
+
+
+_CHILDREN: set = set()  # the readers that are running now
+_STOPPED = False
+
+
+def stop_children() -> None:
+    """End every reader that is running (the program is closing): else the program would stay, without a window,
+    until a long import is through – or for ever, should OpenCascade hang on a broken file."""
+    global _STOPPED
+    _STOPPED = True
+    for child in list(_CHILDREN):
+        try:
+            child.kill()
+        except OSError:
+            pass
 
 
 def read_cad_isolated(path: str | Path, max_faces: int = MAX_FACES, progress=None,
@@ -1669,11 +1695,20 @@ def read_cad_isolated(path: str | Path, max_faces: int = MAX_FACES, progress=Non
         with open(said, "wb") as out, open(log, "rb") as messages:
             with subprocess.Popen(command, stdout=out, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
                                   creationflags=flags, env=env) as child:
-                while child.poll() is None:
-                    read_messages(messages)
-                    time.sleep(0.05)
+                _CHILDREN.add(child)
+                try:
+                    while child.poll() is None:
+                        read_messages(messages)
+                        time.sleep(0.05)
+                except BaseException:  # the progress callback raised: do not wait for the reader to finish
+                    child.kill()
+                    raise
+                finally:
+                    _CHILDREN.discard(child)
                 code = child.wait()
             read_messages(messages)
+        if _STOPPED:
+            raise CadImportError("ยกเลิกการนำเข้า – โปรแกรมกำลังปิด")
         if outcome and outcome["kind"] == "error":
             raise CadImportError(outcome["message"])
         if not outcome or code != 0:

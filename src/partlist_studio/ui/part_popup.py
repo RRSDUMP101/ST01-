@@ -5,9 +5,10 @@ from __future__ import annotations
 import base64
 from dataclasses import replace
 
-from PySide6.QtCore import QBuffer, QByteArray, QIODevice, QPoint, QSize, Qt, Signal
+from PySide6.QtCore import QBuffer, QByteArray, QIODevice, QPoint, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import (
+    QApplication,
     QButtonGroup,
     QCheckBox,
     QFormLayout,
@@ -89,6 +90,12 @@ class PartPopup(QFrame):
         self.part_id = ""
         self._step = 0
         self._at = QPoint(0, 0)
+        self._opened = ("", "")  # Part No. and note as the card got them: only what was changed is saved
+        # The card may lie over the point that was tapped. For the length of a double click it lets the mouse
+        # through, so that the second click still reaches the picture (double click = zoom to the part).
+        self._solid = QTimer(self)
+        self._solid.setSingleShot(True)
+        self._solid.timeout.connect(lambda: self.setAttribute(Qt.WA_TransparentForMouseEvents, False))
         lay = QVBoxLayout(self)
         lay.setContentsMargins(14, 10, 14, 12)
         lay.setSpacing(8)
@@ -208,8 +215,10 @@ class PartPopup(QFrame):
 
     # ---- show -------------------------------------------------------------------
     def show_part(self, model: a3.AssemblyModel, part: a3.Part3D, job=None, at: QPoint | None = None,
-                  media: int | None = None) -> None:
-        """Fill the card for `part` and put it beside the point `at` of the picture (kept inside the picture)."""
+                  media: int | None = None, keep_edits: bool = False) -> None:
+        """Fill the card for `part` and put it beside the point `at` of the picture (kept inside the picture).
+        With `keep_edits` (the same part shown again, e.g. after its photo changed) what was typed stays."""
+        typed = (self.part_no.text(), self.note.text(), self.all_same.isChecked()) if keep_edits else None
         info = a3.part_details(model, part, job)
         self.part_id, self._step = part.id, info["step"]
         self.title.setText(info["title"])
@@ -225,11 +234,17 @@ class PartPopup(QFrame):
             if key == "คำเตือน":
                 text.setObjectName("PopupWarn")
             self.form.addRow(self._key(key), text)
+        self._opened = (part.part_no, part.note)
         self.part_no.setText(part.part_no)
         self.note.setText(part.note)
-        self.all_same.setText(f"ใช้กับชิ้นชื่อเดียวกันทั้ง {info['count']} ชิ้น")
+        self.all_same.setText(f"ใช้ที่แก้กับชิ้นชื่อเดียวกันทั้ง {info['count']} ชิ้น")
+        self.all_same.setToolTip("ช่องที่แก้ในการ์ดนี้ถูกบันทึกให้ทุกชิ้นที่ชื่อและขนาดเดียวกัน – ช่องที่ไม่ได้แก้ของชิ้นอื่นคงเดิม")
         self.all_same.setVisible(info["count"] > 1)
         self.all_same.setChecked(True)
+        if typed:
+            self.part_no.setText(typed[0])
+            self.note.setText(typed[1])
+            self.all_same.setChecked(typed[2])
         self.step_btn.setText(f"ไปขั้นที่ {self._step}" if self._step else "ไปขั้นประกอบ")
         self.step_btn.setEnabled(bool(self._step))
 
@@ -251,8 +266,12 @@ class PartPopup(QFrame):
         if at is not None:
             self._at = QPoint(at)
         self.place()
+        if self.isHidden():  # newly opened by a tap: see _solid
+            self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+            self._solid.start(QApplication.doubleClickInterval())
         self.show()
         self.raise_()
+        self.setFocus(Qt.OtherFocusReason)  # Esc closes the card; other keys still go on to the picture
         self.mini.fit(None, 0.78)
 
     def place(self) -> None:
@@ -280,14 +299,27 @@ class PartPopup(QFrame):
         return self.remove_btn.isVisibleTo(self)
 
     # ---- actions ------------------------------------------------------------------
+    def changed(self) -> tuple[bool, bool]:
+        """Was the Part No. / the note changed in the card?"""
+        return self.part_no.text().strip() != self._opened[0].strip(), self.note.text().strip() != self._opened[1].strip()
+
     def _save(self) -> None:
         self.saved.emit(self.part_id, self.part_no.text().strip(), self.note.text().strip(),
                         self.all_same.isVisibleTo(self) and self.all_same.isChecked())
+        self.put_away()
+
+    def put_away(self) -> None:
+        """Hide the card; the keys go to the picture again."""
+        had_focus = self.hasFocus() or self.isAncestorOf(QApplication.focusWidget() or self.parentWidget())
+        self._solid.stop()
+        self.setAttribute(Qt.WA_TransparentForMouseEvents, False)
         self.hide()
+        if had_focus:
+            self.parentWidget().setFocus(Qt.OtherFocusReason)
 
     def dismiss(self) -> None:
         if not self.isHidden():
-            self.hide()
+            self.put_away()
             self.closed.emit()
 
     def keyPressEvent(self, event) -> None:  # noqa: N802

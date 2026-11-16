@@ -56,8 +56,10 @@ from types import SimpleNamespace
 from . import assembly3d as a3
 
 CAD_SUFFIXES = (".step", ".stp", ".igs", ".iges")
-INSTALL_HINT = ("อ่านไฟล์ STEP / IGES ต้องติดตั้ง OpenCascade เพิ่ม (ครั้งเดียว) – เปิด Command Prompt แล้วพิมพ์\n\n"
-                "    pip install cadquery-ocp\n\n"
+INSTALL_HINT = ("โปรแกรมชุดนี้ไม่มีตัวอ่าน STEP / IGES (OpenCascade) – ใช้ตัวติดตั้งรุ่นล่าสุดซึ่งรวมไว้แล้ว "
+                "หรือส่งออกจาก CAD เป็น OBJ / STL" if getattr(sys, "frozen", False) else
+                "อ่านไฟล์ STEP / IGES ต้องติดตั้ง OpenCascade เพิ่ม (ครั้งเดียว) – เปิด Command Prompt แล้วพิมพ์\n\n"
+                "    pip install cadquery-ocp-novtk\n\n"
                 "แล้วเปิดโปรแกรมใหม่ · หรือส่งออกจาก CAD เป็น OBJ / STL ซึ่งไม่ต้องติดตั้งอะไรเพิ่ม")
 SEW_TOL = 0.05  # mm: the gap between two trimmed surfaces of one part in a healthy IGES
 SEW_RETRY_TOL = 0.5  # mm: the second try, for the faces the first left alone (still thinner than any sheet)
@@ -1597,18 +1599,22 @@ def read_cad(path: str | Path, max_faces: int = MAX_FACES, progress=None, up: st
 
 
 _MARK = "@@rrs-cad "
+CHILD_FLAG = "--cad-import"  # the program started with this as its first argument reads one CAD file and ends
 _CHILD = ("import sys; sys.path[0] = sys.argv.pop(1); from partlist_studio.core.cad_import import _child; "
           "sys.exit(_child(sys.argv[1:]))")
 
 
 def _child(argv: list[str]) -> int:
-    """The other end of `read_cad_isolated`: progress and the outcome as marked lines of JSON on standard output."""
+    """The other end of `read_cad_isolated`: source, target, face budget, up axis, and the file that takes the
+    progress and the outcome as marked lines of JSON (no file: standard output). A program built as a window has
+    no standard output on Windows, so the builds always get the file."""
     source, target, max_faces = argv[0], argv[1], int(argv[2])
     up = argv[3] if len(argv) > 3 and argv[3] else None
+    log = open(argv[4], "a", encoding="utf-8") if len(argv) > 4 and argv[4] else sys.stdout  # noqa: SIM115 - open for the run
 
     def tell(kind: str, **data) -> None:
-        sys.stdout.write(_MARK + json.dumps({"kind": kind, **data}) + "\n")  # ASCII: no code page in the way
-        sys.stdout.flush()
+        log.write(_MARK + json.dumps({"kind": kind, **data}) + "\n")  # ASCII: no code page in the way
+        log.flush()
 
     try:
         model, report = read_cad_report(source, max_faces,
@@ -1625,39 +1631,58 @@ def read_cad_isolated(path: str | Path, max_faces: int = MAX_FACES, progress=Non
                       up: str | None = None) -> a3.AssemblyModel:
     """`read_cad` in a child process (for a worker thread of the window): the thread only waits, so the window
     stays alive, and a file that crashes OpenCascade or eats all memory ends the child, not the program.
-    In a frozen build there is no interpreter to start: the file is read here."""
-    if getattr(sys, "frozen", False):
-        return read_cad(path, max_faces, progress, up)
+    From source the child is the Python that runs this; a built program starts itself again with CHILD_FLAG
+    (see `__main__`). The child writes what it has to say to a file: that works the same for both."""
     if not have_ocp():
         raise CadImportError(INSTALL_HINT)
     handle, target = tempfile.mkstemp(prefix="rrs_cad_", suffix=".rrsasm")
     os.close(handle)
-    root = str(Path(__file__).resolve().parents[2])
-    command = [sys.executable, "-c", _CHILD, root, str(Path(path).resolve()), target, str(int(max_faces)), up or ""]
+    log, said = target + ".log", target + ".out"
+    Path(log).write_bytes(b"")
+    args = [str(Path(path).resolve()), target, str(int(max_faces)), up or "", log]
+    if getattr(sys, "frozen", False):
+        command = [sys.executable, CHILD_FLAG, *args]
+    else:
+        command = [sys.executable, "-c", _CHILD, str(Path(__file__).resolve().parents[2]), *args]
     flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-    outcome, tail = None, []
+    outcome = None
+
+    pending = b""
+
+    def read_messages(stream) -> None:
+        nonlocal outcome, pending
+        *lines, pending = (pending + stream.read()).split(b"\n")  # the last piece is a line still being written
+        for line in lines:
+            text = line.decode("utf-8", "replace")
+            if not text.startswith(_MARK):
+                continue
+            message = json.loads(text[len(_MARK):])
+            if message["kind"] == "progress":
+                if progress:
+                    progress(message["stage"], message["fraction"])
+            else:
+                outcome = message
+
     try:
-        with subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
-                              text=True, encoding="utf-8", errors="replace", creationflags=flags) as child:
-            for line in child.stdout:
-                if not line.startswith(_MARK):
-                    tail = (tail + [line.rstrip()])[-5:]  # what OpenCascade or Python said before it died
-                    continue
-                message = json.loads(line[len(_MARK):])
-                if message["kind"] == "progress":
-                    if progress:
-                        progress(message["stage"], message["fraction"])
-                else:
-                    outcome = message
-            code = child.wait()
+        with open(said, "wb") as out, open(log, "rb") as messages:
+            with subprocess.Popen(command, stdout=out, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+                                  creationflags=flags) as child:
+                while child.poll() is None:
+                    read_messages(messages)
+                    time.sleep(0.05)
+                code = child.wait()
+            read_messages(messages)
         if outcome and outcome["kind"] == "error":
             raise CadImportError(outcome["message"])
         if not outcome or code != 0:
+            text = Path(said).read_text(encoding="utf-8", errors="replace")  # what OpenCascade or Python said before it died
+            tail = [t.strip() for t in text.splitlines() if t.strip() and not t.startswith(_MARK)][-5:]
             raise CadImportError(f"ตัวอ่าน CAD หยุดทำงานกลางคัน (รหัส {code}) – ไฟล์อาจเสีย หรือหน่วยความจำไม่พอสำหรับไฟล์ขนาดนี้"
-                                 + (" · " + " | ".join(t for t in tail if t) if any(tail) else ""))
+                                 + (" · " + " | ".join(tail) if tail else ""))
         return a3.AssemblyModel.load(target)
     finally:
-        try:
-            os.remove(target)
-        except OSError:
-            pass
+        for leftover in (target, log, said):
+            try:
+                os.remove(leftover)
+            except OSError:
+                pass

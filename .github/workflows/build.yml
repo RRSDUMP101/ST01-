@@ -84,7 +84,8 @@ jobs:
         if: runner.os == 'macOS'
         run: |
           APP="dist/RRS Part List Studio.app"
-          python tools/macho_min_os.py "$APP" --max "$MACOSX_DEPLOYMENT_TARGET"
+          # the STEP / IGES reader (OpenCascade) is built for macOS 11.1; it is loaded only when a CAD file is imported
+          python tools/macho_min_os.py "$APP" --max "$MACOSX_DEPLOYMENT_TARGET" --allow /OCP/=11.1
           /usr/libexec/PlistBuddy -c "Print :LSMinimumSystemVersion" "$APP/Contents/Info.plist"
           if ! codesign --verify --deep --strict --verbose=2 "$APP"; then
             echo "re-signing (ad-hoc)"
@@ -103,6 +104,7 @@ jobs:
           CONV=$(find "$APP" -name dwg2dxf -type f -perm -u+x | head -1)
           [ -n "$CONV" ] || { echo "dwg2dxf not bundled"; exit 1; }
           "$CONV" --version
+          python tools/cad_smoke.py "$APP/Contents/MacOS/RRS Part List Studio"
       - name: Smoke test the built program
         if: runner.os == 'Windows'
         shell: pwsh
@@ -112,6 +114,8 @@ jobs:
           if ($p.HasExited) { throw "program exited early with code $($p.ExitCode)" }
           Stop-Process -Id $p.Id
           if (-not (Test-Path "dist/RRS Part List Studio/_internal/libredwg/dwg2dxf.exe")) { throw "dwg2dxf not bundled" }
+          python tools/cad_smoke.py "dist/RRS Part List Studio/RRS Part List Studio.exe"
+          if ($LASTEXITCODE -ne 0) { throw "the built program does not read STEP" }
       - name: Windows installer (Inno Setup)
         if: runner.os == 'Windows'
         shell: pwsh
@@ -131,6 +135,8 @@ jobs:
           Start-Sleep -Seconds 25
           if ($p.HasExited) { throw "portable exe exited early with code $($p.ExitCode)" }
           Stop-Process -Id $p.Id
+          python tools/cad_smoke.py "dist/portable/RRS Part List Studio Portable.exe" 420
+          if ($LASTEXITCODE -ne 0) { throw "the portable exe does not read STEP" }
           Copy-Item "dist/portable/RRS Part List Studio Portable.exe" "RRS-PartListStudio-Portable-0.1.0.exe"
       - name: Portable in a zip with a password (Windows) - browsers that block an unsigned .exe cannot look inside
         if: runner.os == 'Windows'

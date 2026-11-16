@@ -1,6 +1,7 @@
 # PyInstaller spec - build with:  pyinstaller --noconfirm packaging/partlist_studio.spec
 # Produces dist/RRS Part List Studio/ (Windows, Linux) or dist/RRS Part List Studio.app (macOS).
 # With PARTLIST_ONEFILE=1: dist/RRS Part List Studio Portable(.exe) - a single file.
+import importlib.util
 import os
 import sys
 from pathlib import Path
@@ -12,6 +13,18 @@ APP = "RRS Part List Studio"
 # Optional: LibreDWG dwg2dxf (Windows build fetches it, see .github/workflows/build.yml) so that
 # .dwg files open without installing ODA File Converter.
 LIBREDWG = ROOT / "packaging" / "third_party" / "libredwg"
+# Optional: OpenCascade (cadquery-ocp-novtk, requirements-cad.txt) so that STEP / IGES models open in the built
+# program. It is one big extension module, OCP.OCP, imported only inside functions. Its own libraries are found
+# by PyInstaller from that module (macOS: OCP/.dylibs, Linux: <wheel>.libs); on Windows they lie in a folder
+# beside the package that OCP/__init__.py adds to the DLL search path, so that folder goes in under its name.
+CAD_HIDDEN, CAD_BINARIES = [], []
+_ocp = importlib.util.find_spec("OCP")
+if _ocp is not None and _ocp.origin:
+    CAD_HIDDEN = ["OCP", "OCP.OCP"]
+    if sys.platform == "win32":
+        for libs in Path(_ocp.origin).parent.parent.glob("cadquery_ocp*.libs"):
+            CAD_BINARIES += [(str(f), libs.name) for f in libs.iterdir() if f.is_file()]
+print(f"OpenCascade (STEP / IGES): {'bundled' if CAD_HIDDEN else 'NOT installed - the build will not read STEP / IGES'}")
 
 a = Analysis(
     [str(ROOT / "src" / "partlist_studio" / "__main__.py")],
@@ -20,9 +33,10 @@ a = Analysis(
         (str(ROOT / "src" / "partlist_studio" / "resources"), "partlist_studio/resources"),
         (str(ROOT / "samples"), "samples"),
     ] + ([(str(LIBREDWG), "libredwg")] if LIBREDWG.is_dir() else []),
+    binaries=CAD_BINARIES,
     hiddenimports=["certifi", "ezdxf.addons.odafc", "openpyxl", "xlrd", "gspread", "google_auth_oauthlib.flow",
-                   "segno"],
-    excludes=["tkinter", "matplotlib", "PySide6.QtWebEngineCore", "PySide6.Qt3DCore"],
+                   "segno", "zstandard", *CAD_HIDDEN],
+    excludes=["tkinter", "matplotlib", "PySide6.QtWebEngineCore", "PySide6.Qt3DCore", "vtk", "vtkmodules"],
 )
 if sys.platform == "darwin":
     # OpenSSL's legacy provider (MD4, DES ...) is not used and the runner's copy needs macOS 15

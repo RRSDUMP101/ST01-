@@ -4,6 +4,8 @@
 
 Exits with 1 when a Mach-O file (Qt framework, Python extension, dwg2dxf …) needs a newer macOS than
 --max, so a build that would not open on older Macs fails in CI instead of on the user's Mac.
+--allow PART=VERSION lets the files whose path contains PART need up to VERSION: a part of the program that is
+loaded only when it is used (the STEP / IGES reader) may need a newer macOS than the program itself.
 Runs anywhere (no Xcode tools needed).
 """
 
@@ -101,13 +103,25 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("path")
     ap.add_argument("--max", default="11.0", help="highest macOS the binaries may require (default 11.0)")
+    ap.add_argument("--allow", action="append", default=[], metavar="PART=VERSION",
+                    help="files whose path contains PART may require up to VERSION (may be given more than once)")
     args = ap.parse_args(argv)
-    limit = tuple(int(x) for x in (args.max.split(".") + ["0", "0"])[:3])
+
+    def version(text: str) -> tuple[int, ...]:
+        return tuple(int(x) for x in (text.split(".") + ["0", "0"])[:3])
+
+    limit = version(args.max)
+    allowed = [(part, version(v)) for part, _eq, v in (a.partition("=") for a in args.allow)]
     found = scan(args.path)
     if not found:
         print("no Mach-O files found")
         return 1
-    too_new = [(p, a, v) for p, a, v in found if v and v > limit]
+
+    def limit_of(path: Path) -> tuple[int, ...]:
+        return max([limit] + [v for part, v in allowed if part in path.as_posix()])
+
+    too_new = [(p, a, v) for p, a, v in found if v and v > limit_of(p)]
+    excused = [(p, v) for p, _a, v in found if v and limit < v <= limit_of(p)]
     newest = max((v for _p, _a, v in found if v), default=None)
     print(f"{len(found)} Mach-O slices · newest required macOS: {'.'.join(map(str, newest)) if newest else '?'}")
     for p, a, v in sorted(too_new, key=lambda t: t[2], reverse=True)[:40]:
@@ -115,7 +129,11 @@ def main(argv: list[str] | None = None) -> int:
     if too_new:
         print(f"FAIL: {len(too_new)} slices need a macOS newer than {args.max}")
         return 1
-    print(f"OK: everything runs on macOS {args.max} or newer")
+    if excused:
+        newest = max(v for _p, v in excused)
+        print(f"allowed: {len(excused)} slices need up to macOS {'.'.join(map(str, newest))} "
+              f"({', '.join(part for part, _v in allowed)})")
+    print(f"OK: everything {'else ' if excused else ''}runs on macOS {args.max} or newer")
     return 0
 
 

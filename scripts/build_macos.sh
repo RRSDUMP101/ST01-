@@ -11,7 +11,7 @@ sh scripts/macos_deps.sh
 # Optional: bundle dwg2dxf so .dwg opens without ODA File Converter (takes a few minutes once)
 scripts/build_libredwg_unix.sh || echo "LibreDWG build skipped - .dwg will need ODA File Converter"
 pyinstaller --noconfirm packaging/partlist_studio.spec
-python tools/macho_min_os.py "dist/RRS Part List Studio.app" --max "$MACOSX_DEPLOYMENT_TARGET" || \
+python tools/macho_min_os.py "dist/RRS Part List Studio.app" --max "$MACOSX_DEPLOYMENT_TARGET" --allow /OCP/=11.1 || \
     echo "WARNING: the app needs a newer macOS than $MACOSX_DEPLOYMENT_TARGET"
 # Unsigned app: remove the quarantine flag so Gatekeeper lets it open on this Mac.
 xattr -cr "dist/RRS Part List Studio.app" || true

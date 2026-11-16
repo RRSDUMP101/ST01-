@@ -918,6 +918,26 @@ def test_isolated_reader_gives_the_same_model_and_survives_a_crash(tmp_path, mon
     assert not list(Path(ci.tempfile.gettempdir()).glob("rrs_cad_*.rrsasm"))  # nothing left behind
 
 
+def test_the_program_started_as_the_reader_of_one_file(tmp_path):
+    """What a built program does for an import: it starts itself with --cad-import (no window, no Qt) and writes
+    what it has to say to a file - a program built as a window has no standard output on Windows."""
+    path = _tray(tmp_path / "ถาด.step")
+    out, log = tmp_path / "out.rrsasm", tmp_path / "log.txt"
+    env = {**os.environ, "PYTHONPATH": str(ROOT / "src")}
+    program = [sys.executable, "-m", "partlist_studio"]
+    done = subprocess.run([*program, ci.CHILD_FLAG, str(path), str(out), str(ci.MAX_FACES), "", str(log)], env=env, capture_output=True,
+                          text=True, encoding="utf-8", check=False)
+    assert done.returncode == 0, done.stderr
+    assert a3.AssemblyModel.load(out).to_dict() == ci.read_cad(path).to_dict()
+    lines = [json.loads(line[len(ci._MARK):]) for line in log.read_text(encoding="utf-8").splitlines()]
+    assert lines[0]["kind"] == "progress" and lines[-1]["kind"] == "done" and ci._MARK not in done.stdout
+    (tmp_path / "bad.igs").write_bytes(b"junk\n" * 50)
+    done = subprocess.run([*program, ci.CHILD_FLAG, str(tmp_path / "bad.igs"), str(tmp_path / "bad.rrsasm"), "60000", "", str(log)],
+                          env=env, capture_output=True, text=True, encoding="utf-8", check=False)
+    assert done.returncode == 2 and json.loads(log.read_text(encoding="utf-8").splitlines()[-1][len(ci._MARK):])["kind"] == "error"
+    assert subprocess.run([*program, "--cad-check"], env=env, check=False).returncode == 0  # the reader is found
+
+
 def test_command_line_tool(tmp_path):
     path = _tray(tmp_path / "tray.step")
     out = tmp_path / "tray.rrsasm"
@@ -942,7 +962,7 @@ def test_command_line_tool(tmp_path):
     (tmp_path / "bad.igs").write_bytes(b"junk")
     done = subprocess.run([*tool, str(tmp_path / "bad.igs"), str(tmp_path / "bad.rrsasm")], capture_output=True, text=True, encoding="utf-8")
     assert done.returncode == 1 and "นำเข้าไม่ได้" in done.stderr and not (tmp_path / "bad.rrsasm").exists()
-    assert (ROOT / "requirements-cad.txt").read_text().split() == ["cadquery-ocp"]
+    assert (ROOT / "requirements-cad.txt").read_text().split() == ["cadquery-ocp-novtk"]  # OpenCascade without VTK
 
 
 # --------------------------------------------------------------------------- the view and the tab

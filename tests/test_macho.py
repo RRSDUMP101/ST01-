@@ -51,3 +51,14 @@ def test_scan_bundle_and_exit_code(tmp_path, capsys):
     assert m.main([str(tmp_path / "Demo.app"), "--max", "11.0"]) == 1
     out = capsys.readouterr().out
     assert "needs macOS 14.0.0" in out and "QtGui" in out
+    # a part that is loaded only when used may need a newer macOS than the program: the CAD reader needs 11.1
+    cad = app / "Frameworks" / "OCP" / ".dylibs"
+    cad.mkdir(parents=True)
+    (cad / "libTKStd.dylib").write_bytes(_macho((11, 1, 0)))
+    (app / "Frameworks" / "QtGui").write_bytes(_macho((11, 0, 0)))
+    assert m.main([str(tmp_path / "Demo.app"), "--max", "11.0"]) == 1
+    assert m.main([str(tmp_path / "Demo.app"), "--max", "11.0", "--allow", "/OCP/=11.1"]) == 0
+    out = capsys.readouterr().out
+    assert "allowed: 1 slices need up to macOS 11.1.0 (/OCP/)" in out and "OK: everything else runs on macOS 11.0" in out
+    (cad / "libTKNew.dylib").write_bytes(_macho((12, 0, 0)))  # … but not more than that
+    assert m.main([str(tmp_path / "Demo.app"), "--max", "11.0", "--allow", "/OCP/=11.1"]) == 1

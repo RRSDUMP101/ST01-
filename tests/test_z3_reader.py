@@ -6,8 +6,9 @@ bytes and, when asked, a second container appended at HQR=<offset>. Names are Th
 
 What the real format holds that is not understood, and is therefore written here as a harmless stand-in that the
 reader never interprets: the first 16 bytes of the binary header; index fields 3-6 (element size, link, next,
-previous) and the extra bytes after the fields; everything in the root record of a 3D object after its name; the
-integers of a component record other than the fourth (the owner); the body of a 2D drawing and of the HQR backup
+previous) and the extra bytes after the fields; everything in the root record of a 3D object after its name and
+box; the integers of a component record other than the fourth (the owner) and the fifth (its placement record);
+what follows the matrix in a placement record; the body of a 2D drawing and of the HQR backup
 entries; the codes that pad the last control word of a packed record. The reader was checked on the real files by
 hand (every file passes its checks, object names equal the STEP product names); these tests pin the behaviour.
 
@@ -47,7 +48,7 @@ class Packer:
     """Writes a packed record: a version byte, then control words of 16 two-bit codes, each before its items."""
 
     def __init__(self, version: int):
-        self.version, self.items, self.prev_int, self.prev_chr = version, [], 0, 0
+        self.version, self.items, self.prev_int, self.prev_chr, self.prev_real = version, [], 0, 0, 0.0
 
     def integer(self, v: int) -> None:
         if v == self.prev_int:
@@ -60,16 +61,30 @@ class Packer:
             self.items.append((2, v.to_bytes(4, "little", signed=True)))
         self.prev_int = v
 
+    def char(self, b: int) -> None:
+        if b == self.prev_chr:
+            self.items.append((3, b""))
+        elif b < 2:
+            self.items.append((b, b""))  # NUL and the byte 1 have codes of their own
+        else:
+            self.items.append((2, bytes([b])))
+        self.prev_chr = b
+
     def string(self, raw: bytes) -> None:
         self.integer(len(raw))
         for b in raw:
-            if b == self.prev_chr:
-                self.items.append((3, b""))
-            elif b < 2:
-                self.items.append((b, b""))  # NUL and the byte 1 have codes of their own
-            else:
-                self.items.append((2, bytes([b])))
-            self.prev_chr = b
+            self.char(b)
+
+    def real(self, v: float) -> None:
+        if v == self.prev_real:
+            self.items.append((3, b""))
+        elif v == int(v) and -128 <= v < 128:
+            self.items.append((0, int(v).to_bytes(1, "little", signed=True)))
+        elif abs(v) < 1e30 and struct.unpack("<f", struct.pack("<f", v))[0] == v:
+            self.items.append((1, struct.pack("<f", v)))
+        else:
+            self.items.append((2, struct.pack("<d", v)))
+        self.prev_real = v
 
     def data(self) -> bytes:
         out = bytearray([self.version])
@@ -151,11 +166,18 @@ class Z3Builder:
         sid = self.string(name, rid)
         return struct.pack("<HHIQIIQ", 0, 3, len(raw), 0x1F2E3D4C5B0, sid, len(raw) + 1, 0)
 
-    def obj3d(self, name: str, listed: bool = True, string_id: int | None = None) -> int:
+    def obj3d(self, name: str, listed: bool = True, string_id: int | None = None, box: tuple | None = None) -> int:
         pk = Packer(0x1D)
         pk.string(self.name_field(name, string_id))
-        for v in (100001, 300003, 20002, -1, -1, 0, 1):
-            pk.integer(v)
+        if box is None:  # a root record of another layout: the reader must find no box in it
+            for v in (100001, 300003, 20002, -1, -1, 0, 1):
+                pk.integer(v)
+        else:
+            for v in (0, 0, 0, 100001, 300003, 20002, -1, -1, -1, -1, -1):
+                pk.integer(v)
+            for v in box:
+                pk.real(v)
+            pk.integer(7)
         rid = self.record(z3.CLS_OBJECT3D, pk.data(), 0x0A)
         if listed:
             self.roots.append((self.name_field(name).ljust(32, b"\0"), rid))
@@ -166,14 +188,27 @@ class Z3Builder:
         self.roots.append((self.name_field(name).ljust(32, b"\0"), rid))
         return rid
 
-    def component(self, owner: int, target: str, file: str = "", instance: str | None = None, n: int = 1) -> None:
+    def placement(self, at) -> int:
+        """The record that says where a component sits: a 4x4 matrix, or "same" = not moved (the short form)."""
+        pk = Packer(0x04)
+        if isinstance(at, str):
+            pk.char(1)
+        else:
+            pk.char(0x63)
+            for v in np.asarray(at, dtype=float)[:3, :].T.ravel():  # X axis, Y axis, Z axis, origin
+                pk.real(float(v))
+            pk.integer(3)
+        return self.record(z3.CLS_PLACEMENT, pk.data(), 0x0A)
+
+    def component(self, owner, target: str, file: str = "", instance: str | None = None, n: int = 1, at=None) -> None:
         for k in range(n):
+            where = self.next_id + 12 if at is None else self.placement(at)  # None: the id of no record
             inst = f"{target or Path(file).stem}_{k + 1}" if instance is None else instance
             pk = Packer(0x0A)
             for text in (inst, file, target, inst, ""):
                 pk.string(self.name_field(text))
             self.uid += 3
-            for v in (self.uid, 300003, 20002, owner, self.next_id + 12, -1, -1, 0, 0, 4):
+            for v in (self.uid, 300003, 20002, owner, where, -1, -1, 0, 0, 4):
                 pk.integer(v)
             self.record(z3.CLS_COMPONENT, pk.data(), 0x0A)
 
@@ -252,17 +287,17 @@ class Z3Builder32(Z3Builder):
         self.cell[0], self.cells[rid], self.names[rid] = rid, self.cell, name.encode(CP)
         return rid
 
-    def obj3d(self, name: str, listed: bool = True, string_id: int | None = None) -> int:
+    def obj3d(self, name: str, listed: bool = True, string_id: int | None = None, box: tuple | None = None) -> int:
         if not listed:  # a deleted object: its records stay behind in the segment that is open
-            return super().obj3d(name, False, string_id)
-        return self._own_segment(lambda: Z3Builder.obj3d(self, name, True, string_id), name)
+            return super().obj3d(name, False, string_id, box)
+        return self._own_segment(lambda: Z3Builder.obj3d(self, name, True, string_id, box), name)
 
     def drawing(self, name: str) -> int:
         return self._own_segment(lambda: Z3Builder.drawing(self, name), name)
 
-    def component(self, owner: int, target: str, file: str = "", instance: str | None = None, n: int = 1) -> None:
+    def component(self, owner, target: str, file: str = "", instance: str | None = None, n: int = 1, at=None) -> None:
         self.cell = self.cells.get(owner, self.cell)
-        super().component(owner, target, file, instance, n)
+        super().component(owner, target, file, instance, n, at)
 
     def preview(self, bmp: bytes) -> None:
         keep, self.cell = self.cell, self.default
@@ -829,6 +864,82 @@ def test_format_3200_without_zstandard_says_how_to_install_it(tmp_path, main_fil
     f = z3.read_z3(path, strict=False)
     assert f.status == "unsupported" and f.objects == [] and f.message == str(err.value)
     assert z3.read_z3(main_file).ok  # the old container needs no zstd
+
+
+# ------------------------------------------------------------------------------------------------ positions
+
+
+def move(x: float, y: float, z: float, turn: float = 0.0) -> np.ndarray:
+    """Turn by `turn` degrees about Z, then shift."""
+    c, s = np.cos(np.radians(turn)), np.sin(np.radians(turn))
+    return np.array([[c, -s, 0, x], [s, c, 0, y], [0, 0, 1, z], [0, 0, 0, 1.0]])
+
+
+def positioned(b: Z3Builder) -> Z3Builder:
+    top = b.obj3d("ชุดบน")
+    sub = b.obj3d("ชุดย่อย", box=(1e20, -1e20) * 3)  # how ZW3D writes "no box"
+    b.obj3d("แผ่น", box=(0, 100, -10, 10, 0.5, 5.1))  # one byte, a float32 and a float64 among them
+    b.component(top, "ชุดย่อย", at=move(1000, 0.25, -3, turn=90))
+    b.component(top, "แผ่น", at="same")
+    b.component(top, "แผ่น")  # its placement record is not there
+    b.component(sub, "แผ่น", at=move(0, 50, 0))
+    b.component(sub, "", file="สลัก.Z3PRT", at=move(1, 2, 3))
+    b.component(sub, "ผี", at=move(7, 7, 7))
+    return b
+
+
+@pytest.mark.parametrize("builder", [Z3Builder, Z3Builder32])
+def test_boxes_and_placements_are_read_and_carried_to_the_top(tmp_path, builder):
+    pin = Z3Builder()
+    pin.obj3d("สลัก", box=(-4, 4, -4, 4, 0, 30))
+    write(tmp_path, pin.build(), "สลัก.Z3PRT")
+    f = z3.read_z3(write(tmp_path, positioned(builder()).build()))
+    assert f.find("แผ่น").box == (0, 100, -10, 10, 0.5, 5.1)
+    assert f.find("ชุดบน").box is None and f.find("ชุดย่อย").box is None  # other layout / none stored
+    plate = next(u for u in f.find("ชุดบน").components if u.name == "แผ่น")
+    assert plate.count == 2 and plate.placements[1] is None and np.array_equal(plate.placements[0], np.eye(4))
+    sub = next(u for u in f.find("ชุดบน").components if u.name == "ชุดย่อย")
+    assert np.allclose(sub.placements[0], move(1000, 0.25, -3, turn=90), atol=1e-12)
+
+    placed = z3.placed_instances(f)
+    assert [(p.name, p.kind, p.file, p.depth) for p in placed] == [
+        ("ชุดย่อย", "assembly", "", 1),  # rows of one assembly come in the order of their names, like in bom()
+        ("สลัก", "part", "สลัก.Z3PRT", 2),
+        ("ผี", "missing_object", "", 2),
+        ("แผ่น", "part", "", 2),
+        ("แผ่น", "part", "", 1),
+        ("แผ่น", "part", "", 1),
+    ]
+    assert placed[3].path == ("ชุดบน", "ชุดย่อย") and placed[3].instance == "แผ่น_1"
+    assert len([p for p in placed if p.kind != "assembly"]) == z3.bom(f).total_parts
+    # the plate inside the sub-assembly: shifted 50 in y, then turned a quarter and shifted with the sub-assembly
+    assert np.allclose(placed[3].matrix, move(1000, 0.25, -3, turn=90) @ move(0, 50, 0))
+    assert np.allclose(placed[3].box, (940, 960, 0.25, 100.25, -2.5, 2.1))
+    assert np.allclose(placed[1].box, (1000 - 2 - 4, 1000 - 2 + 4, 1.25 - 4, 1.25 + 4, 0, 30))  # from the other file
+    assert placed[2].box is None and np.allclose(placed[2].matrix[:3, 3], (993, 7.25, 4))
+    assert placed[0].box is None and placed[4].box == (0, 100, -10, 10, 0.5, 5.1)
+    assert placed[5].matrix is None and placed[5].box is None  # no placement: no position, and none invented
+    assert z3.placed_instances(f, root="ชุดย่อย")[2].box == (0, 100, 40, 60, 0.5, 5.1)
+    alone = z3.placed_instances(f, resolve=False)
+    assert [(p.kind, p.box) for p in alone if p.name == "สลัก"] == [("external", None)]
+
+
+def test_placement_of_an_unknown_form_or_cut_short_gives_no_position(tmp_path):
+    b = Z3Builder()
+    top = b.obj3d("ชุดบน")
+    b.obj3d("แผ่น", box=(0, 1, 0, 1, 0, 1))
+    b.component(top, "แผ่น", at=move(5, 6, 7), n=3)
+    ids = sorted(r for r, (cls, _k, _d) in b.records.items() if cls == z3.CLS_PLACEMENT)
+    b.records[ids[0]] = (z3.CLS_PLACEMENT, 0x0A, b.records[ids[0]][2][:8])  # cut inside the matrix
+    odd = Packer(0x04)
+    odd.char(0x64)
+    b.records[ids[1]] = (z3.CLS_PLACEMENT, 0x0A, odd.data())  # neither 'c' nor 1
+    f = z3.read_z3(write(tmp_path, b.build()))
+    where = f.find("ชุดบน").components[0].placements
+    assert where[0] is None and where[1] is None and np.allclose(where[2], move(5, 6, 7))
+    assert [p.matrix is None for p in z3.placed_instances(f)] == [True, True, False]
+    with pytest.raises(z3.Z3Error):
+        z3.placed_instances(f, root="ไม่มี")
 
 
 # ------------------------------------------------------------------------------------------------ BOM

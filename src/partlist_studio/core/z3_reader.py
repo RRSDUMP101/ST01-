@@ -24,14 +24,24 @@ Layout of one container (all integers little-endian):
     A+B    64 zero bytes, and the container ends (the HQR container, when there is one, starts here)
 
 Record classes used here: 2 the root table itself, 3 string (NUL-terminated), 13 preview (0xFF, u32 size, zlib BMP),
-67 layer (name[32] ...), 88 component = one use of another object, 89 root of a 3D object, 90 root of a 2D drawing.
+67 layer (name[32] ...), 88 component = one use of another object, 89 root of a 3D object, 90 root of a 2D drawing,
+94 placement of a component.
 
 A packed record is one version byte followed by 32-bit control words (16 two-bit codes, low bits first), each
 followed by the data of its 16 items. Integer: 0 = 1 signed byte, 1 = 2 bytes, 2 = 4 bytes, 3 = same as the previous
-integer. Character: 0 = NUL, 2 = one literal byte, 3 = same as the previous character, 1 = the value 1 (seen only in
-the descriptor of a long name). A component record starts with five length-prefixed strings (instance name, file
-name or "" for this file, object name, instance name again, "") and integers of which the fourth is the root-record
-id of the object that owns the component (-1: not part of an assembly, e.g. a part shown in a drawing view).
+integer. Character: 0 = NUL, 2 = one literal byte, 3 = same as the previous character, 1 = the value 1 (in the
+descriptor of a long name and in a placement). Real number: 0 = 1 signed byte, 1 = float32, 2 = float64, 3 = same as
+the previous real. A component record starts with five length-prefixed strings (instance name, file name or "" for
+this file, object name, instance name again, "") and integers of which the fourth is the root-record id of the
+object that owns the component (-1: not part of an assembly, e.g. a part shown in a drawing view) and the fifth the
+id of its placement record: the character 'c', then X axis, Y axis, Z axis and origin as 12 reals (mm; a point of
+the component lies in the owner at origin + x*X + y*Y + z*Z), or the character 1 alone = not moved. A drawing view
+places its part the same way with the scale of the view in the axes.
+
+The root record of a 3D object is its name field, 11 integers, then its box in its own coordinates as 6 reals (xmin,
+xmax, ymin, ymax, zmin, zmax; +-1e20 = none). ZW3D does not keep that box up to date: where it could be compared
+with exported geometry it was never too small, but for some parts far too big (a part that once held more, or that
+holds hidden or construction geometry).
 
 Names are in the Windows code page given on text line 2 (874 = Thai); a few layer names are UTF-8 instead.
 
@@ -65,7 +75,7 @@ every block starts where the one before it ends, from the header to the last byt
 to whole entries whose sizes add up to exactly the record area, and - as in the old format - that every name and
 component record decodes and agrees with the directory.
 
-What is NOT read: geometry, placements, user attributes (class 302 holds name/value pairs such as "Material", but
+What is NOT read: geometry, user attributes (class 302 holds name/value pairs such as "Material", but
 which object a list of them belongs to could not be established), per-object layers (only the layer names of the
 whole file are listed), suppressed / excluded-from-BOM flags of components.
 """
@@ -106,7 +116,8 @@ _SEG_ENTRY = np.dtype(
 )
 
 CLS_TABLE, CLS_STRING, CLS_PREVIEW, CLS_LAYER, CLS_COMPONENT, CLS_OBJECT3D, CLS_DRAWING = 2, 3, 13, 67, 88, 89, 90
-_KEEP = (CLS_TABLE, CLS_STRING, CLS_PREVIEW, CLS_LAYER, CLS_COMPONENT, CLS_OBJECT3D, CLS_DRAWING)
+CLS_PLACEMENT = 94
+_KEEP = (CLS_TABLE, CLS_STRING, CLS_PREVIEW, CLS_LAYER, CLS_COMPONENT, CLS_OBJECT3D, CLS_DRAWING, CLS_PLACEMENT)
 
 KIND_TH = {"part": "ชิ้นส่วน", "assembly": "ชุดประกอบ", "drawing": "แบบ 2 มิติ", "other": "ไม่ทราบชนิด"}
 
@@ -153,6 +164,8 @@ class Z3Use:
     file: str
     count: int
     instances: list[str] = field(default_factory=list)
+    # per instance: 4x4 matrix from the target's coordinates to the owner's (mm); None = placement not readable
+    placements: list[np.ndarray | None] = field(default_factory=list)
 
 
 @dataclass
@@ -162,6 +175,8 @@ class Z3Object:
     name: str
     components: list[Z3Use] = field(default_factory=list)
     record_class: int = 0
+    # (xmin, xmax, ymin, ymax, zmin, zmax) in its own coordinates as ZW3D stored it: can be far too big, see above
+    box: tuple[float, ...] | None = None
 
     @property
     def kind_th(self) -> str:
@@ -438,6 +453,7 @@ class _Packed:
         self.codes: list[int] = []
         self.prev_int = 0
         self.prev_chr = 0
+        self.prev_real = 0.0
 
     def _code(self) -> int:
         if not self.codes:
@@ -457,6 +473,16 @@ class _Packed:
             self.prev_int = int.from_bytes(self.d[self.p : self.p + n], "little", signed=True)
             self.p += n
         return self.prev_int
+
+    def real(self) -> float:
+        c = self._code()
+        if c != 3:
+            n, fmt = ((1, "<b"), (4, "<f"), (8, "<d"))[c]
+            if self.p + n > len(self.d):
+                raise ValueError("packed record ends early")
+            self.prev_real = float(struct.unpack_from(fmt, self.d, self.p)[0])
+            self.p += n
+        return self.prev_real
 
     def chars(self, n: int) -> bytes:
         out = bytearray()
@@ -811,6 +837,36 @@ def _long_name(mm, base: int, ix: _Index, length: int, sid: int, code_page: str)
     return _decode(raw[:-1], code_page)
 
 
+def _own_box(pk: _Packed) -> tuple[float, ...] | None:
+    """The box that follows the name in the root record of a 3D object, or None: none stored, or not this layout."""
+    try:
+        for _ in range(11):
+            pk.integer()
+        box = tuple(pk.real() for _ in range(6))
+    except ValueError:
+        return None
+    sane = all(np.isfinite(box)) and max(abs(v) for v in box) < 1e7 and all(box[i] <= box[i + 1] for i in (0, 2, 4))
+    return box if sane else None
+
+
+def _placement(mm, ix: _Index, rid: int) -> np.ndarray | None:
+    """The 4x4 matrix of a placement record, or None when there is no such record or it is of an unknown form."""
+    i = ix.lookup(rid)
+    if i < 0 or int(ix.cls[i]) != CLS_PLACEMENT or int(ix.kind[i]) & 0x20:
+        return None
+    m = np.eye(4)
+    try:
+        pk = _Packed(_record(mm, 0, ix, i))
+        form = pk.chars(1)[0]
+        if form == 0x63:
+            m[:3, :] = np.array([pk.real() for _ in range(12)]).reshape(4, 3).T
+        elif form != 1:  # 1 = not moved
+            return None
+    except ValueError:
+        return None
+    return m if np.isfinite(m).all() else None
+
+
 def _bmp_to_png(bmp: bytes) -> bytes | None:
     """Uncompressed 24/32-bit BMP -> PNG (the preview is always 24-bit; anything else is left out)."""
     if bmp[:2] != b"BM" or len(bmp) < 54:
@@ -957,11 +1013,14 @@ def _read_into(result: Z3File, mm) -> None:
     for obj in objects.values():
         if obj.kind == "part":  # the root record of a 3D object starts with its name: must agree with the table
             try:
-                s = _Packed(_record(mm, 0, ix, ix.lookup(obj.root_id))).string()
+                pk = _Packed(_record(mm, 0, ix, ix.lookup(obj.root_id)))
+                s = pk.string()
                 own = _long_name(mm, 0, ix, s[0], s[1], cp) if isinstance(s, tuple) else _decode(s, cp)
             except (ValueError, IndexError, struct.error):
                 own = None
             renamed += own != obj.name
+            if own is not None:
+                obj.box = _own_box(pk)
     result.checks.append(
         Z3Check(
             "objects",
@@ -992,6 +1051,10 @@ def _read_into(result: Z3File, mm) -> None:
                 else:
                     names.append(_decode(s, cp))
             owner = [pk.integer() for _ in range(4)][3]
+            try:
+                where = _placement(mm, ix, pk.integer())
+            except ValueError:
+                where = None
         except (ValueError, IndexError, struct.error) as exc:
             broken.append(f"ระเบียน {rid}: {exc}")
             continue
@@ -1008,6 +1071,7 @@ def _read_into(result: Z3File, mm) -> None:
         use = uses.setdefault(owner, {}).setdefault((_fold(file), _fold(target)), Z3Use(target, file, 0))
         use.count += 1
         use.instances.append(instance)
+        use.placements.append(where)
     result.checks.append(
         Z3Check(
             "components",
@@ -1254,6 +1318,85 @@ def bom(z3: Z3File, root: Z3Object | str | None = None, resolve: bool = True, li
     if lost:  # the data area has no checksum: a name damaged on disk shows up only as a target that is not there
         out.warnings.append(f"มี {len(lost)} รายการที่ชุดประกอบอ้างถึงแต่ไม่พบวัตถุชื่อนั้น – ไฟล์อาจเสียหายบางส่วนหรือชื่อถูกเปลี่ยน")
     out.unused = [o for o in top_candidates(z3) if o.root_id != top.root_id]
+    return out
+
+
+@dataclass
+class Z3Placed:
+    """One instance in the tree of an assembly, in the coordinates of the top assembly (mm)."""
+
+    name: str  # the object
+    instance: str  # the name ZW3D gave this use of it
+    kind: str  # part / assembly / missing_object / missing_file / bad_file / external / cycle
+    file: str  # file that holds the object when it is not the file being listed
+    path: tuple[str, ...]  # the assemblies above it, top first
+    matrix: np.ndarray | None  # 4x4, own coordinates -> top; None when a placement on the way could not be read
+    box: tuple[float, ...] | None  # the object's stored box carried to the top: never tight when it was turned
+
+    @property
+    def depth(self) -> int:
+        return len(self.path)
+
+
+def carry_box(matrix: np.ndarray, box: tuple[float, ...]) -> tuple[float, ...]:
+    """The box (xmin, xmax, ymin, ymax, zmin, zmax) that holds `box` after `matrix`: its eight corners are moved."""
+    corners = np.array([[box[i], box[2 + j], box[4 + k], 1.0] for i in (0, 1) for j in (0, 1) for k in (0, 1)])
+    moved = corners @ matrix.T
+    return tuple(float(f(moved[:, axis])) for axis in range(3) for f in (np.min, np.max))
+
+
+def placed_instances(
+    z3: Z3File, root: Z3Object | str | None = None, resolve: bool = True, library: Z3Library | None = None
+) -> list[Z3Placed]:
+    """Every instance under `root` (default: find_top), parents before their children, with its position in the top
+    assembly. Files are followed like in bom(); what bom() counts as one line with a quantity is one entry per
+    instance here. The boxes are ZW3D's stored ones: an upper bound that can be far too big (module docstring)."""
+    if not z3.ok:
+        raise Z3Error(z3.message or "ไฟล์นี้อ่านไม่ได้", z3.status, z3.checks)
+    if isinstance(root, str):
+        found = z3.find(root)
+        if found is None:
+            raise Z3Error(f"ไม่พบวัตถุชื่อ “{root}” ในไฟล์ “{z3.path.name}”", "not_found")
+        root = found
+    top = root or find_top(z3)
+    out: list[Z3Placed] = []
+    if top is None:
+        return out
+    library = library or Z3Library()
+    library.add(z3)
+    home = z3.path.resolve()
+
+    def expand(src: Z3File, obj: Z3Object, at: np.ndarray | None, path: tuple[str, ...], stack: tuple) -> None:
+        own = _fold(src.path.name)
+        label = "" if src.path.resolve() == home else src.path.name
+        key = (src.path.resolve(), obj.root_id)
+        for use in obj.components:
+            local = not use.file or _fold(use.file) == own
+            other, target, kind, file = src, None, "missing_object", label if local else use.file
+            if local:
+                target = src.find(use.name) if use.name else None
+            elif not resolve:
+                kind = "external"
+            else:
+                where = library.locate(src.path.resolve().parent, use.file)
+                other = library.read(where) if where is not None else None
+                if other is None or not other.ok:
+                    kind = "missing_file" if other is None else "bad_file"
+                else:
+                    target = other.find(use.name) if use.name else find_top(other)
+            if target is not None:
+                kind = "cycle" if (other.path.resolve(), target.root_id) in stack + (key,) else target.kind
+            for k, instance in enumerate(use.instances):
+                step = use.placements[k] if k < len(use.placements) else None
+                matrix = at @ step if at is not None and step is not None else None
+                known = matrix is not None and target is not None and target.box is not None
+                box = carry_box(matrix, target.box) if known else None
+                name = use.name or Path(use.file).stem
+                out.append(Z3Placed(name, instance, kind, file, path, matrix, box))
+                if kind == "assembly":
+                    expand(other, target, matrix, path + (target.name,), stack + (key,))
+
+    expand(z3, top, np.eye(4), (top.name,), ())
     return out
 
 

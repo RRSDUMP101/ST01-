@@ -701,9 +701,8 @@ def _read_segments(mm, base: int, end: int, box: _Container, check) -> _Containe
     size = end - base
     count, dir_at, dir_size = struct.unpack_from("<4xIQI", mm, base + _TEXT_END) if size >= _SEG0 else (0, 0, 0)
     fits = _SEG0 + _SEG_HEAD < dir_at and dir_at + dir_size + 8 + _TRAILER <= size and count * _DIR_FIXED <= dir_size
-    if not check(
-        "layout", "ขนาดไฟล์ตรงกับที่ส่วนหัวระบุ", fits, f"สารบัญวัตถุที่ {dir_at} ยาว {dir_size} มี {count} วัตถุ ไฟล์ส่วนนี้ยาว {size}"
-    ):
+    where = f"สารบัญวัตถุที่ {dir_at} ยาว {dir_size} มี {count} วัตถุ ไฟล์ส่วนนี้ยาว {size}"
+    if not check("layout", "ขนาดไฟล์ตรงกับที่ส่วนหัวระบุ", fits, where):
         box.fatal = True
         return box
     # ---- directory: the entries fill it exactly, and the segments they name follow it back to back
@@ -769,9 +768,10 @@ def _read_segments(mm, base: int, end: int, box: _Container, check) -> _Containe
         if len(ix.ids) > 1 and not (np.diff(ix.ids) > 0).all():
             ix.unknown_codes += 1  # the same id in two segments: looking a record up by id is not safe
     box.index = ix
-    check("index", "อ่านดัชนีระเบียนได้ครบ", not unread and ix.records > 0, f"อ่านไม่ได้ {unread} จาก {len(segments)} ส่วน")
+    of = f"จาก {len(segments)} ส่วน"
+    check("index", "อ่านดัชนีระเบียนได้ครบ", not unread and ix.records > 0, f"อ่านไม่ได้ {unread} {of}")
     check("index_codes", "รหัสในดัชนีเป็นแบบที่รู้จัก", ix.unknown_codes == 0, f"ไม่รู้จัก {ix.unknown_codes} จุด")
-    check("tiling", "ระเบียนข้อมูลเรียงต่อกันพอดีจนถึงดัชนี", not untiled, f"ไม่พอดี {untiled} จาก {len(segments)} ส่วน")
+    check("tiling", "ระเบียนข้อมูลเรียงต่อกันพอดีจนถึงดัชนี", not untiled, f"ไม่พอดี {untiled} {of}")
     box.entries = [(name, rid) for name, rid, _at, _size in listed]
     box.full_names = True
     box.fatal = any(not k.ok for k in box.checks)

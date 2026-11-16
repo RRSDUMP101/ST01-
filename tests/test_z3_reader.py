@@ -284,13 +284,14 @@ class Z3Builder32(Z3Builder):
             for rid in rids:
                 cls, kind, blob = self.records[rid]
                 size = len(blob) + (rid == self.wrong_size_at)
-                entries += struct.pack("<QIIIiiiHHI", 0, rid - last, size, len(blob) * (kind & 1), -1, rid + 4, -2, cls, kind, 8)
+                links = (len(blob) * (kind & 1), -1, rid + 4, -2)  # element size, link, next, previous: not read
+                entries += struct.pack("<QIIIiiiHHI", 0, rid - last, size, *links, cls, kind, 8)
                 last = rid
-            blocks = [b"".join(self.records[rid][2] for rid in rids), sized(zstd.compress(entries + b"\0" * 3 * self.ragged_index))]
-            blocks.append(deflated(b"\x01" * 700))
+            blocks = [b"".join(self.records[rid][2] for rid in rids)]
+            blocks += [sized(zstd.compress(entries + b"\0" * 3 * self.ragged_index)), deflated(b"\x01" * 700)]
             if rids[0]:  # not the default segment: side stream, its (id, size) table, GUID block
                 blocks += [sized(zstd.compress(b"\x07" * 44)), sized(zstd.compress(struct.pack("<II", 510, 44)))]
-                blocks.append(deflated(struct.pack("<4I", 11, 0x10001, 3, 36) + b"0A1B2C3D-0000-4000-8000-00000000TEST"))
+                blocks.append(deflated(struct.pack("<4I", 11, 0x10001, 3, 36) + b"0A1B2C3D-0000-4000-8000-0000TEST"))
             at = [start + 136 + len(name)]
             for blob in blocks:
                 at.append(at[-1] + len(blob))
@@ -311,7 +312,8 @@ class Z3Builder32(Z3Builder):
         for rid in order:
             name = self.names[rid]
             seg = segment(pos, self.header_names.get(rid, name), members[rid])
-            directory += struct.pack("<II", 29 + len(name), len(name)) + name + struct.pack("<BIQII", 0, rid, pos, 1, len(seg))
+            directory += struct.pack("<II", 29 + len(name), len(name)) + name
+            directory += struct.pack("<BIQII", 0, rid, pos, 1, len(seg))
             segments += seg
             pos += len(seg)
         partitions = [b"\x91" * 50, b"\x92" * 7]
@@ -735,11 +737,17 @@ def spots(data: bytes) -> tuple[int, int, int, int]:
     return dir_at, seg_at, struct.unpack_from("<Q", data, seg_at + 40)[0], kernel_at
 
 
+def offset_field(data: bytes) -> int:
+    """Where the first directory entry says at which offset its segment starts."""
+    dir_at = spots(data)[0]
+    return dir_at + 8 + struct.unpack_from("<I", data, dir_at + 4)[0] + 5
+
+
 DAMAGE32 = {
     "object count": (lambda d: d[:0x304] + bytes([d[0x304] + 1]) + d[0x305:], "directory"),
     "absurd object count": (lambda d: flip(d, 0x306), "layout"),
     "directory entry": (lambda d: flip(d, spots(d)[0]), "directory"),
-    "segment offset": (lambda d: flip(d, spots(d)[0] + 8 + struct.unpack_from("<I", d, spots(d)[0] + 4)[0] + 5), "directory"),
+    "segment offset": (lambda d: flip(d, offset_field(d)), "directory"),
     "default segment": (lambda d: flip(d, 0x328 + 48), "segments"),
     "index size": (lambda d: flip(d, spots(d)[1] + 48), "segments"),
     "name in the segment": (lambda d: flip(d, spots(d)[1] + 137), "segments"),
@@ -780,7 +788,8 @@ def test_format_3200_index_that_does_not_fit_its_records(tmp_path):
     data = model(Z3Builder32()).build()
     at = spots(data)[2]  # an index block whose frame was cut and padded: the right place, but not a zstd frame
     (n,) = struct.unpack_from("<I", data, at)
-    f = z3.read_z3(write(tmp_path, data[: at + 12] + b"\0" * (n - 8) + data[at + 4 + n :], "ตัด.Z3"), strict=False)
+    cut = data[: at + 12] + b"\0" * (n - 8) + data[at + 4 + n :]
+    f = z3.read_z3(write(tmp_path, cut, "ตัด.Z3"), strict=False)
     assert f.status == "damaged" and [c.key for c in f.failed_checks] == ["index"]
 
 

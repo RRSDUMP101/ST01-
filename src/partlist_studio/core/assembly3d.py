@@ -151,6 +151,7 @@ class AssemblyModel:
     steps: list[Step] = field(default_factory=list)
     source: str = "auto"  # 'auto' = built from the job (rebuilt when the job changes) · 'file' = imported / edited
     note: str = ""
+    photos: dict = field(default_factory=dict)  # part name → a photo of the real part (JPEG, base64) for its detail card
 
     def groups(self) -> list[str]:
         out: list[str] = []
@@ -202,14 +203,16 @@ class AssemblyModel:
     # ---- file
     def to_dict(self) -> dict:
         return {"format": "rrs-assembly/1", "name": self.name, "source": self.source, "note": self.note,
-                "steps": [asdict(s) for s in self.steps], "parts": [asdict(p) for p in self.parts]}
+                "steps": [asdict(s) for s in self.steps], "parts": [asdict(p) for p in self.parts],
+                **({"photos": self.photos} if self.photos else {})}
 
     @classmethod
     def from_dict(cls, d: dict) -> AssemblyModel:
         if not isinstance(d.get("parts"), list):
             raise ValueError("ไม่ใช่ไฟล์โมเดลประกอบ (ไม่มี parts)")
         return cls(str(d.get("name", "")), [Part3D.from_dict(p) for p in d["parts"]],
-                   [Step.from_dict(s) for s in d.get("steps", [])], str(d.get("source", "file")), str(d.get("note", "")))
+                   [Step.from_dict(s) for s in d.get("steps", [])], str(d.get("source", "file")), str(d.get("note", "")),
+                   {str(k): str(v) for k, v in (d.get("photos") or {}).items()})
 
     def save(self, path: str | Path) -> None:
         Path(path).write_text(json.dumps(self.to_dict(), ensure_ascii=False), encoding="utf-8")
@@ -943,6 +946,91 @@ def _torque_text(job) -> str:
 
     t = torque_for(job.bolt_size, job.bolt_grade)
     return f"{job.bolt_size} เกรด {job.bolt_grade}: {t[1]:g}–{t[0]:g} Nm" if t else ""
+
+
+# --------------------------------------------------------------------------- the detail card of one part
+_THREAD = re.compile(r"(?i)(?<![a-z0-9])M(\d{1,2})((?:\s*[x×]\s*\d+(?:\.\d+)?){0,2})")
+_GRADE = re.compile(r"(?:เกรด|grade|class)\s*(\d{1,2}\.\d)|-(\d{1,2}\.\d)(?:_\d+)?$|-(\d{1,2})(?:_\d+)?$", re.IGNORECASE)
+_STANDARD = re.compile(r"(?i)\b(ISO|DIN|JIS|ANSI)\s*-?\s*(\d{3,5})")
+_KINDS = (("washer", "แหวนรอง"), ("แหวน", "แหวนรอง"), ("nut", "น็อต"), ("น็อต", "น็อต"), ("screw", "สลักเกลียว"), ("bolt", "สลักเกลียว"),
+          ("สลัก", "สลักเกลียว"), ("สกรู", "สกรู"))
+_NUT_CLASSES = ("4", "5", "6", "8", "10", "12")
+
+
+def fastener_spec(name: str) -> dict[str, str]:
+    """What the name of a bolt, nut or washer says: 'Hex head screw ISO8676-M12x1.25x65-5.6' → kind สลักเกลียว,
+    thread M12, pitch 1.25, length 65, grade 5.6, standard ISO 8676. {} when the name is not a fastener's."""
+    low = name.lower()
+    found = sorted((low.index(word), thai) for word, thai in _KINDS if word in low)
+    if not found:
+        return {}
+    kind = found[0][1]  # 'สลัก M14 + น็อตล็อก' is a bolt that comes with its nut
+    out = {"kind": kind}
+    if m := _STANDARD.search(name):
+        out["standard"] = f"{m.group(1).upper()} {m.group(2)}"
+    rest = _STANDARD.sub(" ", name)
+    if m := _THREAD.search(rest):
+        out["thread"] = f"M{m.group(1)}"
+        numbers = re.findall(r"\d+(?:\.\d+)?", m.group(2))
+        if len(numbers) == 1:  # 'M8x1' is the pitch of a fine thread, 'M8x25' the length
+            numbers = [numbers[0], ""] if float(numbers[0]) < 4 else ["", numbers[0]]
+        if numbers and numbers[0]:
+            out["pitch"] = numbers[0]
+        if len(numbers) > 1 and numbers[1]:
+            out["length"] = numbers[1]
+    elif m := re.search(r"(?<!\d)(\d{1,2})-\d{3}HV", name):  # 'Washer ISO 7090-12-200HV': for an M12 bolt
+        out["thread"] = f"M{m.group(1)}"
+    if kind != "แหวนรอง" and (m := _GRADE.search(rest)):
+        grade = next(g for g in m.groups() if g)
+        if "." in grade or (kind == "น็อต" and grade in _NUT_CLASSES):  # '-0_4' at the end is the CAD's copy number
+            out["grade"] = grade
+    return out
+
+
+def part_details(model: AssemblyModel, part: Part3D, job=None) -> dict:
+    """Everything the detail card of a part shows. {'title', 'subtitle', 'description', 'rows': [(label, value)],
+    'step': its step number, 'count': how many parts of this name the model has, 'photo': base64 JPEG or ''}."""
+    from .install_manual import torque_for
+
+    same = [p for p in model.parts if p.name == part.name and p.size == part.size]
+    step = model.steps[part.step - 1] if 0 < part.step <= len(model.steps) else None
+    lo, hi = part.bounds()
+    box = sorted((hi[i] - lo[i] for i in range(3)), reverse=True)
+    c = part.centre()
+    rows: list[tuple[str, str]] = [("กลุ่ม", part.group)]
+    if step is not None:
+        phase = f" · {step.phase}" if step.phase else ""
+        rows.append(("ขั้นประกอบ", f"ขั้นที่ {part.step} / {len(model.steps)}{phase} – {step.title}"))
+    else:
+        rows.append(("ขั้นประกอบ", "ของรถ (อ้างอิง) – ไม่ต้องประกอบ" if part.group == REF_GROUP else "ยังไม่ได้จัดเข้าขั้น"))
+    if part.size:
+        rows.append(("ขนาด / หน้าตัด", part.size))
+    rows.append(("ขนาดกรอบชิ้น", f"{box[0]:,.0f} × {box[1]:,.0f} × {box[2]:,.0f} มม."))
+    in_step = len([p for p in same if p.step == part.step])
+    rows.append(("จำนวนในโมเดล", f"{len(same)} ชิ้น" + (f" (ขั้นนี้ {in_step} ชิ้น)" if step is not None and in_step != len(same) else "")))
+    spec = fastener_spec(part.name)
+    if spec:
+        thread = " × ".join(x for x in (spec.get("thread", ""), spec.get("pitch", "")) if x)
+        if spec["kind"] == "แหวนรอง" and thread:
+            thread = f"สำหรับสลัก {thread}"
+        length = f" ยาว {spec['length']} มม." if "length" in spec else ""
+        rows.append(("ชนิด", spec["kind"] + (f" {thread}" if thread else "") + length))
+        if "grade" in spec:
+            rows.append(("เกรด", spec["grade"]))
+        if "standard" in spec:
+            rows.append(("มาตรฐาน", spec["standard"]))
+        t = torque_for(spec.get("thread", ""), spec.get("grade", "")) if spec["kind"] != "แหวนรอง" else None
+        if t and not (step is not None and f"{t[1]:g}–{t[0]:g}" in step.torque):  # the step says the same already
+            rows.append(("แรงขันตามคู่มือ Ford", f"{t[1]:g}–{t[0]:g} Nm ({spec['thread']} เกรด {spec['grade']})"))
+    if step is not None:
+        for label, value in (("แรงขันของขั้นนี้", step.torque), ("เครื่องมือ", step.tools), ("จุดตรวจ", step.check),
+                             ("คำเตือน", step.warning), ("อ้างอิง BEMM", step.ref)):
+            if value:
+                rows.append((label, value))
+    rows.append(("ตำแหน่งกลางชิ้น", f"X {c[0]:,.0f} · Y {c[1]:,.0f} · Z {c[2]:,.0f} มม."))
+    subtitle = " · ".join(x for x in (part.group, f"ขั้นที่ {part.step}" if step is not None else "", part.part_no) if x)
+    return {"title": part.name, "subtitle": subtitle, "description": step.detail if step is not None else "", "rows": rows,
+            "step": part.step if step is not None else 0, "count": len(same), "photo": model.photos.get(part.name, "")}
 
 
 def build_for_job(job) -> AssemblyModel | None:

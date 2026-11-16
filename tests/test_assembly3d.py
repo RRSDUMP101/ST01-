@@ -540,3 +540,121 @@ def test_tab_takes_the_groups_of_the_same_assembly_from_another_file(window, tmp
     a3.AssemblyModel("far", [_solid(1, "a", "ฝาข้าง", 9000, 0, 0)]).save(far)
     assert not tab.adopt_levels(str(far)) and "ไม่พบชิ้นของ far.rrsasm" in warned[0]
     assert not tab.adopt_levels(str(tmp_path / "none.rrsasm")) and "อ่านไฟล์ไม่ได้" in warned[1]
+
+
+def test_what_the_name_of_a_fastener_says():
+    spec = a3.fastener_spec
+    assert spec("Hex head screw ISO8676-M12x1.25x65-5.6") == {
+        "kind": "สลักเกลียว", "standard": "ISO 8676", "thread": "M12", "pitch": "1.25", "length": "65", "grade": "5.6"}
+    assert spec("Hex head screw ISO4017-M8x25-5.6")["length"] == "25" and "pitch" not in spec("Hex head screw ISO4017-M8x25-5.6")
+    assert spec("Hexagon high nut ISO8674-M8x1-8_1") == {"kind": "น็อต", "standard": "ISO 8674", "thread": "M8", "pitch": "1", "grade": "8"}
+    assert "grade" not in spec("Hexagon regular nut ISO8673-M12x1.25-0_4")  # '-0_4' is the CAD's copy number
+    assert spec("Washer ISO 7090-12-200HV") == {"kind": "แหวนรอง", "standard": "ISO 7090", "thread": "M12"}
+    assert spec("สลัก M14 เกรด 10.9 + น็อตล็อก") == {"kind": "สลักเกลียว", "thread": "M14", "grade": "10.9"}  # a bolt with its nut
+    assert spec("คานตามยาว ซ้าย") == {} and spec("แหวนรอง Ø50×5") == {"kind": "แหวนรอง"}
+
+
+def test_details_of_a_part_for_its_card(tmp_path):
+    job = _job()
+    model = a3.build_for_job(job)
+    bolt = next(p for p in model.parts if p.name.startswith("สลัก"))
+    info = a3.part_details(model, bolt, job)
+    rows = dict(info["rows"])
+    assert info["title"] == bolt.name and info["step"] == 6 and info["count"] == 12 and info["photo"] == ""
+    assert info["subtitle"] == "สลักยึด · ขั้นที่ 6" and "ขันแรงบิด" in info["description"]
+    assert rows["ขั้นประกอบ"] == "ขั้นที่ 6 / 13 · ยกขึ้นรถ – ขันสลักยึดกับแท่นยึด" and rows["จำนวนในโมเดล"] == "12 ชิ้น"
+    assert rows["ชนิด"] == "สลักเกลียว M14" and rows["เกรด"] == "10.9" and rows["แรงขันของขั้นนี้"] == "M14 เกรด 10.9: 150–200 Nm"
+    assert "แรงขันตามคู่มือ Ford" not in rows  # the step says it already
+    assert {"เครื่องมือ", "จุดตรวจ", "คำเตือน", "อ้างอิง BEMM", "ขนาดกรอบชิ้น", "ตำแหน่งกลางชิ้น"} <= set(rows)
+    loose = a3.Part3D("x", "Hex head screw ISO8676-M12x1.25x65-10.9", "ยังไม่จัดกลุ่ม", "mesh", mesh=[[[0, 0, 0], [65, 0, 0], [0, 18, 21]]])
+    rows = dict(a3.part_details(a3.AssemblyModel("m", [loose]), loose)["rows"])
+    assert rows["ขั้นประกอบ"] == "ยังไม่ได้จัดเข้าขั้น" and rows["ชนิด"] == "สลักเกลียว M12 × 1.25 ยาว 65 มม."
+    assert rows["แรงขันตามคู่มือ Ford"] == "95–125 Nm (M12 เกรด 10.9)" and rows["มาตรฐาน"] == "ISO 8676"
+    chassis = next(p for p in model.parts if p.group == a3.REF_GROUP)
+    assert dict(a3.part_details(model, chassis)["rows"])["ขั้นประกอบ"].startswith("ของรถ")
+    model.photos[bolt.name] = "QUJD"  # a photo of the real part goes with the model file
+    path = tmp_path / "m.rrsasm"
+    model.save(path)
+    again = a3.AssemblyModel.load(path)
+    assert again.photos == {bolt.name: "QUJD"} and a3.part_details(again, again.part(bolt.id))["photo"] == "QUJD"
+    assert "photos" not in a3.AssemblyModel("m", [loose]).to_dict()
+
+
+def test_a_tap_on_a_part_opens_its_detail_card(window, tmp_path):
+    from PySide6.QtCore import QPoint, QPointF, Qt
+    from PySide6.QtGui import QColor, QImage
+    from PySide6.QtTest import QTest
+
+    tab = window.pages["install"].assembly
+    window.resize(1500, 950)
+    window.show()
+    window.go("install")
+    window.pages["install"].tabs.setCurrentWidget(tab)
+    popup, model = tab.popup, tab.model
+    bolts = [p for p in model.parts if p.name.startswith("สลัก")]
+    bolt = bolts[0]
+    assert not popup.isVisible()
+    tab.view.last_click = QPointF(60, 80)
+    tab.view.part_clicked.emit(bolt.id)  # what a click on the part in the picture sends
+    assert popup.isVisible() and popup.part_id == bolt.id and popup.title.text() == bolt.name
+    assert popup.subtitle.text() == "สลักยึด · ขั้นที่ 6" and popup.step_btn.text() == "ไปขั้นที่ 6"
+    assert popup.all_same.text() == "ใช้กับชิ้นชื่อเดียวกันทั้ง 12 ชิ้น" and popup.form.rowCount() >= 10
+    assert popup.mini.model.parts[0].name == bolt.name and len(popup.mini.model.parts) == 1  # the part alone, to turn
+    assert popup.media.currentIndex() == 0 and "ยังไม่มีรูปจริง" in popup.photo.text() and not popup.has_photo()
+    inside = tab.view.rect().adjusted(0, 0, -1, -1)
+    assert inside.contains(popup.geometry().topLeft()) and popup.width() <= popup.WIDTH
+    # a tap on the card is not a tap on the picture under it
+    tab.view.selected = bolt.id
+    QTest.mouseClick(popup, Qt.LeftButton, Qt.NoModifier, QPoint(8, 8))
+    assert tab.view.selected == bolt.id and popup.isVisible()
+    # save: Part No. and note for every part of that name
+    popup.part_no.setText("RRS-BOLT-M14")
+    popup.note.setText("ทาเครื่องหมายสีหลังขัน")
+    popup.save_btn.click()
+    assert not popup.isVisible() and all(p.part_no == "RRS-BOLT-M14" and p.note == "ทาเครื่องหมายสีหลังขัน" for p in bolts)
+    assert tab.model.source == "file" and "12 ชิ้น" in window.statusBar().currentMessage()
+    # … or for this one only
+    tab.view.part_clicked.emit(bolt.id)
+    assert popup.part_no.text() == "RRS-BOLT-M14"
+    popup.all_same.setChecked(False)
+    popup.part_no.setText("RRS-BOLT-M14-A")
+    popup.save_btn.click()
+    assert bolt.part_no == "RRS-BOLT-M14-A" and bolts[1].part_no == "RRS-BOLT-M14"
+    # a photo of the real part
+    picture = tmp_path / "bolt.png"
+    image = QImage(1800, 1200, QImage.Format_RGB888)
+    image.fill(QColor("#8a8f96"))
+    image.save(str(picture))
+    tab.view.part_clicked.emit(bolts[1].id)
+    assert tab.attach_photo(bolts[1].id, str(picture))
+    assert popup.isVisible() and popup.has_photo() and popup.media.currentIndex() == 1 and not popup.photo.pixmap().isNull()
+    stored = QImage.fromData(__import__("base64").b64decode(tab.model.photos[bolts[1].name]))
+    assert max(stored.width(), stored.height()) == 900  # kept small in the model file
+    popup.cancel_btn.click()
+    tab.view.part_clicked.emit(bolt.id)  # the other bolt of the same name shows the photo too
+    assert popup.has_photo() and popup.media.currentIndex() == 1
+    popup.remove_btn.click()
+    assert tab.model.photos == {} and not popup.has_photo() and popup.isVisible()
+    # the buttons that go somewhere
+    zoom = tab.view.zoom
+    popup.zoom_btn.click()
+    assert tab.view.zoom != zoom and popup.isVisible()
+    popup.step_btn.click()
+    assert tab.step == 6 and not popup.isVisible()
+    # put away: ✕ · a tap beside the model · the option off
+    tab.view.part_clicked.emit(bolt.id)
+    popup.close_btn.click()
+    assert not popup.isVisible()
+    tab.view.part_clicked.emit(bolt.id)
+    tab.view.part_clicked.emit("")
+    assert not popup.isVisible()
+    tab.detail_on.setChecked(False)
+    tab.view.part_clicked.emit(bolt.id)
+    assert not popup.isVisible() and tab.view.selected == bolt.id
+    tab.detail_on.setChecked(True)
+    chassis = next(p for p in tab.model.parts if p.group == a3.REF_GROUP)
+    tab.view.part_clicked.emit(chassis.id)
+    assert popup.isVisible() and not popup.step_btn.isEnabled() and popup.step_btn.text() == "ไปขั้นประกอบ"
+    tab.go(2, animate=False)
+    assert not popup.isVisible()  # another step: the card goes
+    window.state.dirty = False

@@ -172,6 +172,7 @@ class Assembly3DView(QWidget):
         self._drawn: list[tuple] = []  # (corners of a face, or the triangles of a mesh as an array; part id)
         self._drag = None
         self._moving = False
+        self.last_click = QPointF(0, 0)  # where the picture was last clicked: a card about the part opens beside it
         self._text_scale = 1.0  # bigger numbers and axis names in a picture rendered larger than the widget
         self._timer = QTimer(self)
         self._timer.setInterval(30)
@@ -535,6 +536,7 @@ class Assembly3DView(QWidget):
             self._moving = False
             self.update()
         if not moved and event.button() == Qt.LeftButton:
+            self.last_click = event.position()
             self.selected = self.pick(event.position().x(), event.position().y())
             self.part_clicked.emit(self.selected)
             self.update()

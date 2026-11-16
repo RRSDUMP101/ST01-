@@ -16,6 +16,7 @@ from ...core import assembly3d as a3
 from ...core import cad_import
 from ...core import install_manual as im
 from ..assembly_view import Assembly3DView
+from ..part_popup import PartPopup, encode_photo
 from ..state import AppState
 from ..widgets import FlowLayout, button, fill, run_async, table
 
@@ -143,6 +144,12 @@ class AssemblyTab(QWidget):
         self.view = Assembly3DView()
         self.view.part_clicked.connect(self._part_clicked)
         self.view.animation_done.connect(self._animation_done)
+        self.popup = PartPopup(self.view)  # the detail card of the part that was tapped
+        self.popup.saved.connect(self._popup_saved)
+        self.popup.go_step.connect(self._popup_go)
+        self.popup.zoom.connect(lambda part_id: self.view.zoom_to([part_id]))
+        self.popup.attach_photo.connect(lambda part_id: self.attach_photo(part_id))
+        self.popup.remove_photo.connect(lambda part_id: self.attach_photo(part_id, remove=True))
         bar_box = QWidget()
         bar = FlowLayout(bar_box, h_spacing=6)  # wraps on a narrow window instead of making the page wider
         for text, name in (("ISO", "iso"), ("ISO 2", "iso2"), ("บน", "top"), ("หน้า", "front"), ("ท้าย", "rear"), ("ข้าง", "side")):
@@ -176,7 +183,12 @@ class AssemblyTab(QWidget):
         lay.addLayout(bar)
         opt_box = QWidget()
         opts = FlowLayout(opt_box, h_spacing=12)
-        for c in (self.labels, self.ghost, self.vehicle):
+        self.detail_on = QCheckBox("รายละเอียดเมื่อแตะชิ้น")
+        self.detail_on.setChecked(True)
+        self.detail_on.setToolTip("คลิก / แตะชิ้นส่วนในภาพ → การ์ดรายละเอียด: รูป สเปก จุดตรวจ ปุ่มไปขั้นประกอบ\n"
+                                  "Ctrl + คลิก = เลือกหลายชิ้นโดยไม่เปิดการ์ด")
+        self.detail_on.toggled.connect(lambda on: None if on else self.popup.hide())
+        for c in (self.labels, self.ghost, self.vehicle, self.detail_on):
             opts.addWidget(c)
         lay.addWidget(opt_box)
         hint = QLabel("ลากซ้าย = หมุน · ลากขวา / Shift+ลาก = เลื่อน · ล้อเมาส์ = ซูม · ดับเบิลคลิกชิ้น = ซูมเข้า")
@@ -278,6 +290,7 @@ class AssemblyTab(QWidget):
 
     def set_model(self, model: a3.AssemblyModel | None, keep_step: bool = False) -> None:
         self.stop_play()
+        self.popup.hide()
         self.model = model
         self.step = min(self.step, len(model.steps)) if (model and keep_step) else 0
         self.view.hidden_groups, self.view.hidden_parts = set(), set()
@@ -379,12 +392,62 @@ class AssemblyTab(QWidget):
         part = self.model.part(part_id) if self.model else None
         self._describe(part)
         if part is None:
+            self.popup.hide()  # a tap beside the model puts the card away
             return
         more = bool(QApplication.keyboardModifiers() & Qt.ControlModifier)  # Ctrl + click: one more part
         for r in range(self.parts.rowCount()):
             if self.parts.item(r, 0).data(Qt.UserRole) == part_id:
                 self.select_part_row(r, more)
                 break
+        if more or not self.detail_on.isChecked():
+            self.popup.hide()
+        else:
+            self.show_part_card(part)
+
+    # ---- the detail card of a part ----------------------------------------------
+    def show_part_card(self, part: a3.Part3D, media: int | None = None) -> None:
+        self.popup.show_part(self.model, part, self.get_job(), self.view.last_click.toPoint(), media)
+
+    def _popup_saved(self, part_id: str, part_no: str, note: str, all_same: bool) -> None:
+        part = self.model.part(part_id) if self.model else None
+        if part is None:
+            return
+        parts = [p for p in self.model.parts if p.name == part.name and p.size == part.size] if all_same else [part]
+        if all(p.part_no == part_no and p.note == note for p in parts):
+            return
+        for p in parts:
+            p.part_no, p.note = part_no, note
+        self._edited()
+        self._describe(part)
+        self.state.notify(f"บันทึกรายละเอียดของ {part.name} แล้ว" + (f" ({len(parts)} ชิ้น)" if len(parts) > 1 else ""))
+
+    def _popup_go(self, step: int) -> None:
+        self.popup.hide()
+        self.go(step)
+
+    def attach_photo(self, part_id: str, path: str = "", remove: bool = False) -> bool:
+        """A photo of the real part for its card (kept in the model file, for every part of that name)."""
+        part = self.model.part(part_id) if self.model else None
+        if part is None:
+            return False
+        if remove:
+            if self.model.photos.pop(part.name, None) is None:
+                return False
+        else:
+            if not path:
+                path, _ = QFileDialog.getOpenFileName(self, f"รูปจริงของ {part.name}", "", "รูปภาพ (*.jpg *.jpeg *.png *.bmp *.webp)")
+            if not path:
+                return False
+            data = encode_photo(path)
+            if not data:
+                QMessageBox.warning(self, "แนบรูปจริง", f"เปิดรูป {Path(path).name} ไม่ได้ – ใช้ไฟล์ JPG หรือ PNG")
+                return False
+            self.model.photos[part.name] = data
+        self._edited()
+        if not self.popup.isHidden() and self.popup.part_id == part_id:
+            self.show_part_card(part, media=1)
+        self.state.notify(f"{'ลบ' if remove else 'แนบ'}รูปจริงของ {part.name} แล้ว – กด บันทึก… เพื่อเก็บลงไฟล์คู่มือประกอบ")
+        return True
 
     def select_part_row(self, row: int, more: bool = False) -> None:
         model = self.parts.selectionModel()
@@ -487,6 +550,7 @@ class AssemblyTab(QWidget):
         if not self.model:
             return
         self.step = min(max(step, 0), len(self.model.steps))
+        self.popup.hide()  # the part of the card may not be in the picture of this step
         self.view.set_step(self.step or None, animate=animate)
         self._show_step()
 

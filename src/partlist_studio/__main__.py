@@ -8,6 +8,11 @@ if len(sys.argv) > 1 and sys.argv[1] == "--cad-import":
     for name in ("stdout", "stderr"):
         if getattr(sys, name) is None:
             setattr(sys, name, open(os.devnull, "w", encoding="utf-8"))  # noqa: SIM115 - for the life of the process
+        else:  # they go to a file of the program that started this one: every line at once, a crash must not take it
+            try:
+                getattr(sys, name).reconfigure(line_buffering=True)
+            except (AttributeError, ValueError):
+                pass
     from partlist_studio.core.cad_import import _child
 
     sys.exit(_child(sys.argv[2:]))

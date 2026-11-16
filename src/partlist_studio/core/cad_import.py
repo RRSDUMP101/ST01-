@@ -1645,6 +1645,8 @@ def read_cad_isolated(path: str | Path, max_faces: int = MAX_FACES, progress=Non
     else:
         command = [sys.executable, "-c", _CHILD, str(Path(__file__).resolve().parents[2]), *args]
     flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    # what the child prints goes to a file: without this Python keeps it in a buffer, and a crash takes it along
+    env = {**os.environ, "PYTHONUNBUFFERED": "1"}
     outcome = None
 
     pending = b""
@@ -1666,7 +1668,7 @@ def read_cad_isolated(path: str | Path, max_faces: int = MAX_FACES, progress=Non
     try:
         with open(said, "wb") as out, open(log, "rb") as messages:
             with subprocess.Popen(command, stdout=out, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
-                                  creationflags=flags) as child:
+                                  creationflags=flags, env=env) as child:
                 while child.poll() is None:
                     read_messages(messages)
                     time.sleep(0.05)

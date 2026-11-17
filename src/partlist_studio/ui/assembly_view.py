@@ -22,6 +22,8 @@ CURRENT, SELECTED, EDGE = QColor("#5DBB63"), QColor(theme.ACCENT), QColor("#2B34
 FAST_FACES = 400000  # more faces than this: while the mouse moves, big imported parts are drawn as boxes
 MESH_SHADES = 12  # shades of a colour on an imported mesh (fewer shades: fewer, bigger paths to fill)
 MESH_SLABS = 3  # slabs of distance a mesh is drawn in, far to near
+DETAIL_PIXELS = 8.0  # a part drawn as a box shows its real shape once its longest side is this long on the screen:
+#                       smaller than that a bolt and its box look the same, bigger and the box is a strange cube
 MAX_ORDERED = 1200  # more pieces than this: all faces sorted by distance instead (less exact, still quick)
 
 
@@ -170,7 +172,8 @@ class Assembly3DView(QWidget):
         self.marked: set[str] = set()  # more parts chosen in the table: tinted like the selected one
         self._anim = 0.0  # 1 → 0 while the parts of the step fly in
         self._meshes: dict[str, _Mesh] = {}
-        self._details: dict[str, _Mesh] = {}  # the real shape of a part drawn as a box, made when it is first selected
+        self._details: dict[str, _Mesh] = {}  # the real shape of a part drawn as a box, made when it is first shown
+        self.detailed: set[str] = set()  # the parts the last picture drew with that shape
         self._drawn: list[tuple] = []  # (corners of a face, or the triangles of a mesh as an array; part id)
         self._drag = None
         self._double = False
@@ -324,6 +327,7 @@ class Assembly3DView(QWidget):
         grad.setColorAt(1, QColor("#C9D1DB"))
         painter.fillRect(QRectF(0, 0, w, h), grad)
         self._drawn = []
+        self.detailed = set()
         if not self.model or not self.model.parts:
             painter.setPen(QColor(theme.MUTED))
             painter.drawText(QRectF(0, 0, w, h), Qt.AlignCenter, "ยังไม่มีโมเดล 3 มิติ – กด นำเข้าโมเดล (OBJ / STL)…")
@@ -342,9 +346,12 @@ class Assembly3DView(QWidget):
             if not state:
                 continue
             mesh = self._meshes[p.id]
-            if p.detail and p.id == self.selected:  # a small part drawn as a box shows its real shape when it is picked
-                mesh = self._details.get(p.id) or self._details.setdefault(p.id, _Mesh(p.detailed()))
             off = self._offset(p, state)
+            if p.detail and (p.id == self.selected or self._close_up(mesh, off, r, u, cx, cy, zoom, w, h)):
+                # a small part drawn as a box shows its real shape when it is picked, and when the picture is zoomed
+                # in on it: a row of bolts seen from near must not be a row of boxes
+                mesh = self._details.get(p.id) or self._details.setdefault(p.id, _Mesh(p.detailed()))
+                self.detailed.add(p.id)
             base = QColor(CURRENT) if state == "current" else QColor(p.color)
             if (p.id == self.selected or p.id in self.marked) and mesh.pieces[0].tri is not None:  # a mesh has no outline to make thicker
                 base = QColor((base.red() + 2 * SELECTED.red()) // 3, (base.green() + 2 * SELECTED.green()) // 3,
@@ -399,6 +406,16 @@ class Assembly3DView(QWidget):
         painter.setRenderHint(QPainter.Antialiasing, True)
         self._paint_labels(painter, labels, r, u, cx, cy, zoom)
         self._paint_triad(painter, r, u, h)
+
+    def _close_up(self, mesh: _Mesh, off, r, u, cx: float, cy: float, zoom: float, w: int, h: int) -> bool:
+        """Is this part big enough in the picture, and in it, for its box to look wrong? The size on the screen
+        depends on the zoom only, not on how the model is turned: a part does not flicker while it is rotated."""
+        # while the model is being turned only what is big enough to be seen as a shape: the frame stays quick
+        if float((mesh.hi - mesh.lo).max()) * zoom < (DETAIL_PIXELS * 3 if self._moving else DETAIL_PIXELS):
+            return False
+        c = mesh.centre - self.target + off
+        x, y = float(c @ r) * zoom + cx, cy - float(c @ u) * zoom
+        return -DETAIL_PIXELS <= x <= w + DETAIL_PIXELS and -DETAIL_PIXELS <= y <= h + DETAIL_PIXELS
 
     def _paint_mesh(self, painter, piece, off, base, alpha, part_id, r, u, d, light, cx, cy, zoom) -> None:
         """The triangles that face the camera, far ones first, in a few slabs of distance; in a slab all triangles

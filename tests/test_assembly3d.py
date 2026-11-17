@@ -860,19 +860,32 @@ def test_a_part_drawn_as_a_box_shows_its_real_shape_when_it_is_picked(window):
     wedge = [[[0, 0, 0], [30, 0, 0], [0, 20, 0]], [[0, 0, 0], [0, 20, 0], [0, 0, 25]], [[0, 0, 0], [0, 0, 25], [30, 0, 0]],
              [[30, 0, 0], [0, 0, 25], [0, 20, 0]]]
     lock = a3.Part3D("k1", "กลอน", "ฝาข้าง", "box", dims=[30, 20, 25], pos=[0, 0, 0], step=1, detail=wedge)
-    plain = a3.Part3D("k2", "แผ่น", "ฝาข้าง", "box", dims=[300, 200, 5], pos=[100, 0, 0], step=1)
+    plain = a3.Part3D("k2", "แผ่นพื้น", "ฝาข้าง", "box", dims=[5200, 3800, 5], pos=[100, 0, 0], step=1)  # bigger than a tray
     assert plain.detailed() is plain and lock.detailed().shape == "mesh" and lock.detailed().mesh == wedge
     tab.set_model(a3.AssemblyModel("m", [lock, plain], [a3.Step("ติด")], source="file"))
     view = tab.view
-    view.render_image(400, 300)
-    assert view._details == {}  # nothing picked: the box, as cheap as before
+    view.fit()
+    view.grab()
+    assert 30 * view.zoom < 8 and view.detailed == set() and view._details == {}  # the whole tray: the box, as cheap as before
+    # zoomed in on it (a row of bolts seen from near): its real shape, without picking it …
+    zoom, target = view.zoom, view.target.copy()
+    view.zoom_to([lock.id])
+    view.grab()
+    assert 30 * view.zoom >= 8 and view.detailed == {lock.id} and view._details[lock.id].faces == 4
+    view.target = view.target + 5000.0  # … but not while it is far outside the picture
+    view.grab()
+    assert view.detailed == set()
+    view.zoom, view.target = zoom, target
+    view.grab()
+    assert view.detailed == set()  # zoomed out again: the box
+    # picked: its real shape whatever the zoom, and in its card
     view.last_click = QPointF(60, 80)
     view.part_clicked.emit(lock.id)
     view.selected = lock.id
-    view.render_image(400, 300)
-    assert view._details[lock.id].faces == 4  # the picked part is drawn with its real shape
+    view.grab()
+    assert view.detailed == {lock.id}
     alone = tab.popup.mini.model.parts[0]
-    assert alone.shape == "mesh" and alone.mesh == wedge  # … and so is the part in its card
+    assert alone.shape == "mesh" and alone.mesh == wedge
     tab.set_model(a3.AssemblyModel("m", [plain], [a3.Step("ติด")], source="file"))
     assert view._details == {}
     tab.rebuild(force=True)

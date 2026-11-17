@@ -150,6 +150,7 @@ class AssemblyTab(QWidget):
         self.popup.saved.connect(self._popup_saved)
         self.popup.go_step.connect(self._popup_go)
         self.popup.zoom.connect(lambda part_id: self.view.zoom_to([part_id]))
+        self.popup.play.connect(self.play_part)
         self.popup.attach_photo.connect(lambda part_id: self.attach_photo(part_id))
         self.popup.remove_photo.connect(lambda part_id: self.attach_photo(part_id, remove=True))
         bar_box = QWidget()
@@ -273,7 +274,11 @@ class AssemblyTab(QWidget):
         replay.clicked.connect(lambda: self.go(self.step))
         row.addWidget(self.play_btn)
         row.addWidget(replay)
+        self.part_btn = button("▶ เล่นชิ้นที่เลือก", tooltip="ดูเฉพาะชิ้นที่เลือก (ในภาพหรือในตาราง) เลื่อนเข้าตำแหน่ง: เส้นประและ"
+                               "ลูกศร = ทิศที่ชิ้นเข้า · วงกลม = ตำแหน่งติดตั้ง · กดอีกครั้ง = เล่นซ้ำ")
+        self.part_btn.clicked.connect(lambda: self.play_part())
         lay.addLayout(row)
+        lay.addWidget(self.part_btn)  # on a row of its own: the panel must not get wider
         self.progress = QLabel()
         self.progress.setObjectName("Hint")
         lay.addWidget(self.progress)
@@ -844,6 +849,63 @@ class AssemblyTab(QWidget):
         self.progress.setText(f"ประกอบแล้ว {len(self.done_steps())} / {len(self.model.steps)} ขั้น")
 
     # ---- demonstration ----------------------------------------------------
+    def play_part(self, part_id: str = "") -> bool:
+        """Show how one part is fitted - the one given, else the one selected in the picture or in the table: it
+        travels to its place in the big picture, with its way (the direction) and its place marked. Again: once more."""
+        if not self.model:
+            return False
+        chosen = self.selected_parts()
+        part = self.model.part(part_id or self.view.selected) or (chosen[0] if chosen else None)
+        if part is None:
+            self.state.notify("เลือกชิ้นส่วนก่อน – คลิกชิ้นในภาพหรือแถวในตาราง แล้วกด เล่นชิ้นที่เลือก")
+            return False
+        if part.step == 0:
+            self.state.notify(f"{part.name} เป็นชิ้นของรถ (อ้างอิง) – ไม่ต้องประกอบ")
+            return False
+        self.stop_play()
+        if not self.view.play_part(part.id):
+            return False
+        self._card_out_of_the_way()
+        travel = self.view.travel_of(part)
+        self.state.notify(f"เล่น {part.name}: {self.view.way_in(travel)} {float((travel ** 2).sum()) ** 0.5:,.0f} มม. "
+                          f"→ ตำแหน่งติดตั้ง (ขั้นที่ {part.step})")
+        return True
+
+    def _card_out_of_the_way(self) -> None:
+        """The detail card must not lie over the way of the part that is played: it moves beside the way - over the
+        panels next to the picture when the picture itself has no room (unless the user put the card somewhere
+        himself)."""
+        popup, view = self.popup, self.view
+        if popup.isHidden() or popup.is_pinned() or not view._solo:
+            return
+        view.repaint()  # the way is drawn: where is it?
+        if view.way is None:
+            return
+        _id, a, b, _m = view.way
+        host = popup.parentWidget()
+        origin = view.mapTo(host, view.rect().topLeft()) if host is not view else view.rect().topLeft()
+        x0, x1 = sorted((a.x() + origin.x(), b.x() + origin.x()))
+        y0, y1 = sorted((a.y() + origin.y(), b.y() + origin.y()))
+        x0, y0, x1, y1 = x0 - 60, y0 - 60, x1 + 60, y1 + 60  # the part itself is wider than the line of its way
+        card = popup.geometry()
+        cw, ch = card.width(), card.height()
+        max_x, max_y = max(8, host.width() - cw - 8), max(8, host.height() - ch - 8)
+
+        def over(x: float, y: float) -> float:
+            return max(0.0, min(x + cw, x1) - max(x, x0)) * max(0.0, min(y + ch, y1) - max(y, y0))
+
+        if not over(card.left(), card.top()):
+            return
+        top = min(max(card.top(), 8), max_y)
+        # at the edge of the picture when that is clear of the way, else farther out, over the panel beside it
+        right = max(x1 + 8, origin.x() + view.width() - cw - 8)
+        left = min(x0 - cw - 8, origin.x() + 8)
+        spots = [(min(max(right, 8), max_x), top), (min(max(left, 8), max_x), top),
+                 (min(max(card.left(), 8), max_x), min(max(y1 + 8, 8), max_y)),
+                 (min(max(card.left(), 8), max_x), min(max(y0 - ch - 8, 8), max_y))]
+        x, y = min(spots, key=lambda spot: over(*spot))  # beside the way; the first one when several are clear
+        popup.move(int(x), int(y))
+
     def toggle_play(self) -> None:
         if self._playing:
             self.stop_play()

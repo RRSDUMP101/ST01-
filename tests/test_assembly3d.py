@@ -1066,3 +1066,92 @@ def _points(view):
     from PySide6.QtCore import QPoint
 
     return (QPoint(x, y) for y in range(30, view.height() - 30, 5) for x in range(30, view.width() - 30, 5))
+
+
+def test_one_part_played_by_itself_shows_its_way_and_its_place(window):
+    import numpy as np
+    from PySide6.QtCore import QPointF
+
+    tab = window.pages["install"].assembly
+    window.resize(1500, 950)
+    window.show()
+    window.go("install")
+    window.pages["install"].tabs.setCurrentWidget(tab)
+    tab.rebuild(force=True)
+    view, model = tab.view, tab.model
+    gate = next(p for p in model.parts if p.name.startswith("ฝาข้าง"))
+    chassis = next(p for p in model.parts if p.group == a3.REF_GROUP)
+    played = []
+    view.part_played.connect(played.append)
+    assert not view.play_part("no such part") and not view.play_part(chassis.id) and view._solo == ""
+    # words for where a part comes from (X towards the rear, +Y the right, Z up)
+    assert [view.way_in(np.array(v, dtype=float)) for v in ([0, 0, 650], [0, -550, 10], [0, 550, 0], [600, 0, 0], [-600, 5, 0],
+                                                            [0, 0, -300])] == [
+        "วางลงจากด้านบน", "เข้าจากด้านซ้าย", "เข้าจากด้านขวา", "เข้าจากท้ายรถ", "เข้าจากหน้ารถ", "ยกขึ้นจากด้านล่าง"]
+    tab.go(1, animate=False)  # the gate is of a later step: not in the picture
+    assert view._state(gate) == ""
+    assert view.play_part(gate.id) and view._solo == gate.id and view._solo_timer.isActive() and view.selected == gate.id
+    assert view._state(gate) == "solo"  # … but it is shown while it is played
+    travel = view.travel_of(gate)
+    assert list(travel) == list(gate.explode) and list(view._offset(gate, "solo")) == list(travel)  # it starts where it waits
+    view.grab()
+    part_id, start, home, now = view.way
+    assert part_id == gate.id and (now.x(), now.y()) == (start.x(), start.y()) and (start.x(), start.y()) != (home.x(), home.y())
+    assert all(0 <= p.x() <= view.width() and 0 <= p.y() <= view.height() for p in (start, home))  # both ends in the picture
+    for _ in range(25):
+        view._solo_tick()
+    view.grab()
+    half = view.way[3]
+    assert 0 < view._solo_anim < 1 and min(start.x(), home.x()) <= half.x() <= max(start.x(), home.x())
+    assert abs(view.way[1].x() - start.x()) < 0.01 and abs(view.way[2].x() - home.x()) < 0.01  # the way stays, the part moves
+    for _ in range(25):
+        view._solo_tick()
+    assert view._solo_anim == 0 and view._solo == gate.id and not view._offset(gate, "solo").any() and played == []
+    for _ in range(60):  # its place stays marked for a moment, then the picture is as it was
+        view._solo_tick()
+    assert view._solo == "" and played == [gate.id] and not view._solo_timer.isActive() and view._state(gate) == ""
+    # a part that was never given a place to wait at (an imported model): 350 mm out from the middle of the model
+    loose = a3.Part3D("z", "ชิ้น", "กลุ่ม", "box", dims=[50, 50, 50], pos=[900, 900, 500], step=1)
+    model.parts.append(loose)
+    view.set_model(model)
+    out = view.travel_of(loose)
+    assert abs(float(np.linalg.norm(out)) - 350) < 0.01 and out[1] > 0
+    model.parts.remove(loose)
+    tab.rebuild(force=True)
+    view, model = tab.view, tab.model
+    # another step, another model: the play ends
+    gate = next(p for p in model.parts if p.name.startswith("ฝาข้าง"))
+    view.play_part(gate.id)
+    tab.go(2, animate=False)
+    assert view._solo == ""
+    # the buttons: in the card (again = from the start) and for the part selected in the picture or the table
+    tab.go(gate.step, animate=False)
+    view.finish_animation()
+    view.last_click = QPointF(200, 200)
+    view.selected = gate.id
+    view.part_clicked.emit(gate.id)
+    popup = tab.popup
+    assert not popup.isHidden() and popup.play_btn.isEnabled() and popup.play_btn.text() == "▶ เล่นชิ้นนี้"
+    popup.play_btn.click()
+    assert view._solo == gate.id and popup.play_btn.text() == "↻ เล่นซ้ำ" and "ตำแหน่งติดตั้ง" in window.statusBar().currentMessage()
+    card, way = popup.geometry(), view.way
+    top_left = view.mapTo(window, view.rect().topLeft())
+    for point in way[1:3]:  # the card does not lie on the way of the part
+        assert not card.contains(int(point.x()) + top_left.x(), int(point.y()) + top_left.y())
+    view._solo_anim = 0.3
+    popup.play_btn.click()
+    assert view._solo_anim == 1.0  # again: from the start
+    view.grab()
+    assert view._hits == [] and view.way[0] == gate.id
+    view.stop_part()
+    popup.put_away()
+    view.selected = ""
+    tab.parts.clearSelection()
+    assert not tab.play_part() and "เลือกชิ้นส่วนก่อน" in window.statusBar().currentMessage()
+    view.selected = chassis.id
+    assert not tab.play_part() and "ไม่ต้องประกอบ" in window.statusBar().currentMessage()
+    view.selected = gate.id
+    tab.part_btn.click()
+    assert view._solo == gate.id
+    view.stop_part()
+    window.state.dirty = False

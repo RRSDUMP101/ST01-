@@ -75,6 +75,7 @@ class PartPopup(QFrame):
     saved = Signal(str, str, str, bool)  # part id, Part No., note, also for every part of the same name
     go_step = Signal(int)
     zoom = Signal(str)  # part id
+    play = Signal(str)  # part id: show how this part is fitted (it travels to its place)
     attach_photo = Signal(str)  # part id
     remove_photo = Signal(str)
     closed = Signal()
@@ -196,6 +197,9 @@ class PartPopup(QFrame):
         self.save_btn.clicked.connect(self._save)
         self.step_btn = button("ไปขั้นประกอบ", tooltip="แสดงขั้นที่ประกอบชิ้นนี้ พร้อมสาธิต")
         self.step_btn.clicked.connect(lambda: self.go_step.emit(self._step))
+        self.play_btn = button("▶ เล่นชิ้นนี้", "accent", "ดูชิ้นนี้เลื่อนเข้าตำแหน่งในภาพใหญ่: เส้นประและลูกศร = ทิศที่ชิ้นเข้า · วงกลม = ตำแหน่งติดตั้ง\n"
+                                                         "กดอีกครั้ง = เล่นซ้ำ")
+        self.play_btn.clicked.connect(self._play)
         self.zoom_btn = button("ซูมที่ชิ้น", tooltip="ซูมภาพใหญ่เข้าที่ชิ้นนี้")
         self.zoom_btn.clicked.connect(lambda: self.zoom.emit(self.part_id))
         self.photo_btn = button("แนบรูปจริง…", tooltip="รูปถ่ายชิ้นส่วน / วัสดุจริง – เก็บไว้ในไฟล์คู่มือประกอบ (.rrsasm)")
@@ -204,7 +208,7 @@ class PartPopup(QFrame):
         self.remove_btn.clicked.connect(lambda: self.remove_photo.emit(self.part_id))
         self.cancel_btn = button("ยกเลิก", tooltip="ปิดโดยไม่บันทึก")
         self.cancel_btn.clicked.connect(self.dismiss)
-        for b in (self.save_btn, self.step_btn, self.zoom_btn, self.photo_btn, self.remove_btn, self.cancel_btn):
+        for b in (self.save_btn, self.play_btn, self.step_btn, self.zoom_btn, self.photo_btn, self.remove_btn, self.cancel_btn):
             row.addWidget(b)
         lay.addWidget(row_box)
         self.hide()
@@ -258,6 +262,8 @@ class PartPopup(QFrame):
             self.all_same.setChecked(typed[2])
         self.step_btn.setText(f"ไปขั้นที่ {self._step}" if self._step else "ไปขั้นประกอบ")
         self.step_btn.setEnabled(bool(self._step))
+        self.play_btn.setText("▶ เล่นชิ้นนี้")
+        self.play_btn.setEnabled(bool(self._step))  # a part of the vehicle is not fitted
 
         alone = replace(part.detailed(), explode=[0.0, 0.0, 0.0], step=0)  # its real shape, not the box that saves faces
         self.mini.set_model(a3.AssemblyModel(part.name, [alone], source="file"))
@@ -355,6 +361,10 @@ class PartPopup(QFrame):
         return self.remove_btn.isVisibleTo(self)
 
     # ---- actions ------------------------------------------------------------------
+    def _play(self) -> None:
+        self.play.emit(self.part_id)
+        self.play_btn.setText("↻ เล่นซ้ำ")
+
     def changed(self) -> tuple[bool, bool]:
         """Was the Part No. / the note changed in the card?"""
         return self.part_no.text().strip() != self._opened[0].strip(), self.note.text().strip() != self._opened[1].strip()

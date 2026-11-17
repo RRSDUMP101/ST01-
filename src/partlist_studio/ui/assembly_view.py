@@ -22,6 +22,8 @@ CURRENT, SELECTED, EDGE = QColor("#5DBB63"), QColor(theme.ACCENT), QColor("#2B34
 FAST_FACES = 400000  # more faces than this: while the mouse moves, big imported parts are drawn as boxes
 MESH_SHADES = 12  # shades of a colour on an imported mesh (fewer shades: fewer, bigger paths to fill)
 MESH_SLABS = 3  # slabs of distance a mesh is drawn in, far to near
+SOLO_STEP = 0.02  # a part played by itself travels for 50 frames (1.5 s) …
+SOLO_HOLD = 45  # … and its place stays marked for so many frames after (1.3 s)
 DETAIL_PIXELS = 8.0  # a part drawn as a box shows its real shape once its longest side is this long on the screen:
 #                       smaller than that a bolt and its box look the same, bigger and the box is a strange cube
 MAX_ORDERED = 1200  # more pieces than this: all faces sorted by distance instead (less exact, still quick)
@@ -153,6 +155,7 @@ class Assembly3DView(QWidget):
     part_double_clicked = Signal(str)  # … of the part that was double-clicked (the view zooms to it)
     focus_changed = Signal()  # a crowded step: another group is looked at / another line is picked (see step_callouts)
     animation_done = Signal()
+    part_played = Signal(str)  # the demonstration of one part (play_part) is through
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -185,6 +188,7 @@ class Assembly3DView(QWidget):
         self._hidden: dict = {}  # part id → it is behind another part (found when the picture stands still)
         self._details: dict[str, _Mesh] = {}  # the real shape of a part drawn as a box, made when it is first shown
         self.detailed: set[str] = set()  # the parts the last picture drew with that shape
+        self.way = None  # (part id, where it waits, its place, where it is) of the part played by itself, on the screen
         self._drawn: list[tuple] = []  # (corners of a face, or the triangles of a mesh as an array; part id)
         self._drag = None
         self._double = False
@@ -194,6 +198,13 @@ class Assembly3DView(QWidget):
         self._timer = QTimer(self)
         self._timer.setInterval(30)
         self._timer.timeout.connect(self._tick)
+        # one part played by itself (play_part): it travels from where it waits to its place, with its way drawn
+        self._solo = ""
+        self._solo_anim = 0.0  # 1 → 0 while it travels
+        self._solo_hold = 0  # frames its place stays marked after it has arrived
+        self._solo_timer = QTimer(self)
+        self._solo_timer.setInterval(30)
+        self._solo_timer.timeout.connect(self._solo_tick)
 
     # ---- model ------------------------------------------------------------
     def set_model(self, model: AssemblyModel | None, keep_view: bool = False) -> None:
@@ -201,6 +212,7 @@ class Assembly3DView(QWidget):
         self._meshes = {p.id: _Mesh(p) for p in model.parts} if model else {}
         self._details = {}
         self.focus, self.picked_line, self._kept, self._sig, self._hidden = set(), 0, {}, None, {}
+        self.stop_part()
         self.selected = ""
         if not keep_view:
             self.fit()
@@ -276,9 +288,78 @@ class Assembly3DView(QWidget):
         if tell:
             self.focus_changed.emit()
 
+    # ---- one part by itself -------------------------------------------------
+    def travel_of(self, part: Part3D) -> np.ndarray:
+        """From its place to where the part waits before it is fitted. A part without such a place (an imported
+        model that was never given one) waits 350 mm out from the middle of the model."""
+        v = np.array(part.explode, dtype=float)
+        if float(np.abs(v).max(initial=0.0)) > 1e-6:
+            return v
+        real = [m for pid, m in self._meshes.items() if self.model.part(pid) is not None and self.model.part(pid).step > 0]
+        mid = (np.min([m.lo for m in real], axis=0) + np.max([m.hi for m in real], axis=0)) / 2 if real else np.zeros(3)
+        out = self._meshes[part.id].centre - mid
+        n = float(np.linalg.norm(out))
+        return out / n * 350.0 if n > 1.0 else np.array([0.0, 0.0, 350.0])
+
+    @staticmethod
+    def way_in(travel: np.ndarray) -> str:
+        """In words, the side a part comes from (X towards the rear, +Y the right, Z up)."""
+        i = int(np.argmax(np.abs(travel)))
+        return (("เข้าจากหน้ารถ", "เข้าจากท้ายรถ"), ("เข้าจากด้านซ้าย", "เข้าจากด้านขวา"),
+                ("ยกขึ้นจากด้านล่าง", "วางลงจากด้านบน"))[i][int(travel[i] > 0)]
+
+    def play_part(self, part_id: str) -> bool:
+        """Show how one part is fitted: it travels from where it waits to its place; its way (the direction) and
+        its place are drawn, and stay for a moment when it has arrived. Again: from the start."""
+        part = self.model.part(part_id) if self.model else None
+        if part is None or part.step == 0 or part_id not in self._meshes:
+            return False
+        self._timer.stop()  # a step that is still flying in comes to rest: only this part moves
+        self._anim = 0.0
+        self._solo, self._solo_anim, self._solo_hold = part_id, 1.0, SOLO_HOLD
+        self.selected = part_id
+        # both ends of its way must be in the picture
+        mesh, travel = self._meshes[part_id], self.travel_of(part)
+        r, u, _d = self._basis()
+        ends = [mesh.centre - self.target, mesh.centre + travel - self.target]
+        w, h = max(self.width(), 200), max(self.height(), 150)
+        seen = all(30 <= float(c @ r) * self.zoom + w / 2 <= w - 30 and 30 <= h / 2 - float(c @ u) * self.zoom <= h - 30
+                   for c in ends)
+        if not seen:
+            lo, hi = np.minimum(mesh.lo, mesh.lo + travel), np.maximum(mesh.hi, mesh.hi + travel)
+            corners = np.array([[x, y, z] for x in (lo[0], hi[0]) for y in (lo[1], hi[1]) for z in (lo[2], hi[2])])
+            sx, sy = corners @ r, corners @ u
+            fitted = 0.45 * min(w / max(sx.max() - sx.min(), 1.0), h / max(sy.max() - sy.min(), 1.0))
+            self.zoom = min(max(fitted, self.zoom * 0.25), self.zoom * 4)  # near enough to see it, not a jump into a bolt
+            self.target = (lo + hi) / 2
+        self._solo_timer.start()
+        self.update()
+        return True
+
+    def stop_part(self) -> None:
+        self._solo_timer.stop()
+        self._solo, self._solo_anim, self._solo_hold = "", 0.0, 0
+        self.update()
+
+    def _solo_tick(self) -> None:
+        if not self._solo:  # a tick that was already on its way when the play ended
+            self._solo_timer.stop()
+            return
+        if self._solo_anim > 0:
+            self._solo_anim = max(0.0, self._solo_anim - SOLO_STEP)
+        else:
+            self._solo_hold -= 1
+            if self._solo_hold <= 0:
+                done = self._solo
+                self.stop_part()
+                self.part_played.emit(done)
+                return
+        self.update()
+
     def set_step(self, step: int | None, animate: bool = True) -> None:
         if step != self.step:
             self.focus, self.picked_line, self._kept, self._sig = set(), 0, {}, None
+        self.stop_part()
         self.step = step
         self._anim = 1.0 if (animate and step) else 0.0
         if self._anim:
@@ -305,6 +386,8 @@ class Assembly3DView(QWidget):
 
     def _state(self, p: Part3D) -> str:
         """'' hidden · ref · done · current · ghost · normal"""
+        if p.id == self._solo:
+            return "solo"  # played by itself: shown whatever the step and the filters say
         if p.group in self.hidden_groups or p.id in self.hidden_parts:
             return ""
         if p.step == 0:
@@ -323,6 +406,9 @@ class Assembly3DView(QWidget):
     def _offset(self, p: Part3D, state: str) -> np.ndarray:
         if state == "ref":
             return np.zeros(3)
+        if state == "solo":
+            t = self._solo_anim
+            return self.travel_of(p) * max(self.explode, t * t * (3 - 2 * t))
         f = self.explode
         if state == "current":
             t = self._anim
@@ -390,6 +476,8 @@ class Assembly3DView(QWidget):
             base = QColor(CURRENT) if state == "current" else QColor(p.color)
             if plan is not None and state == "current":
                 base = step_callouts.part_colour(self, p, plan)
+            if state == "solo":
+                base = QColor(SELECTED)  # the part that is played stands out from all the others
             if (p.id == self.selected or p.id in self.marked) and mesh.pieces[0].tri is not None:  # a mesh has no outline to make thicker
                 base = QColor((base.red() + 2 * SELECTED.red()) // 3, (base.green() + 2 * SELECTED.green()) // 3,
                               (base.blue() + 2 * SELECTED.blue()) // 3)
@@ -449,7 +537,9 @@ class Assembly3DView(QWidget):
                             painter.drawLine(QPointF(*corners[j]), QPointF(*corners[(j + 1) % n]))
                 self._drawn.append((corners, part_id))
         painter.setRenderHint(QPainter.Antialiasing, True)
-        if plan is not None:
+        if self._solo:  # one part is played: only its way and its place are marked, no numbers over them
+            self._paint_way(painter, r, u, cx, cy, zoom, w)
+        elif plan is not None:
             step_callouts.paint(self, painter, plan, marks, w, h)
         else:
             self._paint_labels(painter, labels, r, u, cx, cy, zoom)
@@ -534,6 +624,72 @@ class Assembly3DView(QWidget):
             painter.setBrush(QColor(255, 255, 255, 235) if part.id != self.selected else QColor("#FFE7C7"))
             painter.drawRoundedRect(box, 11 * k, 11 * k)
             painter.drawText(box, Qt.AlignCenter, text)
+
+    def _paint_way(self, painter: QPainter, r, u, cx: float, cy: float, zoom: float, w: int) -> None:
+        """The part that is played by itself: its way as a dashed line with an arrow towards its place (the
+        direction), its place as a ring with a cross (the position), and in words where it comes from."""
+        part = self.model.part(self._solo) if self.model else None
+        if part is None or self._solo not in self._meshes:
+            return
+        k = self._text_scale
+        mesh, travel = self._meshes[self._solo], self.travel_of(part)
+        home = mesh.centre - self.target
+        t = self._solo_anim
+        now = home + travel * max(self.explode, t * t * (3 - 2 * t))
+        start = home + travel
+
+        def at(c) -> QPointF:
+            return QPointF(float(c @ r) * zoom + cx, cy - float(c @ u) * zoom)
+
+        a, b, m = at(start), at(home), at(now)
+        orange = QColor(SELECTED)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        painter.setBrush(Qt.NoBrush)
+        painter.setPen(QPen(QColor(255, 255, 255, 220), 4.2 * k, Qt.SolidLine, Qt.RoundCap))  # reads on any colour
+        painter.drawLine(a, b)
+        painter.setPen(QPen(orange, 2.0 * k, Qt.DashLine, Qt.RoundCap))
+        painter.drawLine(a, b)
+        length = math.hypot(b.x() - a.x(), b.y() - a.y())
+        if length > 18 * k:  # arrow heads along the way, pointing at the place
+            ux, uy = (b.x() - a.x()) / length, (b.y() - a.y()) / length
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(orange)
+            for f in ((0.5,) if length < 120 * k else (0.3, 0.62)):
+                px, py = a.x() + ux * length * f, a.y() + uy * length * f
+                s = 7.5 * k
+                painter.drawPolygon(QPolygonF([QPointF(px + ux * s, py + uy * s),
+                                               QPointF(px - ux * s * 0.7 - uy * s * 0.75, py - uy * s * 0.7 + ux * s * 0.75),
+                                               QPointF(px - ux * s * 0.7 + uy * s * 0.75, py - uy * s * 0.7 - ux * s * 0.75)]))
+        painter.setBrush(Qt.NoBrush)  # where it waits
+        painter.setPen(QPen(orange, 1.4 * k, Qt.DotLine))
+        painter.drawEllipse(a, 6 * k, 6 * k)
+        ring = (11 + (4 * (self._solo_hold % 12) / 12 if t <= 0 else 0)) * k  # its place: beats once it has arrived
+        painter.setPen(QPen(QColor(255, 255, 255, 230), 5.0 * k))
+        painter.drawEllipse(b, ring, ring)
+        painter.setPen(QPen(orange, 2.4 * k))
+        painter.drawEllipse(b, ring, ring)
+        painter.drawLine(QPointF(b.x() - 5 * k, b.y()), QPointF(b.x() + 5 * k, b.y()))
+        painter.drawLine(QPointF(b.x(), b.y() - 5 * k), QPointF(b.x(), b.y() + 5 * k))
+        font = QFont(theme.app_font())
+        font.setPointSizeF(9.0 * k)
+        font.setBold(True)
+        painter.setFont(font)
+        fm = painter.fontMetrics()
+
+        def pill(point: QPointF, text: str, below: bool) -> None:
+            width = fm.horizontalAdvance(text) + 14 * k
+            x = min(max(point.x() - width / 2, 4), max(4.0, w - width - 4))
+            box = QRectF(x, point.y() + (16 * k if below else -38 * k), width, 22 * k)
+            painter.setPen(QPen(orange.darker(115), 1.3 * k))
+            painter.setBrush(QColor(255, 247, 235, 245))
+            painter.drawRoundedRect(box, 11 * k, 11 * k)
+            painter.setPen(QColor("#1E2A3A"))
+            painter.drawText(box, Qt.AlignCenter, text)
+
+        lower = b.y() >= a.y()  # the label of the lower end under it, of the upper end above it
+        pill(b, "ตำแหน่งติดตั้ง", below=lower)
+        pill(a, f"{self.way_in(travel)} · {float(np.linalg.norm(travel)):,.0f} มม.", below=not lower)
+        self.way = (self._solo, a, b, m)  # for tests: where the way was drawn
 
     def _paint_triad(self, painter: QPainter, r, u, h: int) -> None:
         k = self._text_scale

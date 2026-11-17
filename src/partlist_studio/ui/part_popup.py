@@ -259,7 +259,7 @@ class PartPopup(QFrame):
         self.step_btn.setText(f"ไปขั้นที่ {self._step}" if self._step else "ไปขั้นประกอบ")
         self.step_btn.setEnabled(bool(self._step))
 
-        alone = replace(part, explode=[0.0, 0.0, 0.0], step=0)
+        alone = replace(part.detailed(), explode=[0.0, 0.0, 0.0], step=0)  # its real shape, not the box that saves faces
         self.mini.set_model(a3.AssemblyModel(part.name, [alone], source="file"))
         self.mini.set_step(None, animate=False)
         pixmap = decode_photo(info["photo"])

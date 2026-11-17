@@ -16,7 +16,7 @@ import json
 import math
 import re
 import struct
-from dataclasses import asdict, dataclass, field, fields
+from dataclasses import asdict, dataclass, field, fields, replace
 from pathlib import Path
 
 Vec = tuple[float, float, float]
@@ -84,9 +84,17 @@ class Part3D:
     note: str = ""
     mesh: list = field(default_factory=list)  # shape 'mesh': [[(x, y, z), …], …] faces
     cull: bool = False  # shape 'mesh': a closed skin whose faces all wind outwards – the view hides its back faces
+    detail: list = field(default_factory=list)  # a small part drawn as a box to save faces: its real shape (a mesh),
+    #                                             shown when the part is looked at by itself or is the selected one
     level: str = ""  # the designer's level, taken from another file of the same assembly (adopt_groups)
     file_group: str = ""  # the group before the 13 steps gave the part the group the technician reads …
     auto_group: str = ""  # … and that group: while `group` still is this one, sorting again starts from file_group
+
+    def detailed(self) -> Part3D:
+        """The part with its real shape where it has one besides the box it is drawn as; else the part itself."""
+        if not self.detail or self.shape == "mesh":
+            return self
+        return replace(self, shape="mesh", mesh=self.detail, detail=[], pos=[0.0, 0.0, 0.0], cull=False)
 
     def chunks(self) -> list[list[Face]]:
         """The faces in convex pieces (a box: one; a channel: three; an imported mesh: one, of any form)."""

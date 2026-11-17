@@ -1368,7 +1368,9 @@ class _Import:
                 lo, hi = np.round(pts.min(axis=0), 2), np.round(pts.max(axis=0), 2)
                 part.shape, part.pos = "box", [float(v) for v in lo]
                 part.dims = [max(float(v), 0.01) for v in hi - lo]
-                part.note = part.note or "ชิ้นเล็ก – แสดงเป็นกล่องเพื่อให้อยู่ในงบจำนวนหน้า"
+                if not failed:  # its real shape goes along: not drawn with the whole model, shown for the part alone
+                    part.detail = np.round(tris, 2).tolist()
+                part.note = part.note or "ชิ้นเล็ก – ในภาพรวมแสดงเป็นกล่องเพื่อให้อยู่ในงบจำนวนหน้า · แตะชิ้นเพื่อดูรูปทรงจริง"
             else:
                 tris = np.round(tris, 2)
                 a, b, c = tris[:, 0], tris[:, 1], tris[:, 2]

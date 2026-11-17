@@ -170,6 +170,7 @@ class Assembly3DView(QWidget):
         self.marked: set[str] = set()  # more parts chosen in the table: tinted like the selected one
         self._anim = 0.0  # 1 → 0 while the parts of the step fly in
         self._meshes: dict[str, _Mesh] = {}
+        self._details: dict[str, _Mesh] = {}  # the real shape of a part drawn as a box, made when it is first selected
         self._drawn: list[tuple] = []  # (corners of a face, or the triangles of a mesh as an array; part id)
         self._drag = None
         self._double = False
@@ -184,6 +185,7 @@ class Assembly3DView(QWidget):
     def set_model(self, model: AssemblyModel | None, keep_view: bool = False) -> None:
         self.model = model
         self._meshes = {p.id: _Mesh(p) for p in model.parts} if model else {}
+        self._details = {}
         self.selected = ""
         if not keep_view:
             self.fit()
@@ -191,6 +193,7 @@ class Assembly3DView(QWidget):
 
     def refresh_part(self, part: Part3D) -> None:
         self._meshes[part.id] = _Mesh(part)
+        self._details.pop(part.id, None)
         self.update()
 
     def face_total(self) -> int:
@@ -339,6 +342,8 @@ class Assembly3DView(QWidget):
             if not state:
                 continue
             mesh = self._meshes[p.id]
+            if p.detail and p.id == self.selected:  # a small part drawn as a box shows its real shape when it is picked
+                mesh = self._details.get(p.id) or self._details.setdefault(p.id, _Mesh(p.detailed()))
             off = self._offset(p, state)
             base = QColor(CURRENT) if state == "current" else QColor(p.color)
             if (p.id == self.selected or p.id in self.marked) and mesh.pieces[0].tri is not None:  # a mesh has no outline to make thicker

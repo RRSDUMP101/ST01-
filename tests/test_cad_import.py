@@ -742,6 +742,12 @@ def test_a_tight_budget_takes_the_patterns_first_then_boxes_small_parts_never_bi
     assert {p.name: p.shape for p in model.parts} == {"BASE": "mesh", "LOCK": "box", "SHIM": "mesh"}
     lock = next(p for p in model.parts if p.name == "LOCK")
     assert report.boxed == 1 and "แสดงชิ้นเล็ก 1 ชิ้น" in model.note and "กล่อง" in lock.note
+    # the box only saves faces in the picture of the whole model: the real shape of the part goes along with it
+    real = lock.detailed()
+    assert lock.shape == "box" and len(lock.detail) > 12 and real.shape == "mesh" and real.detail == []
+    assert all(abs(x - y) < 0.02 for a, b in zip(real.bounds(), lock.bounds()) for x, y in zip(a, b))
+    assert a3.face_count(model) == sum(len(p.mesh) for p in model.parts if p.shape == "mesh")  # … not counted with the model
+    assert a3.AssemblyModel.from_dict(model.to_dict()).part(lock.id).detail == lock.detail
     assert lock.dims == [40.0, 40.0, 10.0] and lock.size == "40×40×10"
 
 

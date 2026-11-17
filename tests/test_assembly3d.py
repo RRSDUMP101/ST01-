@@ -847,3 +847,33 @@ def test_the_card_can_be_dragged_out_of_the_way(window):
     assert popup.isHidden()
     window.go("install")
     window.state.dirty = False
+
+
+def test_a_part_drawn_as_a_box_shows_its_real_shape_when_it_is_picked(window):
+    from PySide6.QtCore import QPointF
+
+    tab = window.pages["install"].assembly
+    window.resize(1500, 950)
+    window.show()
+    window.go("install")
+    window.pages["install"].tabs.setCurrentWidget(tab)
+    wedge = [[[0, 0, 0], [30, 0, 0], [0, 20, 0]], [[0, 0, 0], [0, 20, 0], [0, 0, 25]], [[0, 0, 0], [0, 0, 25], [30, 0, 0]],
+             [[30, 0, 0], [0, 0, 25], [0, 20, 0]]]
+    lock = a3.Part3D("k1", "กลอน", "ฝาข้าง", "box", dims=[30, 20, 25], pos=[0, 0, 0], step=1, detail=wedge)
+    plain = a3.Part3D("k2", "แผ่น", "ฝาข้าง", "box", dims=[300, 200, 5], pos=[100, 0, 0], step=1)
+    assert plain.detailed() is plain and lock.detailed().shape == "mesh" and lock.detailed().mesh == wedge
+    tab.set_model(a3.AssemblyModel("m", [lock, plain], [a3.Step("ติด")], source="file"))
+    view = tab.view
+    view.render_image(400, 300)
+    assert view._details == {}  # nothing picked: the box, as cheap as before
+    view.last_click = QPointF(60, 80)
+    view.part_clicked.emit(lock.id)
+    view.selected = lock.id
+    view.render_image(400, 300)
+    assert view._details[lock.id].faces == 4  # the picked part is drawn with its real shape
+    alone = tab.popup.mini.model.parts[0]
+    assert alone.shape == "mesh" and alone.mesh == wedge  # … and so is the part in its card
+    tab.set_model(a3.AssemblyModel("m", [plain], [a3.Step("ติด")], source="file"))
+    assert view._details == {}
+    tab.rebuild(force=True)
+    window.state.dirty = False

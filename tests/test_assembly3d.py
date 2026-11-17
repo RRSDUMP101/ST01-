@@ -890,3 +890,179 @@ def test_a_part_drawn_as_a_box_shows_its_real_shape_when_it_is_picked(window):
     assert view._details == {}
     tab.rebuild(force=True)
     window.state.dirty = False
+
+
+def _crowded_model() -> a3.AssemblyModel:
+    """Step 1: a floor and three beams (a step as most are). Step 2: 90 small parts in three groups (crowded)."""
+    parts = [a3.Part3D("f", "แผ่นพื้น", "พื้น", "box", dims=[2000, 1500, 5], pos=[0, 0, 100], step=1)]
+    parts += [a3.Part3D(f"b{i}", "คาน", "โครง", "box", dims=[2000, 50, 100], pos=[0, 100 + 600 * i, 0], step=1) for i in range(3)]
+    n = 0
+    for group, names, count in (("บานพับ", ("บานพับ ซ้าย", "บานพับ ขวา", "บานพับ กลาง"), 30), ("ตะขอผ้าใบ", ("ตะขอ",), 40),
+                                ("ขาป้าย", ("ขา 01", "ขา 02"), 20)):
+        for i in range(count):
+            n += 1
+            parts.append(a3.Part3D(f"s{n}", names[i % len(names)], group, "box", dims=[40, 30, 20],
+                                   pos=[20 + 215 * (n % 9), 20 + 145 * (n // 9), 105], step=2))
+    # a part of another group with a name of the first: in a crowded step it is a line of its own
+    parts.append(a3.Part3D("x", "ตะขอ", "ขาป้าย", "box", dims=[40, 30, 20], pos=[1900, 1450, 105], step=2))
+    return a3.AssemblyModel("m", parts, [a3.Step("พื้น"), a3.Step("ชิ้นเชื่อมย่อย")], source="file")
+
+
+def test_a_crowded_step_is_listed_and_printed_by_group():
+    model = _crowded_model()
+    assert a3.CROWDED_PARTS == 80 and not model.crowded(1) and model.crowded(2) and not model.crowded(0) and not model.crowded(None)
+    assert a3.step_plan(model, 1) is None  # a step as most are: nothing changes
+    assert [(b.no, b.name, b.qty) for b in model.bom(1)] == [(1, "แผ่นพื้น", 1), (2, "คาน", 3)]
+    plan = a3.step_plan(model, 2)
+    assert plan.groups == ["บานพับ", "ตะขอผ้าใบ", "ขาป้าย"] and plan.pieces == {"บานพับ": 30, "ตะขอผ้าใบ": 40, "ขาป้าย": 21}
+    # the lines of a group follow one another and are one run of numbers; a line never holds parts of two groups
+    assert [(b.no, b.group, b.name, b.qty) for b in plan.lines] == [
+        (1, "บานพับ", "บานพับ ซ้าย", 10), (2, "บานพับ", "บานพับ ขวา", 10), (3, "บานพับ", "บานพับ กลาง", 10),
+        (4, "ตะขอผ้าใบ", "ตะขอ", 40), (5, "ขาป้าย", "ขา 01", 10), (6, "ขาป้าย", "ขา 02", 10), (7, "ขาป้าย", "ตะขอ", 1)]
+    assert [plan.span(g) for g in plan.groups] == ["№ 1–3", "№ 4", "№ 5–7"]
+    assert model.bom(2) == plan.lines and [b.no for b in model.bom(2, "ขาป้าย")] == [5, 6, 7]
+    assert model.bom_no(model.part("x")) == 7 and model.bom_no(model.part("s31")) == 4 and model.bom_no(model.part("f")) == 1
+    assert plan.no_of["x"] == 7 and plan.no_of["s2"] == 2 and len(plan.no_of) == 91
+    assert plan.colour["บานพับ"] == a3.GROUP_COLOURS[0] and len(set(plan.colour.values())) == 3
+    assert sum(b.qty for b in model.bom()) == 95  # the list of the whole assembly is as it was
+    fewer = a3.AssemblyModel("m", [p for p in model.parts if p.group != "ตะขอผ้าใบ"], model.steps)
+    assert not fewer.crowded(2) and len(fewer.bom(2)) == 6  # 51 parts: listed as always
+    one_group = a3.AssemblyModel("m", [a3.Part3D(f"p{i}", "ตะขอ", "ตะขอผ้าใบ", step=1) for i in range(200)], [a3.Step("x")])
+    assert not one_group.crowded(1)  # nothing to show group by group
+    # the printed manual: groups packed into detail pictures of at most 14 lines
+    assert a3.pdf_pictures(plan) == [["บานพับ", "ตะขอผ้าใบ", "ขาป้าย"]]
+    big = a3.StepPlan(2, groups=["ก", "ข", "ค", "ง"], of_group={"ก": [0] * 6, "ข": [0] * 9, "ค": [0] * 20, "ง": [0] * 3})
+    assert a3.pdf_pictures(big) == [["ก"], ["ข"], ["ค"], ["ง"]] and a3.PDF_LINES == 14
+    doc = a3.render_steps_html(model, {1: "one.png", 2: [("all.png", []), ("detail.png", ["บานพับ", "ตะขอผ้าใบ", "ขาป้าย"])]})
+    for word in ("src='one.png'", "src='all.png'", "src='detail.png'", "ขั้นนี้มี 3 กลุ่ม · 7 รายการ · 91 ชิ้น", "ภาพย่อย 1 / 1",
+                 f"bgcolor='{a3.GROUP_COLOURS[1]}'", "<b>ตะขอผ้าใบ</b> – 1 รายการ · 40 ชิ้น", "<td align='center'>5–7</td>"):
+        assert word in doc, word
+    assert doc.count("<td>คาน</td>") == 1 and "ภาพย่อย" in a3.render_steps_html(model, {})  # without pictures: the lists
+
+
+def test_labels_of_a_crowded_step_do_not_overlap():
+    from PySide6.QtCore import QRectF
+
+    from partlist_studio.ui import step_callouts as sc
+
+    items = [(("l", n), [(200.0 + 3 * n, 200.0 + 2 * n, 0.0, False)], 40.0, 22.0) for n in range(25)]  # 25 parts in one spot
+    placed = sc.layout(items, 500, 400, 1.0, [QRectF(0, 322, 150, 78)], [(a[1][0][0], a[1][0][1]) for a in items])
+    rects = [r for r, _x, _y in placed.values()]
+    assert len(placed) >= 20 and all(not a.intersects(b) for i, a in enumerate(rects) for b in rects[i + 1:])
+    assert all(r.left() >= 4 and r.top() >= 4 and r.right() <= 496 and r.bottom() <= 396 for r in rects)
+    assert not any(r.intersects(QRectF(0, 322, 150, 78)) for r in rects)  # … nor the corner with the axes
+    assert sc.layout(items[:1], 30, 20, 1.0, [], []) == {}  # no room at all: left out, and the picture says so
+
+
+def test_view_shows_a_crowded_step_group_by_group(window, tmp_path):
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QColor
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QApplication
+
+    tab = window.pages["install"].assembly
+    window.resize(1500, 950)
+    window.show()
+    window.go("install")
+    window.pages["install"].tabs.setCurrentWidget(tab)
+    tab.set_model(_crowded_model())
+    tab.detail_on.setChecked(False)
+    view = tab.view
+
+    def kinds(kind):
+        return [h for h in view._hits if h[1] == kind]
+
+    # a step as most are: a number on every part, the list line by line - nothing of the new
+    tab.go(1, animate=False)
+    view.grab()
+    assert view.plan() is None and view._hits == [] and tab.bom.rowCount() == 2 and tab.bom.columnSpan(0, 0) == 1
+    assert tab.bom.item(1, 1).text() == "คาน"
+    # the crowded step: a callout per group, the parts in the colour of their group, the list a row per group
+    tab.go(2, animate=False)
+    view.finish_animation()
+    view.grab()
+    assert [h[2] for h in kinds("group")] and {h[2] for h in kinds("group")} == {"บานพับ", "ตะขอผ้าใบ", "ขาป้าย"}
+    assert kinds("line") == [] and view.focus == set()
+    rects = [h[0] for h in kinds("group")]
+    assert all(not a.intersects(b) for i, a in enumerate(rects) for b in rects[i + 1:])
+    assert tab.bom.rowCount() == 3 and tab.bom.columnSpan(0, 0) == tab.bom.columnCount()
+    assert tab.bom.item(0, 0).text() == "▸  บานพับ  ×30   ·   3 รายการ  № 1–3"
+    assert tab.bom.item(0, 0).background().color().rgb() == QColor(a3.GROUP_COLOURS[0]).rgb()
+    # a tap on a callout: that group's numbers, one per list line with how many pieces; the list opens the group
+    hinge = next(h for h in kinds("group") if h[2] == "บานพับ")
+    QTest.mouseClick(view, Qt.LeftButton, Qt.NoModifier, hinge[0].center().toPoint())
+    view.grab()
+    assert view.focus == {"บานพับ"} and sorted(h[2] for h in kinds("line")) == [1, 2, 3] and kinds("group") == []
+    assert {h[1] for h in view._hits} == {"all", "step", "line"} and view.selected == ""  # the tap did not pick the part under it
+    assert tab.bom.rowCount() == 6 and tab.bom.item(0, 0).text().startswith("▾  บานพับ") and tab.bom.item(2, 1).text() == "บานพับ ขวา"
+    # › the next group, ‹ back, round and round
+    QTest.mouseClick(view, Qt.LeftButton, Qt.NoModifier, next(h for h in kinds("step") if h[2] == 1)[0].center().toPoint())
+    assert view.focus == {"ตะขอผ้าใบ"}
+    view.grab()
+    QTest.mouseClick(view, Qt.LeftButton, Qt.NoModifier, next(h for h in kinds("step") if h[2] == -1)[0].center().toPoint())
+    view.grab()
+    QTest.mouseClick(view, Qt.LeftButton, Qt.NoModifier, next(h for h in kinds("step") if h[2] == -1)[0].center().toPoint())
+    assert view.focus == {"ขาป้าย"}
+    # a tap on a number picks that line (orange, a ring round each of its parts), the row in the list too; again: unpicks
+    view.grab()
+    number = next(h for h in kinds("line") if h[2] == 6)
+    QTest.mouseClick(view, Qt.LeftButton, Qt.NoModifier, number[0].center().toPoint())
+    assert view.picked_line == 6 and tab.bom.item(tab.bom.currentRow() if tab.bom.selectedItems() else 0, 0) is not None
+    assert [tab.bom.item(i.row(), 0).text() for i in tab.bom.selectedIndexes()][:1] == ["6"]
+    view.grab()
+    QTest.mouseClick(view, Qt.LeftButton, Qt.NoModifier, next(h for h in kinds("line") if h[2] == 6)[0].center().toPoint())
+    assert view.picked_line == 0
+    # ◂ all groups
+    view.grab()
+    QTest.mouseClick(view, Qt.LeftButton, Qt.NoModifier, kinds("all")[0][0].center().toPoint())
+    assert view.focus == set()
+    # the list drives the picture too: a group row opens / closes it, a line row picks the line
+    tab._step_list_clicked(1)
+    assert view.focus == {"ตะขอผ้าใบ"} and tab.bom.rowCount() == 4
+    tab._step_list_clicked(2)
+    assert view.picked_line == 4
+    tab._step_list_clicked(1)
+    assert view.focus == set() and tab.bom.rowCount() == 3
+    # a tap on a part of the step: its group and its line
+    view.grab()
+    spot = next((QPoint_ for QPoint_ in _points(view) if (pid := view.pick(QPoint_.x(), QPoint_.y())) and view.model.part(pid).step == 2
+                 and not any(h[0].adjusted(-8, -8, 8, 8).contains(QPoint_) for h in view._hits)), None)
+    assert spot is not None
+    QTest.mouseClick(view, Qt.LeftButton, Qt.NoModifier, spot)
+    part = view.model.part(view.selected)
+    assert view.focus == {part.group} and view.picked_line == a3.step_plan(view.model, 2).no_of[part.id]
+    # while the model is turned the labels ride with their parts: no new layout
+    view.grab()
+    kept = dict(view._kept)
+    view._moving = True
+    view.yaw += 5
+    view.grab()
+    assert view._kept == kept and len(kinds("line")) == len(kept)
+    view._moving = False
+    # the labels off: none; a picture for the manual: nothing in it can be tapped afterwards; another step: all groups again
+    tab.labels.setChecked(False)
+    view.grab()
+    assert view._hits == []
+    tab.labels.setChecked(True)
+    view.render_image(640, 400, fit=True)
+    assert view._hits == [] and not view._static
+    tab.go(1, animate=False)
+    tab.go(2, animate=False)
+    assert view.focus == set() and view.picked_line == 0
+    # the printed manual: the picture of all groups and a detail picture, each part in its place
+    view.set_focus({"บานพับ"}, 2)
+    out = tab.export_pdf(str(tmp_path / "manual.html"))
+    doc = (tmp_path / "manual.html").read_text(encoding="utf-8")
+    assert out and sorted(f.name for f in (tmp_path / "manual").iterdir()) == ["step_01.png", "step_02.png", "step_02_1.png"]
+    assert "manual/step_02_1.png" in doc and "ภาพย่อย 1 / 1 – บานพับ · ตะขอผ้าใบ · ขาป้าย" in doc
+    assert view.focus == {"บานพับ"} and view.picked_line == 2 and tab.step == 2  # what was looked at is back
+    tab.detail_on.setChecked(True)
+    tab.rebuild(force=True)
+    QApplication.processEvents()
+    window.state.dirty = False
+
+
+def _points(view):
+    from PySide6.QtCore import QPoint
+
+    return (QPoint(x, y) for y in range(30, view.height() - 30, 5) for x in range(30, view.width() - 30, 5))

@@ -13,8 +13,8 @@ from PySide6.QtCore import QByteArray, QDataStream, QIODevice, QPointF, QRectF, 
 from PySide6.QtGui import QColor, QFont, QImage, QLinearGradient, QPainter, QPainterPath, QPen, QPolygonF
 from PySide6.QtWidgets import QWidget
 
-from ..core.assembly3d import AssemblyModel, Part3D
-from . import theme
+from ..core.assembly3d import AssemblyModel, Part3D, StepPlan, step_plan
+from . import step_callouts, theme
 
 VIEWS = {"iso": (38.0, 26.0), "iso2": (142.0, 26.0), "top": (90.0, 89.9), "front": (180.0, 0.0), "rear": (0.0, 0.0),
          "side": (90.0, 0.0)}
@@ -151,6 +151,7 @@ def draw_order(lo: np.ndarray, hi: np.ndarray, d: np.ndarray, r: np.ndarray | No
 class Assembly3DView(QWidget):
     part_clicked = Signal(str)  # id of the part under the mouse ('' = none)
     part_double_clicked = Signal(str)  # … of the part that was double-clicked (the view zooms to it)
+    focus_changed = Signal()  # a crowded step: another group is looked at / another line is picked (see step_callouts)
     animation_done = Signal()
 
     def __init__(self, parent=None):
@@ -172,6 +173,16 @@ class Assembly3DView(QWidget):
         self.marked: set[str] = set()  # more parts chosen in the table: tinted like the selected one
         self._anim = 0.0  # 1 → 0 while the parts of the step fly in
         self._meshes: dict[str, _Mesh] = {}
+        # a crowded step is shown group by group (step_callouts): the groups whose numbers are shown (none: the
+        # callouts of all groups) and the list line that is picked (orange, a ring round each of its parts)
+        self.focus: set[str] = set()
+        self.picked_line = 0
+        self.callout_notes: list[str] = []  # what the last picture said under its labels (parts hidden, no room)
+        self._static = False  # a picture for the printed manual: nothing in it can be tapped
+        self._hits: list[tuple] = []  # (rect, kind, value): what a tap on a label does
+        self._kept: dict = {}  # label → (the part it points at, where it stands from it): kept while the model is turned
+        self._sig = None  # what the labels were last laid out for (camera, size, step, focus …)
+        self._hidden: dict = {}  # part id → it is behind another part (found when the picture stands still)
         self._details: dict[str, _Mesh] = {}  # the real shape of a part drawn as a box, made when it is first shown
         self.detailed: set[str] = set()  # the parts the last picture drew with that shape
         self._drawn: list[tuple] = []  # (corners of a face, or the triangles of a mesh as an array; part id)
@@ -189,6 +200,7 @@ class Assembly3DView(QWidget):
         self.model = model
         self._meshes = {p.id: _Mesh(p) for p in model.parts} if model else {}
         self._details = {}
+        self.focus, self.picked_line, self._kept, self._sig, self._hidden = set(), 0, {}, None, {}
         self.selected = ""
         if not keep_view:
             self.fit()
@@ -248,7 +260,25 @@ class Assembly3DView(QWidget):
         self.update()
 
     # ---- steps ------------------------------------------------------------
+    def plan(self) -> StepPlan | None:
+        """The groups of the step that is shown, when it is a crowded one (else None: numbers as always)."""
+        return step_plan(self.model, self.step)
+
+    def set_focus(self, groups, line: int = 0, tell: bool = True) -> None:
+        """A crowded step: the groups whose numbers are shown (empty: all groups, a callout each) and the list line
+        that is picked."""
+        groups = set(groups)
+        if (groups, line) == (self.focus, self.picked_line):
+            return
+        self.focus, self.picked_line = groups, line
+        self._kept, self._sig = {}, None
+        self.update()
+        if tell:
+            self.focus_changed.emit()
+
     def set_step(self, step: int | None, animate: bool = True) -> None:
+        if step != self.step:
+            self.focus, self.picked_line, self._kept, self._sig = set(), 0, {}, None
         self.step = step
         self._anim = 1.0 if (animate and step) else 0.0
         if self._anim:
@@ -309,6 +339,7 @@ class Assembly3DView(QWidget):
         """The picture as it is now at a given size (for the printed manual); `fit`: what is shown fills it."""
         image = QImage(width, height, QImage.Format_ARGB32)
         zoom, target = self.zoom, self.target
+        self._static, kept, sig = True, self._kept, self._sig  # nothing to tap in it; the labels on the screen stay
         if fit:
             self.fit(margin=margin, size=(width, height))
         else:
@@ -319,6 +350,7 @@ class Assembly3DView(QWidget):
         painter.end()
         self._text_scale = 1.0
         self.zoom, self.target = zoom, target
+        self._static, self._kept, self._sig, self._hits = False, kept, sig, []
         return image
 
     def _paint(self, painter: QPainter, w: int, h: int) -> None:
@@ -327,6 +359,7 @@ class Assembly3DView(QWidget):
         grad.setColorAt(1, QColor("#C9D1DB"))
         painter.fillRect(QRectF(0, 0, w, h), grad)
         self._drawn = []
+        self._hits = []
         self.detailed = set()
         if not self.model or not self.model.parts:
             painter.setPen(QColor(theme.MUTED))
@@ -341,6 +374,8 @@ class Assembly3DView(QWidget):
         # ---- what to draw: (piece, offset, colour, alpha, part id, lines?)
         todo: list[tuple] = []
         labels: list[tuple[float, float, Part3D, np.ndarray, np.ndarray]] = []
+        plan = self.plan()  # a crowded step: its groups in colour and a callout each (step_callouts)
+        marks: list[dict] = []
         for p in self.model.parts:
             state = self._state(p)
             if not state:
@@ -353,13 +388,23 @@ class Assembly3DView(QWidget):
                 mesh = self._details.get(p.id) or self._details.setdefault(p.id, _Mesh(p.detailed()))
                 self.detailed.add(p.id)
             base = QColor(CURRENT) if state == "current" else QColor(p.color)
+            if plan is not None and state == "current":
+                base = step_callouts.part_colour(self, p, plan)
             if (p.id == self.selected or p.id in self.marked) and mesh.pieces[0].tri is not None:  # a mesh has no outline to make thicker
                 base = QColor((base.red() + 2 * SELECTED.red()) // 3, (base.green() + 2 * SELECTED.green()) // 3,
                               (base.blue() + 2 * SELECTED.blue()) // 3)
             alpha = 70 if state == "ghost" else 120 if state == "ref" else 255
             for piece in mesh.pieces:
                 todo.append((piece, off, base, alpha, p.id, state != "ghost", fast and mesh.faces > 400))
-            if state == "current" or p.id == self.selected:
+            if plan is not None:
+                if state == "current" or p.id == self.selected:
+                    c = step_callouts.surface_point(mesh) - self.target
+                    half = (mesh.hi - mesh.lo) / 2
+                    marks.append({"part": p, "x": float((c + off) @ r) * zoom + cx, "y": cy - float((c + off) @ u) * zoom,
+                                  "hx": float(c @ r) * zoom + cx, "hy": cy - float(c @ u) * zoom,
+                                  "depth": float((c + off) @ d), "current": state == "current",
+                                  "size": 2 * zoom * min(float(np.abs(r) @ half), float(np.abs(u) @ half))})
+            elif state == "current" or p.id == self.selected:
                 c = mesh.centre - self.target
                 labels.append((float((c + off) @ r) * zoom + cx, cy - float((c + off) @ u) * zoom, p, c, off))
         if todo:  # far to near, piece by piece
@@ -404,7 +449,10 @@ class Assembly3DView(QWidget):
                             painter.drawLine(QPointF(*corners[j]), QPointF(*corners[(j + 1) % n]))
                 self._drawn.append((corners, part_id))
         painter.setRenderHint(QPainter.Antialiasing, True)
-        self._paint_labels(painter, labels, r, u, cx, cy, zoom)
+        if plan is not None:
+            step_callouts.paint(self, painter, plan, marks, w, h)
+        else:
+            self._paint_labels(painter, labels, r, u, cx, cy, zoom)
         self._paint_triad(painter, r, u, h)
 
     def _close_up(self, mesh: _Mesh, off, r, u, cx: float, cy: float, zoom: float, w: int, h: int) -> bool:
@@ -561,8 +609,13 @@ class Assembly3DView(QWidget):
             self._moving = False
             self.update()
         if not moved and not second and event.button() == Qt.LeftButton:
+            if step_callouts.tapped(self, event.position().x(), event.position().y()):
+                return  # a label or a button of a crowded step: the group / the line, not the part under it
             self.last_click = event.position()
             self.selected = self.pick(event.position().x(), event.position().y())
+            plan, part = self.plan(), (self.model.part(self.selected) if self.model else None)
+            if plan is not None and part is not None and part.step == plan.step:  # … a part of it: its group, its line
+                self.set_focus({part.group}, plan.no_of.get(part.id, 0))
             self.part_clicked.emit(self.selected)
             self.update()
 

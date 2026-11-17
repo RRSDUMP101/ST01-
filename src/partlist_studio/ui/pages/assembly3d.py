@@ -8,6 +8,7 @@ from pathlib import Path
 from struct import error as struct_error
 
 from PySide6.QtCore import QObject, Qt, QTimer, QUrl, Signal
+from PySide6.QtGui import QBrush, QColor, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComboBox, QFileDialog, QFormLayout, QHBoxLayout,
                                QInputDialog, QLabel, QLineEdit, QMessageBox, QSpinBox,
                                QPlainTextEdit, QSlider, QSplitter, QTableWidgetItem, QVBoxLayout, QWidget)
@@ -250,6 +251,9 @@ class AssemblyTab(QWidget):
         self.editor.setVisible(False)
         lay.addWidget(self.editor)
         self.bom = table(BOM_HEADERS, [30, 150, 100, 70, 50])
+        self.bom.cellClicked.connect(self._step_list_clicked)
+        self.view.focus_changed.connect(self._fill_step_list)  # a crowded step: the list follows the picture
+        self._list_fill = 0
         lay.addWidget(self.bom, 1)
         self.done = QCheckBox("ประกอบขั้นนี้เสร็จ และตรวจแล้ว")
         self.done.toggled.connect(self._done_toggled)
@@ -605,13 +609,104 @@ class AssemblyTab(QWidget):
         self.editor.setEnabled(step is not None)
         for key, edit in self.step_fields.items():
             edit.setText(getattr(step, key) if step else "")
-        lines = model.bom(n if step else None) if model else []
-        fill(self.bom, [[b.no, b.name, b.size, b.part_no, b.qty] for b in lines])
+        self._fill_step_list()
         done = self.done_steps()
         self.done.setEnabled(step is not None)
         self.done.setChecked(n in done)
         self.progress.setText(f"ประกอบแล้ว {len(done)} / {total} ขั้น" if model else "")
         self._loading = False
+
+    # ---- the parts of the step ---------------------------------------------
+    def _fill_step_list(self) -> None:
+        """The list of the step. A crowded step: one row per group with the colour and the words of its callout in
+        the picture; the group that is looked at is open and shows its lines. Any other step: its lines, as always."""
+        t, view, model = self.bom, self.view, self.model
+        plan = view.plan() if (model and self.step) else None
+        t.blockSignals(True)
+        t.clearSpans()
+        t.clearSelection()
+        if plan is None:
+            lines = model.bom(self.step or None) if model else []
+            fill(t, [[b.no, b.name, b.size, b.part_no, b.qty] for b in lines])
+            for r in range(t.rowCount()):
+                t.setRowHeight(r, t.verticalHeader().defaultSectionSize())
+            t.blockSignals(False)
+            return
+        rows = []
+        for g in plan.groups:
+            rows.append(("g", g))
+            if g in view.focus:
+                rows += [("l", b) for b in plan.of_group[g]]
+        t.setRowCount(len(rows))
+        top = picked = None
+        for r, (kind, value) in enumerate(rows):
+            if kind == "g":
+                is_open = value in view.focus
+                head = QTableWidgetItem(f"{'▾' if is_open else '▸'}  {value}  ×{plan.pieces[value]}   ·   "
+                                        f"{len(plan.of_group[value])} รายการ  {plan.span(value)}")
+                colour = QColor(plan.colour[value])
+                head.setIcon(self._swatch(colour))
+                head.setData(Qt.UserRole, ("g", value))
+                colour.setAlpha(60 if is_open else 26)
+                head.setBackground(QBrush(colour))
+                font = head.font()
+                font.setBold(True)
+                head.setFont(font)
+                head.setFlags(head.flags() & ~Qt.ItemIsEditable)
+                t.setItem(r, 0, head)
+                t.setSpan(r, 0, 1, t.columnCount())
+                t.setRowHeight(r, 36)  # for a finger
+                if is_open and top is None:
+                    top = r
+            else:
+                for c, v in enumerate([value.no, value.name, value.size, value.part_no, value.qty]):
+                    item = QTableWidgetItem(str(v))
+                    if isinstance(v, int):
+                        item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                    if c == 0:
+                        item.setData(Qt.UserRole, ("l", value.no))
+                    t.setItem(r, c, item)
+                t.setRowHeight(r, 30)
+                if value.no == view.picked_line:
+                    t.selectRow(r)
+                    picked = r
+        t.blockSignals(False)
+        self._list_fill = fill_no = self._list_fill + 1
+
+        def scroll() -> None:  # once the table has taken its new rows in (rows, not items: it may be filled again first)
+            if self._list_fill != fill_no:
+                return
+            if top is not None:  # the open group at the top: its lines can be read without scrolling
+                t.scrollToItem(t.item(top, 0), QAbstractItemView.PositionAtTop)
+            if picked is not None:
+                t.scrollToItem(t.item(picked, 0), QAbstractItemView.EnsureVisible)
+
+        QTimer.singleShot(0, scroll)
+
+    @staticmethod
+    def _swatch(colour: QColor) -> QIcon:
+        pixmap = QPixmap(14, 14)
+        pixmap.fill(Qt.transparent)
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(colour)
+        painter.drawRoundedRect(0, 0, 14, 14, 3, 3)
+        painter.end()
+        return QIcon(pixmap)
+
+    def _step_list_clicked(self, row: int, _column: int = 0) -> None:
+        """A crowded step: a tap on a group opens it (its numbers in the picture; once more: all groups again), a tap
+        on a line picks it in the picture."""
+        item = self.bom.item(row, 0)
+        kind, value = (item.data(Qt.UserRole) or ("", None)) if item else ("", None)
+        plan = self.view.plan()
+        if plan is None or not kind:
+            return
+        if kind == "g":
+            self.view.set_focus(set() if self.view.focus == {value} else {value})
+        else:
+            self.view.set_focus({next(b.group for b in plan.lines if b.no == value)}, value)
 
     def _step_text_edited(self) -> None:
         if self._loading or not self.model or not 0 < self.step <= len(self.model.steps):
@@ -895,19 +990,36 @@ class AssemblyTab(QWidget):
 
         self.stop_play()
         keep = (self.step, self.view.yaw, self.view.pitch, self.view.zoom, self.view.target.copy(), self.view.explode)
+        looked_at = (set(self.view.focus), self.view.picked_line)
         folder = Path(tempfile.mkdtemp(prefix="rrs_asm_")) if path.lower().endswith(".pdf") else Path(path).with_suffix("")
         folder.mkdir(parents=True, exist_ok=True)
         images = {}
         self.view.explode = 0.0
+        def picture(name: str) -> str:
+            file = folder / name
+            self.view.render_image(1280, 800, fit=True, margin=0.7).save(str(file))
+            return QUrl.fromLocalFile(str(file)).toString() if path.lower().endswith(".pdf") else f"{folder.name}/{file.name}"
+
         for n in range(1, len(self.model.steps) + 1):
             self.view.set_step(n, animate=False)
-            self.view._anim = 0.55
-            file = folder / f"step_{n:02d}.png"
-            self.view.render_image(1280, 800, fit=True, margin=0.7).save(str(file))
-            images[n] = QUrl.fromLocalFile(str(file)).toString() if path.lower().endswith(".pdf") else f"{folder.name}/{file.name}"
+            plan = self.view.plan()
+            if plan is None:
+                self.view._anim = 0.55
+                images[n] = picture(f"step_{n:02d}.png")
+                continue
+            # a crowded step: all groups with their callouts, then its groups with their numbers - every part IN its
+            # place (for forty small brackets the place is what the picture has to say)
+            self.view._anim = 0.0
+            pictures = [(picture(f"step_{n:02d}.png"), [])]
+            for i, groups in enumerate(a3.pdf_pictures(plan), 1):
+                self.view.focus = set(groups)
+                pictures.append((picture(f"step_{n:02d}_{i}.png"), groups))
+            self.view.focus = set()
+            images[n] = pictures
         self.view._anim = 0.0
         self.step, self.view.yaw, self.view.pitch, self.view.zoom, self.view.target, self.view.explode = keep
         self.view.set_step(self.step or None, animate=False)
+        self.view.set_focus(*looked_at, tell=False)
         doc = a3.render_steps_html(self.model, images, self.get_job().job_no, self.done_steps())
         if path.lower().endswith(".pdf"):
             write_pdf(path, doc)

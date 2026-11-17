@@ -179,6 +179,8 @@ class AssemblyModel:
 
     def bom(self, step: int | None = None, group: str | None = None) -> list[BomLine]:
         """Same parts on one line (name + part number + size), numbered in the order they are met."""
+        if step is not None and self.crowded(step):
+            return self._bom_by_group(step, group)
         lines: dict[tuple, BomLine] = {}
         for p in self.parts:
             if (step is not None and p.step != step) or (group is not None and p.group != group):
@@ -191,7 +193,37 @@ class AssemblyModel:
             lines[key].qty += 1
         return list(lines.values())
 
+    def crowded(self, step: int | None) -> bool:
+        """A step with so many parts that a number on each cannot be read: it is shown group by group."""
+        if not step:
+            return False
+        parts = [p for p in self.parts if p.step == step]
+        return len(parts) > CROWDED_PARTS and len({p.group for p in parts}) >= 2
+
+    def _bom_by_group(self, step: int, group: str | None = None) -> list[BomLine]:
+        """The list of a crowded step: the lines of one group follow one another, so the numbers of a group are one
+        run ('บานพับ № 48–54'), and a line never holds parts of two groups."""
+        lines: dict[tuple, BomLine] = {}
+        for p in self.parts:
+            if p.step != step:
+                continue
+            key = (p.group, p.name, p.part_no, p.size)
+            if key not in lines:
+                lines[key] = BomLine(0, p.name, p.part_no, p.size, 0, p.group)
+            lines[key].qty += 1
+        order: list[str] = []
+        for b in lines.values():
+            if b.group not in order:
+                order.append(b.group)
+        out = sorted(lines.values(), key=lambda b: order.index(b.group))  # stable: inside a group, as they are met
+        for n, b in enumerate(out, 1):
+            b.no = n
+        return [b for b in out if group is None or b.group == group]
+
     def bom_no(self, part: Part3D) -> int:
+        if self.crowded(part.step):
+            return next((b.no for b in self._bom_by_group(part.step)
+                         if (b.group, b.name, b.part_no, b.size) == (part.group, part.name, part.part_no, part.size)), 0)
         return next((b.no for b in self.bom(part.step) if (b.name, b.part_no, b.size) == (part.name, part.part_no, part.size)), 0)
 
     def bounds(self, parts: list[Part3D] | None = None) -> tuple[Vec, Vec]:
@@ -311,6 +343,65 @@ def set_explode(parts: list[Part3D], direction: str, distance: float) -> None:
     d = EXPLODE_DIRECTIONS[direction]
     for p in parts:
         p.explode = [float(c * distance) for c in d]
+
+
+# --------------------------------------------------------------------------- a crowded step, group by group
+CROWDED_PARTS = 80  # a step with more parts than this (in two groups or more) shows its groups first, not 125 numbers
+PDF_LINES = 14  # the printed manual: groups are packed into detail pictures of at most this many numbered lines
+GROUP_COLOURS = ["#3E9E4F", "#2F7FD6", "#C6409A", "#D9A404", "#12A0A0", "#7B57C8", "#D9483B", "#8A6B3C", "#5B6ED6",
+                 "#E46FA6", "#6E8B1F", "#2C6E8F"]  # one per group of the step, in the order of its list
+
+
+@dataclass
+class StepPlan:
+    """What the labels of a crowded step are made from."""
+    step: int
+    lines: list = field(default_factory=list)  # BomLine, numbered as in the list of the step
+    groups: list = field(default_factory=list)  # names, in the order of the list
+    colour: dict = field(default_factory=dict)  # group → '#rrggbb'
+    no_of: dict = field(default_factory=dict)  # part id → the number of its line
+    pieces: dict = field(default_factory=dict)  # group → number of parts
+    of_group: dict = field(default_factory=dict)  # group → its lines
+
+    def span(self, group: str) -> str:
+        """'№ 48–54': the numbers of a group in the list."""
+        lines = self.of_group[group]
+        return f"№ {lines[0].no}" + (f"–{lines[-1].no}" if len(lines) > 1 else "")
+
+
+def step_plan(model: AssemblyModel | None, step: int | None) -> StepPlan | None:
+    """The groups of a crowded step with their colours and numbers; None for a step that is not crowded (it is
+    shown as it always was: a number on every part)."""
+    if model is None or not model.crowded(step):
+        return None
+    plan = StepPlan(step, model.bom(step))
+    key_no = {(b.group, b.name, b.part_no, b.size): b.no for b in plan.lines}
+    for b in plan.lines:
+        if b.group not in plan.groups:
+            plan.groups.append(b.group)
+        plan.of_group.setdefault(b.group, []).append(b)
+        plan.pieces[b.group] = plan.pieces.get(b.group, 0) + b.qty
+    for p in model.parts:
+        if p.step == step:
+            plan.no_of[p.id] = key_no[(p.group, p.name, p.part_no, p.size)]
+    plan.colour = {g: GROUP_COLOURS[i % len(GROUP_COLOURS)] for i, g in enumerate(plan.groups)}
+    return plan
+
+
+def pdf_pictures(plan: StepPlan) -> list[list[str]]:
+    """The detail pictures of a crowded step in the printed manual: its groups in the order of the list, packed
+    while a picture has at most PDF_LINES numbered lines (a bigger group has a picture to itself)."""
+    out: list[list[str]] = []
+    count = 0
+    for g in plan.groups:
+        n = len(plan.of_group[g])
+        if out and count + n <= PDF_LINES:
+            out[-1].append(g)
+            count += n
+        else:
+            out.append([g])
+            count = n
+    return out
 
 
 # --------------------------------------------------------------------------- the 13 steps of a flat tray
@@ -1080,32 +1171,65 @@ def build_for_job(job) -> AssemblyModel | None:
 
 
 # --------------------------------------------------------------------------- printable
-def render_steps_html(model: AssemblyModel, images: dict[int, str], job_no: str = "", done: set[int] | None = None) -> str:
-    """The 3D assembly manual: one block per step with its picture, its parts and what to check."""
+def render_steps_html(model: AssemblyModel, images: dict, job_no: str = "", done: set[int] | None = None) -> str:
+    """The 3D assembly manual: one block per step with its picture, its parts and what to check. `images`: step →
+    its picture, or for a crowded step [(picture, the groups numbered in it)] - the first the picture of all groups
+    (no groups), then the detail pictures."""
     import html
 
     e = html.escape
     done = done or set()
     blocks = []
+    table = "<table width='100%' cellspacing='0' cellpadding='3' border='1'>"
+    cols = ("<tr><th width='8%'>#</th><th width='40%'>ชิ้นส่วน</th><th width='27%'>ขนาด</th><th width='15%'>Part No.</th>"
+            "<th width='10%'>จำนวน</th></tr>")
+
+    def rows_of(lines) -> str:
+        return "".join(f"<tr><td align='center'>{b.no}</td><td>{e(b.name)}</td><td>{e(b.size)}</td><td>{e(b.part_no)}</td>"
+                       f"<td align='center'>{b.qty}</td></tr>" for b in lines)
+
     for n, s in enumerate(model.steps, 1):
-        rows = "".join(f"<tr><td align='center'>{b.no}</td><td>{e(b.name)}</td><td>{e(b.size)}</td><td>{e(b.part_no)}</td>"
-                       f"<td align='center'>{b.qty}</td></tr>" for b in model.bom(n))
-        if not rows and s.no_parts:
-            rows = "<tr><td colspan='5' style='color:#6B7A90'>ขั้นนี้เป็นงาน / การตรวจ – ไม่มีชิ้นส่วนใหม่</td></tr>"
+        plan = step_plan(model, n)
+        pictures = images.get(n)
+        if isinstance(pictures, str):
+            pictures = [(pictures, [])]
+        pictures = pictures or []
         extra = "".join(x for x in (
             f"<p><b>แรงขัน:</b> {e(s.torque)}</p>" if s.torque else "",
             f"<p><b>เครื่องมือ:</b> {e(s.tools)}</p>" if s.tools else "",
             f"<p><b>จุดตรวจ:</b> {e(s.check)}</p>" if s.check else "",
             f"<p style='color:#D64545'><b>⚠ {e(s.warning)}</b></p>" if s.warning else ""))
-        img = f"<p><img src='{e(images[n])}' width='640'></p>" if n in images else ""
-        blocks.append(
-            f"<h2 style='page-break-before:always'>{e(s.phase) + ' · ' if s.phase else ''}ขั้นที่ {n} / {len(model.steps)} – {e(s.title)} "
-            f"{'☑' if n in done else '☐'}</h2>{img}<p>{e(s.detail)}</p>{extra}"
-            f"<table width='100%' cellspacing='0' cellpadding='3' border='1'><tr><th width='8%'>#</th><th width='40%'>ชิ้นส่วน</th>"
-            f"<th width='27%'>ขนาด</th><th width='15%'>Part No.</th><th width='10%'>จำนวน</th></tr>{rows}</table>"
-            + (f"<p style='color:#6B7A90'>BEMM {e(s.ref)}</p>" if s.ref else ""))
+        img = f"<p><img src='{e(pictures[0][0])}' width='640'></p>" if pictures else ""
+        head = (f"<h2 style='page-break-before:always'>{e(s.phase) + ' · ' if s.phase else ''}ขั้นที่ {n} / {len(model.steps)} – "
+                f"{e(s.title)} {'☑' if n in done else '☐'}</h2>{img}<p>{e(s.detail)}</p>{extra}")
+        ref = f"<p style='color:#6B7A90'>BEMM {e(s.ref)}</p>" if s.ref else ""
+        if plan is None:
+            rows = rows_of(model.bom(n))
+            if not rows and s.no_parts:
+                rows = "<tr><td colspan='5' style='color:#6B7A90'>ขั้นนี้เป็นงาน / การตรวจ – ไม่มีชิ้นส่วนใหม่</td></tr>"
+            blocks.append(head + table + cols + rows + "</table>" + ref)
+            continue
+        # a crowded step: the picture of all groups, a table of the groups, then the groups with their numbers
+        summary = (f"<p><b>ขั้นนี้มี {len(plan.groups)} กลุ่ม · {len(plan.lines)} รายการ · {sum(plan.pieces.values())} ชิ้น</b> – "
+                   "ภาพบนแสดงตำแหน่งของแต่ละกลุ่ม หมายเลขชิ้นอยู่ในภาพย่อยถัดไป</p>")
+        group_cols = ("<tr><th width='6%'></th><th width='44%'>กลุ่ม</th><th width='15%'>รายการ</th><th width='15%'>จำนวนชิ้น</th>"
+                      "<th width='20%'>หมายเลข</th></tr>")
+        out = [head, summary, table, group_cols]
+        for g in plan.groups:
+            out.append(f"<tr><td bgcolor='{plan.colour[g]}'></td><td><b>{e(g)}</b></td><td align='center'>{len(plan.of_group[g])}"
+                       f"</td><td align='center'>{plan.pieces[g]}</td><td align='center'>{plan.span(g)[2:]}</td></tr>")
+        out.append("</table>" + ref)
+        details = pictures[1:] or [("", groups) for groups in pdf_pictures(plan)]  # no pictures given: the lists alone
+        for i, (file, groups) in enumerate(details, 1):
+            out.append(f"<h3 style='page-break-before:always'>ขั้นที่ {n} · ภาพย่อย {i} / {len(details)} – {e(' · '.join(groups))}</h3>"
+                       + (f"<p><img src='{e(file)}' width='640'></p>" if file else "") + table + cols)
+            for g in groups:
+                out.append(f"<tr><td bgcolor='{plan.colour[g]}'></td><td colspan='4' bgcolor='#EEF2F7'><b>{e(g)}</b> – "
+                           f"{len(plan.of_group[g])} รายการ · {plan.pieces[g]} ชิ้น</td></tr>" + rows_of(plan.of_group[g]))
+            out.append("</table>")
+        blocks.append("".join(out))
     return (f"<html><head><meta charset='utf-8'><style>body{{font-size:10.5pt;color:#1E2A3A}}h1{{color:#1F4E79;font-size:16pt}}"
-            f"h2{{color:#1F4E79;font-size:12pt;margin-top:16px}}th{{background:#E8EEF6}}</style></head><body>"
+            f"h2{{color:#1F4E79;font-size:12pt;margin-top:16px}}h3{{color:#1F4E79;font-size:11pt}}th{{background:#E8EEF6}}</style></head><body>"
             f"<h1>คู่มือประกอบ 3 มิติ – {e(model.name)}</h1><p style='color:#6B7A90'>งาน {e(job_no) or '-'} · "
             f"{len(model.steps)} ขั้นตอน · {sum(b.qty for b in model.bom())} ชิ้น</p>"
             + (f"<p style='color:#E08A1E'>{e(model.note)}</p>" if model.note else "") + "".join(blocks) + "</body></html>")

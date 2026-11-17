@@ -34,6 +34,7 @@ STYLE = f"""
 #PartPopup {{ background: {theme.CARD}; border: 1px solid #8FA3BD; border-radius: 12px; }}
 #PopupTitle {{ font-size: 15px; font-weight: 700; color: {theme.NAVY_DEEP}; }}
 #PopupSub {{ color: {theme.MUTED}; }}
+#PopupGrip {{ color: #9FB0C6; font-size: 15px; font-weight: 700; padding: 2px 2px 0 0; }}
 #PopupKey {{ color: {theme.MUTED}; }}
 #PopupMedia {{ background: #EEF2F7; border: 1px solid {theme.BORDER}; border-radius: 8px; }}
 #PopupWarn {{ color: #B4411B; font-weight: 600; }}
@@ -89,7 +90,10 @@ class PartPopup(QFrame):
         self.setFocusPolicy(Qt.StrongFocus)
         self.part_id = ""
         self._step = 0
+        self._view = parent  # the 3D picture the card belongs to; the card itself floats over the whole window
         self._at = QPoint(0, 0)
+        self._pinned: QPoint | None = None  # where the user dragged the card to: it stays there for the next parts
+        self._grab: QPoint | None = None  # while it is dragged: the point of the card under the finger
         self._opened = ("", "")  # Part No. and note as the card got them: only what was changed is saved
         # The card may lie over the point that was tapped. For the length of a double click it lets the mouse
         # through, so that the second click still reaches the picture (double click = zoom to the part).
@@ -110,6 +114,13 @@ class PartPopup(QFrame):
         self.subtitle = QLabel()
         self.subtitle.setObjectName("PopupSub")
         self.subtitle.setWordWrap(True)
+        self.grip = QLabel("⋮⋮")  # the card is moved by its head (and by any empty part of it)
+        self.grip.setObjectName("PopupGrip")
+        for handle in (self.grip, self.title, self.subtitle):
+            handle.setCursor(Qt.OpenHandCursor)
+            handle.setToolTip("ลากเพื่อย้ายการ์ดไปไว้ตรงไหนก็ได้ในหน้าต่าง – การ์ดจะเปิดที่เดิมกับชิ้นถัดไป\n"
+                              "ดับเบิลคลิกที่หัวการ์ด = กลับไปเปิดข้างชิ้นที่แตะ")
+        head.addWidget(self.grip, 0, Qt.AlignTop)
         titles.addWidget(self.title)
         titles.addWidget(self.subtitle)
         head.addLayout(titles, 1)
@@ -274,26 +285,71 @@ class PartPopup(QFrame):
         self.setFocus(Qt.OtherFocusReason)  # Esc closes the card; other keys still go on to the picture
         self.mini.fit(None, 0.78)
 
+    def _host(self) -> QWidget:
+        """The card floats over the whole window of the program, not only over the picture: it can be dragged out
+        of the way of the part, over the tables. (A picture that is its own window keeps the card.)"""
+        host = self._view.window()
+        if host is self._view or host is None:
+            return self._view
+        if self.parentWidget() is not host:
+            hidden = self.isHidden()
+            self.setParent(host)  # this hides the card
+            if not hidden:
+                self.show()
+        return host
+
+    def _in_host(self, point: QPoint) -> QPoint:
+        host = self.parentWidget()
+        return point if host is self._view else self._view.mapTo(host, point)
+
     def place(self) -> None:
-        """Beside the tapped point, on the side that has room, inside the part of the picture that is on the screen
-        (the page may be scrolled). Where there is no room beside the point, at the edge farther from it."""
-        view = self.parentWidget()
-        box = view.visibleRegion().boundingRect()
+        """Where the user dragged it to; else beside the tapped point, on the side that has room, inside the part
+        of the picture that is on the screen (the page may be scrolled) - where there is no room beside the point,
+        at the edge farther from it."""
+        host = self._host()
+        box = self._view.visibleRegion().boundingRect()
         if box.width() < 200 or box.height() < 200:  # not shown yet
-            box = view.rect()
-        width = min(self.WIDTH, box.width() - 16)
+            box = self._view.rect()
+        box.moveTopLeft(self._in_host(box.topLeft()))
+        at = self._in_host(self._at)
+        room = host.rect() if self._pinned is not None else box
+        width = min(self.WIDTH, room.width() - 16)
         self.setFixedWidth(width)
         self.body.adjustSize()
         fixed = sum(w.sizeHint().height() for w in (self.title, self.subtitle, self.tab_3d)) + MEDIA_HEIGHT + 150
-        height = max(260, min(fixed + self.body.sizeHint().height(), box.height() - 16, self.MAX_HEIGHT))
+        height = max(260, min(fixed + self.body.sizeHint().height(), room.height() - 16, self.MAX_HEIGHT))
         self.resize(width, height)
-        x = self._at.x() + 22
+        if self._pinned is not None:
+            self.move(self._kept_inside(self._pinned))
+            return
+        x = at.x() + 22
         if x + width > box.right() - 8:
-            x = self._at.x() - 22 - width
+            x = at.x() - 22 - width
         if x < box.left() + 8:
-            x = box.left() + 8 if self._at.x() > box.center().x() else box.right() - width - 8
-        y = min(max(box.top() + 8, self._at.y() - 70), max(box.top() + 8, box.bottom() - height - 8))
+            x = box.left() + 8 if at.x() > box.center().x() else box.right() - width - 8
+        y = min(max(box.top() + 8, at.y() - 70), max(box.top() + 8, box.bottom() - height - 8))
         self.move(x, y)
+
+    def _kept_inside(self, pos: QPoint) -> QPoint:
+        """A place for the card's corner at which its head, and so its close button, stays in the window."""
+        host = self.parentWidget().rect()
+        x = min(max(pos.x(), host.left() - self.width() + 120), host.right() - 120)
+        y = min(max(pos.y(), host.top()), host.bottom() - 48)
+        return QPoint(x, y)
+
+    def move_card(self, pos: QPoint) -> None:
+        """Put the card there (its top left corner, in the window) and keep it there for the next parts."""
+        self._pinned = self._kept_inside(pos)
+        self.move(self._pinned)
+
+    def unpin(self) -> None:
+        """Back to opening beside the part that is tapped."""
+        self._pinned = None
+        if not self.isHidden():
+            self.place()
+
+    def is_pinned(self) -> bool:
+        return self._pinned is not None
 
     def has_photo(self) -> bool:
         return self.remove_btn.isVisibleTo(self)
@@ -315,7 +371,7 @@ class PartPopup(QFrame):
         self.setAttribute(Qt.WA_TransparentForMouseEvents, False)
         self.hide()
         if had_focus:
-            self.parentWidget().setFocus(Qt.OtherFocusReason)
+            self._view.setFocus(Qt.OtherFocusReason)
 
     def dismiss(self) -> None:
         if not self.isHidden():
@@ -326,19 +382,29 @@ class PartPopup(QFrame):
         if event.key() == Qt.Key_Escape:
             self.dismiss()
         else:
-            super().keyPressEvent(event)
+            QApplication.sendEvent(self._view, event)  # + − F … still work on the picture
 
-    # a tap on the card is not a tap on the picture under it
+    # A press on the card is not a press on what lies under it. A drag by the head of the card, or by any part of
+    # it that is not a field, a button or the small 3D picture, moves the card.
     def mousePressEvent(self, event) -> None:  # noqa: N802
-        event.accept()
-
-    def mouseReleaseEvent(self, event) -> None:  # noqa: N802
+        if event.button() == Qt.LeftButton:
+            self._grab = self.parentWidget().mapFromGlobal(event.globalPosition().toPoint()) - self.pos()
+            self.setCursor(Qt.ClosedHandCursor)
         event.accept()
 
     def mouseMoveEvent(self, event) -> None:  # noqa: N802
+        if self._grab is not None and event.buttons() & Qt.LeftButton:
+            self.move_card(self.parentWidget().mapFromGlobal(event.globalPosition().toPoint()) - self._grab)
+        event.accept()
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: N802
+        self._grab = None
+        self.unsetCursor()
         event.accept()
 
     def mouseDoubleClickEvent(self, event) -> None:  # noqa: N802
+        if event.position().y() < self.media.y():  # on the head: forget the place it was dragged to
+            self.unpin()
         event.accept()
 
     def wheelEvent(self, event) -> None:  # noqa: N802

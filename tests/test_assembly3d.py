@@ -602,8 +602,9 @@ def test_a_tap_on_a_part_opens_its_detail_card(window, tmp_path):
     assert popup.all_same.text() == "ใช้ที่แก้กับชิ้นชื่อเดียวกันทั้ง 12 ชิ้น" and popup.form.rowCount() >= 10
     assert popup.mini.model.parts[0].name == bolt.name and len(popup.mini.model.parts) == 1  # the part alone, to turn
     assert popup.media.currentIndex() == 0 and "ยังไม่มีรูปจริง" in popup.photo.text() and not popup.has_photo()
-    inside = tab.view.rect().adjusted(0, 0, -1, -1)
-    assert inside.contains(popup.geometry().topLeft()) and popup.width() <= popup.WIDTH
+    inside = tab.view.rect().adjusted(0, 0, -1, -1)  # it opens over the picture (and floats over the whole window)
+    assert popup.parentWidget() is window and inside.contains(tab.view.mapFrom(window, popup.pos()))
+    assert popup.width() <= popup.WIDTH
     # a tap on the card is not a tap on the picture under it
     QTest.qWait(QApplication.doubleClickInterval() + 80)  # for that long the card lets a second click through
     tab.view.selected = bolt.id
@@ -789,3 +790,60 @@ def test_sorting_holds_for_what_a_review_found():
                                                   "Hex head screw ISO8676-M8x1x16-5.6"]
     assert a3.fastener_spec(hinges.parts[2].name)["grade"] == "5.6" and len(hinges.bom()) == 4
     assert hinges.photos == {"บานพับ ขวา 01": "QUJD"}  # the photo went with the name
+
+
+def test_the_card_can_be_dragged_out_of_the_way(window):
+    from PySide6.QtCore import QPoint, QPointF, Qt
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QApplication
+
+    page = window.pages["install"]
+    tab = page.assembly
+    window.resize(1500, 950)
+    window.show()
+    window.go("install")
+    page.tabs.setCurrentWidget(tab)
+    tab.rebuild(force=True)
+    QApplication.processEvents()
+    popup, view = tab.popup, tab.view
+    bolts = [p for p in tab.model.parts if p.name.startswith("สลัก")]
+    view.last_click = QPointF(200, 250)
+    view.part_clicked.emit(bolts[0].id)
+    QTest.qWait(QApplication.doubleClickInterval() + 80)
+    start = popup.pos()
+    assert not popup.is_pinned() and popup.grip.text() == "⋮⋮"
+    # dragged by its head, to the left, over the table of parts: out of the picture
+    QTest.mousePress(popup, Qt.LeftButton, Qt.NoModifier, QPoint(60, 18))
+    QTest.mouseMove(popup, QPoint(60 - 380, 18 - 90))
+    QTest.mouseRelease(popup, Qt.LeftButton, Qt.NoModifier, QPoint(60 - 380, 18 - 90))
+    if popup.pos() == start:  # this Qt sends the move without the button held: move it the way the drag does
+        popup.move_card(start + QPoint(-380, -90))
+    moved = popup.pos()
+    assert popup.is_pinned() and moved == start + QPoint(-380, -90)
+    assert moved.x() + popup.width() < view.mapTo(window, QPoint(0, 0)).x() + 120  # mostly beside the picture now
+    assert not popup.isHidden() and view.selected == bolts[0].id  # the drag did not click what lies under the card
+    # the next part: the card stays where it was put
+    view.last_click = QPointF(380, 120)
+    view.part_clicked.emit(bolts[1].id)
+    assert popup.pos() == moved and popup.part_id == bolts[1].id
+    # the keys of the picture still work while the card has the focus
+    zoom = view.zoom
+    QTest.keyClick(popup, Qt.Key_Plus)
+    assert view.zoom > zoom
+    # never so far out that its head (and the close button) is lost
+    popup.move_card(QPoint(-5000, -5000))
+    assert popup.pos().y() >= 0 and popup.pos().x() + popup.width() >= 120
+    popup.move_card(QPoint(5000, 5000))
+    assert popup.pos().x() <= window.width() - 120 and popup.pos().y() <= window.height() - 48
+    # a double click on its head: back to opening beside the part
+    QTest.mouseDClick(popup, Qt.LeftButton, Qt.NoModifier, QPoint(60, 18))
+    assert not popup.is_pinned() and view.rect().contains(view.mapFrom(window, popup.pos()))
+    # it floats over the window: it goes when another tab or page is shown
+    page.tabs.setCurrentIndex(0)
+    assert popup.isHidden()
+    page.tabs.setCurrentWidget(tab)
+    view.part_clicked.emit(bolts[0].id)
+    window.go("parts")
+    assert popup.isHidden()
+    window.go("install")
+    window.state.dirty = False

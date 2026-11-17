@@ -390,6 +390,10 @@ class AssemblyTab(QWidget):
             self._describe(part)
         self.view.update()
 
+    def hideEvent(self, event) -> None:  # noqa: N802
+        self.popup.put_away()  # the card floats over the window: it must not stay over another page
+        super().hideEvent(event)
+
     def _part_clicked(self, part_id: str) -> None:
         part = self.model.part(part_id) if self.model else None
         self._describe(part)

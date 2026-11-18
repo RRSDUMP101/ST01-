@@ -25,3 +25,8 @@ cloudflared*
 ToExpress*.xlsx
 *service_account*.json
 client_secret*.json
+
+# warranty booklet build outputs
+docs/warranty_booklet/booklet.html
+docs/warranty_booklet/sheet*.png
+docs/warranty_booklet/p14.png

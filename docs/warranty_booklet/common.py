@@ -3,10 +3,35 @@
 Each booklet's build.py: `from common import *`, call set_footer(), add pages with page()/raw(), then save().
 """
 import html
+import re
 H = lambda s: s
 pages = []
 n = [0]
 FOOTER = ["สมุดรับประกันและการบำรุงรักษา"]
+
+# Sections are told apart by name and pictogram (thumb tab on the page edge), the way Toyota / Ford owner and warranty
+# books do – not by letters or numbers. Source titles keep "N. " so the tab knows the section; it is not printed.
+SECTION_NAMES = {1: "ข้อมูล", 2: "การรับประกัน", 3: "การใช้งานและการบำรุงรักษา", 4: "บันทึก",
+                 5: "เครนติดรถ", 6: "หางลากพ่วงจูง", 7: "กระบะพื้นเรียบคาร์โก้"}
+_P = {
+    1: '<circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.5"/>',
+    2: '<path d="M12 3l7 3v6c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6z"/><path d="M8.5 12l2.5 2.5 4.5-5"/>',
+    3: '<path d="M14.7 6.3a4 4 0 0 0-5.2 5.2L4 17l3 3 5.5-5.5a4 4 0 0 0 5.2-5.2l-2.4 2.4-2.6-.4-.4-2.6z"/>',
+    4: '<rect x="5" y="3" width="14" height="18" rx="1.5"/><path d="M9 8h6M9 12h6M9 16h4"/>',
+    5: '<path d="M3 21h11M6 21v-5h5v5M8.5 16L20 6M20 6v8"/><path d="M18.5 16.5a1.5 1.5 0 0 0 3 0"/>',
+    6: '<rect x="7" y="5" width="14" height="10" rx="1"/><path d="M2 15h5M7 15h14"/><circle cx="12" cy="18" r="2"/><circle cx="16.5" cy="18" r="2"/>',
+    7: '<path d="M2 14h12M14 14V8h4l3 3v3h-7"/><path d="M2 14V11"/><circle cx="6" cy="17" r="2"/><circle cx="17" cy="17" r="2"/>',
+}
+
+
+def icon(n, cls="ico"):
+    return (f'<svg class="{cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
+            f'stroke-linecap="round" stroke-linejoin="round">{_P[n]}</svg>')
+
+
+def sref(text):
+    """§N in body text -> pictogram + section name."""
+    return re.sub(r"§([1-7])", lambda m: f'<span class="sref">{icon(int(m.group(1)))}{SECTION_NAMES[int(m.group(1))]}</span>', text)
 
 
 def set_footer(text):
@@ -16,20 +41,21 @@ def set_footer(text):
 def page(section, body, cls=""):
     n[0] += 1
     side = "odd" if n[0] % 2 else "even"
-    L = section[0] if section[0] in "1234567" and section[1:2] == "." else ""
-    tab = f'<div class="tab t{int(L) - 1}">{L}</div>' if L else ""
-    pages.append(f'''<section class="page {side} {cls}">{tab}<header><img src="logo.png"><span>{section}</span></header>
-<main>{body}</main><footer><span>{FOOTER[0]}</span><b>{n[0]}</b></footer></section>''')
+    m = re.match(r"([1-7])\. ", section)
+    tab = f'<div class="tab t{int(m.group(1)) - 1}">{icon(int(m.group(1)))}</div>' if m else ""
+    title = section[m.end():] if m else section
+    pages.append(f'''<section class="page {side} {cls}">{tab}<header><img src="logo.png"><span>{title}</span></header>
+<main>{sref(body)}</main><footer><span>{FOOTER[0]}</span><b>{n[0]}</b></footer></section>''')
 def raw(body, cls):
     n[0] += 1
-    pages.append(f'<section class="page {cls}">{body}</section>')
+    pages.append(f'<section class="page {cls}">{sref(body)}</section>')
 def table(head, rows, widths=None, cls=""):
     cg = "".join(f'<col style="width:{w}%">' for w in widths) if widths else ""
     th = "".join(f"<th>{h}</th>" for h in head)
     tr = "".join("<tr>" + "".join(f"<td>{c}</td>" for c in r) + "</tr>" for r in rows)
     return f'<table class="{cls}"><colgroup>{cg}</colgroup><thead><tr>{th}</tr></thead><tbody>{tr}</tbody></table>'
 def opener(letter, title, sub):
-    return f'<div class="opener"><div class="band"><span class="letter">{letter}</span><h1>{title}</h1><img src="logo.png"></div><p class="sub">{sub}</p></div>'
+    return f'<div class="opener"><div class="band"><span class="letter">{icon(int(letter), "ico big") if str(letter).isdigit() else letter}</span><h1>{title}</h1><img src="logo.png"></div><p class="sub">{sub}</p></div>'
 F = '<span class="fill"></span>'
 def field(label, w=""):
     return f'<div class="field {w}"><label>{label}</label><i></i></div>'
@@ -37,6 +63,7 @@ def field(label, w=""):
 
 
 CSS = '''
+.tab .ico{width:5.5mm;height:5.5mm;color:#fff}.ico.big{width:11mm;height:11mm;color:#00B4F0;display:block}.sref{white-space:nowrap;font-weight:bold;color:#1257C8}.sref .ico{width:1.05em;height:1.05em;vertical-align:-.15em;margin-right:.25em}
 figure.cut{overflow:visible}figure.cut img{object-fit:contain}.cap{font-size:8.8pt;color:#0B2A5B;text-align:center;margin:0 0 2mm}.figs .narrow{flex:1}.figs .narrow figure{margin-bottom:1mm}
 
 figure{margin:2mm 0 3mm;position:relative;border-radius:1.5mm;overflow:hidden}figure img{width:100%;height:100%;object-fit:cover;display:block}figcaption{position:absolute;left:0;right:0;bottom:0;background:rgba(11,42,91,.88);color:#fff;font-size:8.8pt;padding:1.2mm 3mm}

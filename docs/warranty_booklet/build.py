@@ -204,7 +204,7 @@ body{font-family:"Laksaman","Garuda",sans-serif;color:#2B2F36;font-size:11pt;lin
 header{position:absolute;top:8mm;left:15mm;right:15mm;height:9mm;border-bottom:1.2pt solid #1257C8;display:flex;align-items:center;gap:4mm;color:#1257C8;font-weight:bold;font-size:8.5pt}
 header img{height:6mm}.odd header{flex-direction:row-reverse}
 footer{position:absolute;bottom:7mm;left:15mm;right:15mm;display:flex;justify-content:space-between;font-size:7.5pt;color:#7a8394}footer b{color:#1257C8;font-size:9pt}
-h1,h2,h3{font-family:"Laksaman",sans-serif;margin:0}h2{color:#0B2A5B;font-size:18pt;margin:0 0 4mm;padding-bottom:1.5mm;position:relative}h2:after{content:"";position:absolute;left:0;bottom:0;width:18mm;height:1.2mm;background:#00B4F0}h3{color:#1257C8;font-size:12pt;margin:5mm 0 2mm}h4{margin:0;color:#0B2A5B;font-size:11.5pt}
+h1,h2,h3{font-family:"Laksaman",sans-serif;margin:0}h2{color:#0B2A5B;font-size:18pt;margin:0 0 4mm;padding-bottom:1.5mm;position:relative}h3{color:#1257C8;font-size:12pt;margin:5mm 0 2mm}h4{margin:0;color:#0B2A5B;font-size:11.5pt}
 p{margin:0 0 2.5mm}ul,ol{margin:0 0 2mm;padding-left:5.5mm}li{margin-bottom:.8mm}
 table{width:100%;border-collapse:collapse;margin:1mm 0 4mm;font-size:9.8pt}th{background:#0B2A5B;color:#fff;text-align:left;padding:2.2mm 2.5mm;font-weight:bold}
 td{padding:2.3mm 2.5mm;border-bottom:.5pt solid #c9d6ea;vertical-align:top}tbody tr:nth-child(even) td{background:#EAF2FB}

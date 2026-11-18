@@ -16,8 +16,8 @@ def set_footer(text):
 def page(section, body, cls=""):
     n[0] += 1
     side = "odd" if n[0] % 2 else "even"
-    L = section[0] if section[0] in "กขคงจฉช" else ""
-    tab = f'<div class="tab t{"กขคงจฉช".index(L)}">{L}</div>' if L else ""
+    L = section[0] if section[0] in "1234567" and section[1:2] == "." else ""
+    tab = f'<div class="tab t{int(L) - 1}">{L}</div>' if L else ""
     pages.append(f'''<section class="page {side} {cls}">{tab}<header><img src="logo.png"><span>{section}</span></header>
 <main>{body}</main><footer><span>{FOOTER[0]}</span><b>{n[0]}</b></footer></section>''')
 def raw(body, cls):

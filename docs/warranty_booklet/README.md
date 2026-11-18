@@ -21,7 +21,7 @@ python3 build.py
 node pdf.js
 ```
 
-ฟอนต์: Laksaman (ต้องมีในเครื่อง – `apt-get install fonts-tlwg-laksaman-ttf` ถ้าไม่มี เล่มจะออกมาเป็นฟอนต์อื่น) · ไฟล์เป็น RGB ไม่มีระยะตัดตก – โรงพิมพ์ต้องเตรียมไฟล์พิมพ์ต่อ
+ฟอนต์: IBM Plex Sans Thai (หัวข้อ) + IBM Plex Sans Thai Looped (เนื้อหา) – ต้องมีในเครื่อง: `apt-get install fonts-ibm-plex` ถ้าไม่มี เล่มจะออกมาเป็นฟอนต์อื่น (ตรวจด้วย `pdffonts`) · ไฟล์เป็น RGB ไม่มีระยะตัดตก – โรงพิมพ์ต้องเตรียมไฟล์พิมพ์ต่อ
 
 ## ยังรอ RRS ยืนยัน
 

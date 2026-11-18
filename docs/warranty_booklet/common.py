@@ -1,4 +1,4 @@
-"""Shared layout for the RRS warranty booklets (215 x 240 mm, white-blue theme, Laksaman font).
+"""Shared layout for the RRS warranty booklets (215 x 240 mm, white-blue theme, IBM Plex Sans Thai (headings) + IBM Plex Sans Thai Looped (text)).
 
 Each booklet's build.py: `from common import *`, call set_footer(), add pages with page()/raw(), then save().
 """
@@ -69,7 +69,7 @@ figure.cut{overflow:visible}figure.cut img{object-fit:contain}.cap{font-size:8.8
 figure{margin:2mm 0 3mm;position:relative;border-radius:1.5mm;overflow:hidden}figure img{width:100%;height:100%;object-fit:cover;display:block}figcaption{position:absolute;left:0;right:0;bottom:0;background:rgba(11,42,91,.88);color:#fff;font-size:8.8pt;padding:1.2mm 3mm}
 .figs{display:flex;gap:5mm}.figs figure{flex:1.25}.figs figure.narrow{flex:1}
 
-.fig{width:100%;height:52mm;object-fit:contain;display:block;margin-bottom:2mm}
+.fig{width:100%;height:44mm;object-fit:contain;display:block;margin-bottom:2mm}
 
 .back h2:after,.cardhead h2:after{display:none}.cardhead h2{padding-bottom:0}
 .signs.tight{margin-top:3mm!important}.signs.tight .stamp{height:18mm!important}.cardhead+h3{margin-top:2mm}
@@ -79,12 +79,12 @@ figure{margin:2mm 0 3mm;position:relative;border-radius:1.5mm;overflow:hidden}fi
 ol.steps li{padding-top:2.4mm!important;padding-bottom:2.4mm!important}
 
 @page{size:215mm 240mm;margin:0}*{box-sizing:border-box}html,body{margin:0}
-body{font-family:"Laksaman","Garuda",sans-serif;color:#2B2F36;font-size:11pt;line-height:1.5}
+body{font-family:"IBM Plex Sans Thai Looped","IBM Plex Sans Thai",sans-serif;color:#2B2F36;font-size:10.5pt;line-height:1.45}
 .page{width:215mm;height:240mm;position:relative;overflow:hidden;page-break-after:always;background:#fff;padding:22mm 15mm 16mm}
 header{position:absolute;top:8mm;left:15mm;right:15mm;height:9mm;border-bottom:1.2pt solid #1257C8;display:flex;align-items:center;gap:4mm;color:#1257C8;font-weight:bold;font-size:8.5pt}
 header img{height:6mm}
 footer{position:absolute;bottom:7mm;left:15mm;right:15mm;display:flex;justify-content:space-between;font-size:7.5pt;color:#7a8394}footer b{color:#1257C8;font-size:9pt}
-h1,h2,h3{font-family:"Laksaman",sans-serif;margin:0}h2{color:#0B2A5B;font-size:18pt;margin:0 0 4mm;padding-bottom:1.5mm;position:relative}h3{color:#1257C8;font-size:12pt;margin:5mm 0 2mm}h4{margin:0;color:#0B2A5B;font-size:11.5pt}
+h1,h2,h3,h4,th,header,b,strong{font-family:"IBM Plex Sans Thai",sans-serif}h1,h2,h3{margin:0}h2{color:#0B2A5B;font-size:18pt;margin:0 0 4mm;padding-bottom:1.5mm;position:relative}h3{color:#1257C8;font-size:12pt;margin:5mm 0 2mm}h4{margin:0;color:#0B2A5B;font-size:11.5pt}
 p{margin:0 0 2.5mm}ul,ol{margin:0 0 2mm;padding-left:5.5mm}li{margin-bottom:.8mm}
 table{width:100%;border-collapse:collapse;margin:1mm 0 4mm;font-size:9.8pt}th{background:#0B2A5B;color:#fff;text-align:left;padding:2.2mm 2.5mm;font-weight:bold}
 td{padding:2.3mm 2.5mm;border-bottom:.5pt solid #c9d6ea;vertical-align:top}tbody tr:nth-child(even) td{background:#EAF2FB}

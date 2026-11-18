@@ -7,7 +7,7 @@ the CAD boxes of the wheel part are not tight, so the wheels are drawn about whe
 """
 
 NAVY, BLUE, LINE, FILL, GLASS = "#0B2A5B", "#1257C8", "#2B2F36", "#F3F6FA", "#DCE6F2"
-FONT = 'font-family="Laksaman" font-weight="bold"'
+FONT = 'font-family="IBM Plex Sans Thai" font-weight="bold"'
 
 Y0, ZTOP = -4450, 3150  # left edge of the side view in CAD y, top in CAD z
 

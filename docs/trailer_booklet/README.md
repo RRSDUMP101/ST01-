@@ -17,7 +17,7 @@ python3 build.py
 node pdf.js
 ```
 
-ฟอนต์ Laksaman ต้องมีในเครื่อง (`apt-get install fonts-tlwg-laksaman-ttf`)
+ฟอนต์ IBM Plex Sans Thai / Looped ต้องมีในเครื่อง (`apt-get install fonts-ibm-plex`)
 
 ## ที่มาของข้อมูล
 

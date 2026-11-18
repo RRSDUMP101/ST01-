@@ -42,7 +42,7 @@ def page(section, body, cls=""):
     n[0] += 1
     side = "odd" if n[0] % 2 else "even"
     m = re.match(r"([1-7])\. ", section)
-    tab = f'<div class="tab t{int(m.group(1)) - 1}">{icon(int(m.group(1)))}</div>' if m else ""
+    tab = f'<div class="tab">{icon(int(m.group(1)))}</div>' if m else ""
     title = section[m.end():] if m else section
     pages.append(f'''<section class="page {side} {cls}">{tab}<header><img src="logo.png"><span>{title}</span></header>
 <main>{sref(body)}</main><footer><span>{FOOTER[0]}</span><b>{n[0]}</b></footer></section>''')
@@ -63,7 +63,7 @@ def field(label, w=""):
 
 
 CSS = '''
-.tab .ico{width:5.5mm;height:5.5mm;color:#fff}.ico.big{width:11mm;height:11mm;color:#00B4F0;display:block}.sref{white-space:nowrap;font-weight:bold;color:#1257C8}.sref .ico{width:1.05em;height:1.05em;vertical-align:-.15em;margin-right:.25em}
+.tab{position:absolute;top:0;right:0;width:12mm;height:17mm;background:#1257C8;border-radius:0 0 0 3mm;display:flex;align-items:flex-end;justify-content:center;padding-bottom:3mm}.tab .ico{width:6.5mm;height:6.5mm;color:#fff}.ico.big{width:11mm;height:11mm;color:#00B4F0;display:block}.sref{white-space:nowrap;font-weight:bold;color:#1257C8}.sref .ico{width:1.05em;height:1.05em;vertical-align:-.15em;margin-right:.25em}
 figure.cut{overflow:visible}figure.cut img{object-fit:contain}.cap{font-size:8.8pt;color:#0B2A5B;text-align:center;margin:0 0 2mm}.figs .narrow{flex:1}.figs .narrow figure{margin-bottom:1mm}
 
 figure{margin:2mm 0 3mm;position:relative;border-radius:1.5mm;overflow:hidden}figure img{width:100%;height:100%;object-fit:cover;display:block}figcaption{position:absolute;left:0;right:0;bottom:0;background:rgba(11,42,91,.88);color:#fff;font-size:8.8pt;padding:1.2mm 3mm}
@@ -74,8 +74,6 @@ figure{margin:2mm 0 3mm;position:relative;border-radius:1.5mm;overflow:hidden}fi
 .back h2:after,.cardhead h2:after{display:none}.cardhead h2{padding-bottom:0}
 .signs.tight{margin-top:3mm!important}.signs.tight .stamp{height:18mm!important}.cardhead+h3{margin-top:2mm}
 
-.tab{position:absolute;width:8mm;height:22mm;background:#1257C8;color:#fff;font-weight:bold;font-size:12pt;display:flex;align-items:center;justify-content:center}
-.odd .tab{right:0;border-radius:2mm 0 0 2mm}.even .tab{left:0;border-radius:0 2mm 2mm 0}.t0{top:40mm}.t1{top:66mm}.t2{top:92mm}.t3{top:118mm}.t4{top:144mm}.t5{top:170mm}.t6{top:196mm}
 .lead{font-size:12.5pt;color:#0B2A5B;margin-bottom:6mm}
 .cards{display:grid;grid-template-columns:1fr 1fr;gap:5mm;margin-bottom:4mm}.cards div{border:1pt solid #c9d6ea;border-top:2.5pt solid #1257C8;padding:4mm;position:relative}.cards b{position:absolute;right:4mm;top:2mm;font-size:22pt;color:#00B4F0}.cards p{margin:1.5mm 0 0;font-size:10pt}
 ol.steps li{padding-top:2.4mm!important;padding-bottom:2.4mm!important}
@@ -84,7 +82,7 @@ ol.steps li{padding-top:2.4mm!important;padding-bottom:2.4mm!important}
 body{font-family:"Laksaman","Garuda",sans-serif;color:#2B2F36;font-size:11pt;line-height:1.5}
 .page{width:215mm;height:240mm;position:relative;overflow:hidden;page-break-after:always;background:#fff;padding:22mm 15mm 16mm}
 header{position:absolute;top:8mm;left:15mm;right:15mm;height:9mm;border-bottom:1.2pt solid #1257C8;display:flex;align-items:center;gap:4mm;color:#1257C8;font-weight:bold;font-size:8.5pt}
-header img{height:6mm}.odd header{flex-direction:row-reverse}
+header img{height:6mm}
 footer{position:absolute;bottom:7mm;left:15mm;right:15mm;display:flex;justify-content:space-between;font-size:7.5pt;color:#7a8394}footer b{color:#1257C8;font-size:9pt}
 h1,h2,h3{font-family:"Laksaman",sans-serif;margin:0}h2{color:#0B2A5B;font-size:18pt;margin:0 0 4mm;padding-bottom:1.5mm;position:relative}h3{color:#1257C8;font-size:12pt;margin:5mm 0 2mm}h4{margin:0;color:#0B2A5B;font-size:11.5pt}
 p{margin:0 0 2.5mm}ul,ol{margin:0 0 2mm;padding-left:5.5mm}li{margin-bottom:.8mm}

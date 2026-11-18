@@ -27,7 +27,7 @@ page("สารบัญ", '<h2>สารบัญ</h2>' + table(["ภาค", "
 page("ก. ข้อมูล – บัตรรับประกัน", '<div class="cardhead"><img src="logo.png"><div><h2>บัตรรับประกัน</h2><p>Warranty Card</p></div></div>'
  '<h3>เจ้าของรถ</h3><div class="grid">' + field("ชื่อ–นามสกุล / บริษัท","w2") + field("โทรศัพท์") + field("ที่อยู่","w3") + '</div>'
  '<h3>รถ – Ford Ranger Super Duty</h3><div class="grid">' + field("รุ่นเก๋ง") + field("เลขตัวถัง (VIN)") + field("เลขเครื่องยนต์") + field("ทะเบียน") + field("เลขไมล์วันส่งมอบ (กม.)") + field("วันส่งมอบ") + '</div>'
- '<h3>กระบะดั้มพ์ RRS</h3><div class="grid">' + field("รุ่นกระบะ") + field("Serial No. กระบะ") + field("เลขที่งาน (SO)") + field("รุ่นกระบอกดั้มพ์") + field("Serial No. กระบอก") + field("รุ่นชุดมอเตอร์ไฟฟ้า") + field("Serial No. มอเตอร์") + field("น้ำหนักรถพร้อมกระบะ ชั่งจริง (กก.)") + field("น้ำหนักบรรทุกที่ใช้ได้จริง (กก.) ไม่เกิน 1,500") + '</div>'
+ '<h3>กระบะดั้มพ์ RRS</h3><div class="models"><label>รุ่น (เลือก 1)</label><span>☐ กระบะดั้มพ์ พ่วงหางลาก (Superduty)</span><span>☐ กระบะพื้นเรียบ (Cargo Trailer)</span><span>☐ กระบะติดตั้งเครน</span></div><div class="grid">' + field("Serial No. กระบะ") + field("เลขที่งาน (SO)") + field("รุ่นกระบอกดั้มพ์") + field("Serial No. กระบอก") + field("รุ่นชุดมอเตอร์ไฟฟ้า") + field("Serial No. มอเตอร์") + field("น้ำหนักรถพร้อมกระบะ ชั่งจริง (กก.)") + field("น้ำหนักบรรทุกที่ใช้ได้จริง (กก.) ไม่เกิน 1,500") + '</div>'
  '<h3>วันสิ้นสุดการรับประกัน</h3><div class="ends"><div><b>A</b> โครงสร้างหลัก · 5 ปี<i></i></div><div><b>B</b> ชุดดั้มพ์ · 2 ปี<i></i></div><div><b>C</b> ชุดมอเตอร์ไฟฟ้า · 2 ปี<i></i></div></div>'
  '<div class="ack">☐ ข้าพเจ้ารับทราบเงื่อนไข <b>น้ำหนักบรรทุกบนกระบะไม่เกิน 1,500 กก. ต่อเที่ยว</b> และตารางบำรุงรักษาในสมุดเล่มนี้</div>'
  '<div class="signs tight"><div><i></i>ผู้ส่งมอบ (RRS)</div><div><i></i>ผู้รับมอบ (ลูกค้า)</div><div class="stamp">ตราประทับบริษัท</div></div>')
@@ -160,4 +160,4 @@ raw('''<div class="back"><img src="logo.png"><h2>บริษัท รุ่ง
 <p>ที่อยู่ ______________________________________________<br>โทรศัพท์ ____________________ · LINE ____________________<br>แจ้งเคลม ____________________ · เว็บไซต์ ____________________</p>
 <small>ออกแบบตามคู่มือ Ford Ranger Super Duty BEMM E455418 (03/2026)</small></div>''', "nocrop")
 
-save("booklet.html", "RRS Warranty Logbook")
+save("booklet.html", "RRS Warranty Logbook", extra_css=".models{display:flex;align-items:center;gap:5mm;font-size:10pt;margin:0 0 3mm;color:#0B2A5B}.models label{font-size:7.8pt;color:#5b6577}")

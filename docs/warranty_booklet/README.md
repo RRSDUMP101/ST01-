@@ -10,7 +10,8 @@
 | `pdf.js` | พิมพ์ `booklet.html` เป็น PDF ด้วย Playwright และรายงานหน้าที่เนื้อหาล้น |
 | `sheet.js` | ภาพรวมทุกหน้า (`sheet1.png`, `sheet2.png`) สำหรับตรวจการจัดวาง |
 | `RRS-Warranty-Logbook-FordSuperDuty.pdf` | เล่มล่าสุด |
-| `logo.png` `kit.png` `tray.png` `ph_*` | รูปที่ใช้ในเล่ม (ตัดและปรับจาก `source_images/`) |
+| `logo.png` `logo_white.png` | โลโก้ RRSDUMP สีน้ำเงินเข้ม (พื้นขาว) และสีขาว (พื้นน้ำเงิน) พื้นหลังโปร่งใส – ทำจาก `source_images/logo_rrsdump.webp` |
+| `kit.png` `tray.png` `ph_*` | รูปที่ใช้ในเล่ม (ตัดและปรับจาก `source_images/`) |
 | `source_images/` | รูปต้นฉบับที่ RRS ส่งมา |
 
 ```bash

@@ -4,7 +4,8 @@
 
 | ไฟล์ | คืออะไร |
 |---|---|
-| `build.py` | เนื้อหาและสไตล์ทั้งเล่ม – รันแล้วได้ `booklet.html` |
+| `build.py` | เนื้อหาทั้งเล่ม – รันแล้วได้ `booklet.html` |
+| `common.py` | สไตล์และฟังก์ชันจัดหน้าที่ใช้ร่วมกับสมุดหางลาก (`../trailer_booklet`) |
 | `pdf.js` | พิมพ์ `booklet.html` เป็น PDF ด้วย Playwright และรายงานหน้าที่เนื้อหาล้น |
 | `sheet.js` | ภาพรวมทุกหน้า (`sheet1.png`, `sheet2.png`) สำหรับตรวจการจัดวาง |
 | `RRS-Warranty-Logbook-FordSuperDuty.pdf` | เล่มล่าสุด |

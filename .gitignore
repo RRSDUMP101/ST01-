@@ -30,3 +30,5 @@ client_secret*.json
 docs/warranty_booklet/booklet.html
 docs/warranty_booklet/sheet*.png
 docs/warranty_booklet/p14.png
+docs/trailer_booklet/booklet.html
+docs/trailer_booklet/sheet*.png

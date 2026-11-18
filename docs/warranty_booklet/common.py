@@ -16,8 +16,8 @@ def set_footer(text):
 def page(section, body, cls=""):
     n[0] += 1
     side = "odd" if n[0] % 2 else "even"
-    L = section[0] if section[0] in "กขคงจ" else ""
-    tab = f'<div class="tab t{"กขคงจ".index(L)}">{L}</div>' if L else ""
+    L = section[0] if section[0] in "กขคงจฉช" else ""
+    tab = f'<div class="tab t{"กขคงจฉช".index(L)}">{L}</div>' if L else ""
     pages.append(f'''<section class="page {side} {cls}">{tab}<header><img src="logo.png"><span>{section}</span></header>
 <main>{body}</main><footer><span>{FOOTER[0]}</span><b>{n[0]}</b></footer></section>''')
 def raw(body, cls):
@@ -48,7 +48,7 @@ figure{margin:2mm 0 3mm;position:relative;border-radius:1.5mm;overflow:hidden}fi
 .signs.tight{margin-top:3mm!important}.signs.tight .stamp{height:18mm!important}.cardhead+h3{margin-top:2mm}
 
 .tab{position:absolute;width:8mm;height:22mm;background:#1257C8;color:#fff;font-weight:bold;font-size:12pt;display:flex;align-items:center;justify-content:center}
-.odd .tab{right:0;border-radius:2mm 0 0 2mm}.even .tab{left:0;border-radius:0 2mm 2mm 0}.t0{top:40mm}.t1{top:66mm}.t2{top:92mm}.t3{top:118mm}.t4{top:144mm}
+.odd .tab{right:0;border-radius:2mm 0 0 2mm}.even .tab{left:0;border-radius:0 2mm 2mm 0}.t0{top:40mm}.t1{top:66mm}.t2{top:92mm}.t3{top:118mm}.t4{top:144mm}.t5{top:170mm}.t6{top:196mm}
 .lead{font-size:12.5pt;color:#0B2A5B;margin-bottom:6mm}
 .cards{display:grid;grid-template-columns:1fr 1fr;gap:5mm;margin-bottom:4mm}.cards div{border:1pt solid #c9d6ea;border-top:2.5pt solid #1257C8;padding:4mm;position:relative}.cards b{position:absolute;right:4mm;top:2mm;font-size:22pt;color:#00B4F0}.cards p{margin:1.5mm 0 0;font-size:10pt}
 ol.steps li{padding-top:2.4mm!important;padding-bottom:2.4mm!important}

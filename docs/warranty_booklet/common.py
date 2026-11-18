@@ -82,7 +82,7 @@ ol.steps li{padding-top:2.4mm!important;padding-bottom:2.4mm!important}
 body{font-family:"IBM Plex Sans Thai Looped","IBM Plex Sans Thai",sans-serif;color:#2B2F36;font-size:10.5pt;line-height:1.45}
 .page{width:215mm;height:240mm;position:relative;overflow:hidden;page-break-after:always;background:#fff;padding:22mm 15mm 16mm}
 header{position:absolute;top:8mm;left:15mm;right:15mm;height:9mm;border-bottom:1.2pt solid #1257C8;display:flex;align-items:center;gap:4mm;color:#1257C8;font-weight:bold;font-size:8.5pt}
-header img{height:4.6mm}
+header img{height:5.6mm}
 footer{position:absolute;bottom:7mm;left:15mm;right:15mm;display:flex;justify-content:space-between;font-size:7.5pt;color:#7a8394}footer b{color:#1257C8;font-size:9pt}
 h1,h2,h3,h4,th,header,b,strong{font-family:"IBM Plex Sans Thai",sans-serif}h1,h2,h3{margin:0}h2{color:#0B2A5B;font-size:18pt;margin:0 0 4mm;padding-bottom:1.5mm;position:relative}h3{color:#1257C8;font-size:12pt;margin:5mm 0 2mm}h4{margin:0;color:#0B2A5B;font-size:11.5pt}
 p{margin:0 0 2.5mm}ul,ol{margin:0 0 2mm;padding-left:5.5mm}li{margin-bottom:.8mm}
@@ -92,7 +92,7 @@ td{padding:2.3mm 2.5mm;border-bottom:.5pt solid #c9d6ea;vertical-align:top}tbody
 .note{background:#EAF2FB;border-left:2.5pt solid #1257C8;padding:3mm 4mm;margin:3.5mm 0;font-size:10pt}
 .warn{border:1.5pt solid #D9480F;background:#FFF4EC;color:#8a2c05;padding:3mm 4mm;margin-top:5mm;font-size:10.5pt}
 .opener{margin:-2mm 0 5mm}.band{background:#0B2A5B;color:#fff;display:flex;align-items:center;gap:5mm;padding:4mm 5mm;border-left:5mm solid #00B4F0}
-.band h1{font-size:19pt;flex:1}.band img{height:7mm}.letter{font-size:24pt;font-weight:bold;color:#00B4F0}.sub{color:#1257C8;margin-top:1.5mm}
+.band h1{font-size:19pt;flex:1}.band img{height:9mm}.letter{font-size:24pt;font-weight:bold;color:#00B4F0}.sub{color:#1257C8;margin-top:1.5mm}
 .cover{position:absolute;inset:0;background:#fff}.stripe{position:absolute;left:0;top:0;bottom:0;width:14mm;background:linear-gradient(#3f40c4,#1257C8 45%,#00B4F0)}
 .biglogo{position:absolute;top:32mm;left:50mm;width:129mm}
 .ctitle{position:absolute;top:92mm;left:30mm;right:16mm}.ctitle small{color:#1257C8;letter-spacing:.2em;font-weight:bold;font-size:9pt}.ctitle h1{font-size:33pt;line-height:1.2;color:#0B2A5B;margin:2mm 0 3mm}.ctitle p{font-size:13pt;color:#2B2F36}

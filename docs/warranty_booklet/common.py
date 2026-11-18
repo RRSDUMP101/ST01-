@@ -63,7 +63,7 @@ def field(label, w=""):
 
 
 CSS = '''
-.tab{position:absolute;top:0;right:0;width:12mm;height:17mm;background:#1257C8;border-radius:0 0 0 3mm;display:flex;align-items:flex-end;justify-content:center;padding-bottom:3mm}.tab .ico{width:6.5mm;height:6.5mm;color:#fff}.ico.big{width:11mm;height:11mm;color:#00B4F0;display:block}.sref{white-space:nowrap;font-weight:bold;color:#1257C8}.sref .ico{width:1.05em;height:1.05em;vertical-align:-.15em;margin-right:.25em}
+.tab{position:absolute;top:109mm;right:0;width:11mm;height:22mm;background:#1257C8;border-radius:3mm 0 0 3mm;display:flex;align-items:center;justify-content:center}.tab .ico{width:6.5mm;height:6.5mm;color:#fff}.ico.big{width:11mm;height:11mm;color:#00B4F0;display:block}.sref{white-space:nowrap;font-weight:bold;color:#1257C8}.sref .ico{width:1.05em;height:1.05em;vertical-align:-.15em;margin-right:.25em}
 figure.cut{overflow:visible}figure.cut img{object-fit:contain}.cap{font-size:8.8pt;color:#0B2A5B;text-align:center;margin:0 0 2mm}.figs .narrow{flex:1}.figs .narrow figure{margin-bottom:1mm}
 
 figure{margin:2mm 0 3mm;position:relative;border-radius:1.5mm;overflow:hidden}figure img{width:100%;height:100%;object-fit:cover;display:block}figcaption{position:absolute;left:0;right:0;bottom:0;background:rgba(11,42,91,.88);color:#fff;font-size:8.8pt;padding:1.2mm 3mm}

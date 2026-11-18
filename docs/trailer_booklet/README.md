@@ -17,7 +17,7 @@ python3 build.py
 node pdf.js
 ```
 
-ฟอนต์ IBM Plex Sans Thai / Looped ต้องมีในเครื่อง (`apt-get install fonts-ibm-plex`)
+ฟอนต์ Noto Sans + Noto Sans Thai ต้องมีในเครื่อง (`apt-get install fonts-noto-core`)
 
 ## ที่มาของข้อมูล
 

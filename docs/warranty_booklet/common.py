@@ -90,6 +90,7 @@ def field(label, w=""):
 
 
 CSS = '''
+table.verdict.modern th.ok{background:#059669}table.verdict.modern th.no{background:#DC2626}table.verdict.modern .badge.ok{color:#059669}table.verdict.modern .badge.no{color:#DC2626}table.verdict.modern td.ok{background:#ECFDF5!important;color:#064E3B}table.verdict.modern tbody tr:nth-child(even) td.ok{background:#D1FAE5!important}table.verdict.modern td.no{background:#FEF2F2!important;color:#7F1D1D}table.verdict.modern tbody tr:nth-child(even) td.no{background:#FEE2E2!important}table.verdict.modern td.ok ul.vl li::marker{color:#10B981}table.verdict.modern td.no ul.vl li::marker{color:#EF4444}table.verdict.modern td{border-bottom:.8pt solid #fff!important}
 table.verdict.open{border:0;border-radius:0;border-top:2pt solid #0B2A5B;border-bottom:1.2pt solid #0B2A5B}table.verdict.open td.ok,table.verdict.open td.no{border-left:0}table.verdict.open td{border-bottom:.5pt solid #d5deea}table.verdict.open th.ok,table.verdict.open th.no{border-left:0}
 table.scope.tight td{padding:2mm 2.6mm}table.scope.tight ul.vl li{margin-bottom:.5mm}table.inline td{font-size:9.1pt;line-height:1.4}table.inline td{padding:1.7mm 2.6mm}
 table.inline ul.vl{padding-left:0;list-style:none}table.inline ul.vl li{display:inline;margin:0}table.inline ul.vl li::before{content:"•";color:#D45A5F;margin:0 1.4mm 0 0}table.inline ul.vl li+li::before{margin-left:2.6mm}table.inline td{padding:2.4mm 2.8mm}

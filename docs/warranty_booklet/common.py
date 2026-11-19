@@ -64,6 +64,13 @@ def _head(h):
     return h, ""
 
 
+def _cell(c):
+    """A list becomes a bulleted list: one condition per line, as warranty terms are set."""
+    if isinstance(c, (list, tuple)):
+        return '<ul class="vl">' + "".join(f"<li>{x}</li>" for x in c) + "</ul>"
+    return c
+
+
 def table(head, rows, widths=None, cls=""):
     cg = "".join(f'<col style="width:{w}%">' for w in widths) if widths else ""
     heads = [_head(h) for h in head]
@@ -71,7 +78,7 @@ def table(head, rows, widths=None, cls=""):
     if any(kinds):
         cls = (cls + " verdict").strip()
     th = "".join(f'<th class="{k}">{h}</th>' if k else f"<th>{h}</th>" for h, k in heads)
-    tr = "".join("<tr>" + "".join(f'<td class="{kinds[i]}">{c}</td>' if i < len(kinds) and kinds[i] else f"<td>{c}</td>"
+    tr = "".join("<tr>" + "".join(f'<td class="{kinds[i]}">{_cell(c)}</td>' if i < len(kinds) and kinds[i] else f"<td>{_cell(c)}</td>"
                                   for i, c in enumerate(r)) + "</tr>" for r in rows)
     return f'<table class="{cls}"><colgroup>{cg}</colgroup><thead><tr>{th}</tr></thead><tbody>{tr}</tbody></table>'
 def opener(letter, title, sub):
@@ -83,6 +90,10 @@ def field(label, w=""):
 
 
 CSS = '''
+table.scope.tight td{padding:2mm 2.6mm}table.scope.tight ul.vl li{margin-bottom:.5mm}table.inline td{font-size:9.1pt;line-height:1.4}table.inline td{padding:1.7mm 2.6mm}
+table.inline ul.vl{padding-left:0;list-style:none}table.inline ul.vl li{display:inline;margin:0}table.inline ul.vl li::before{content:"•";color:#D45A5F;margin:0 1.4mm 0 0}table.inline ul.vl li+li::before{margin-left:2.6mm}table.inline td{padding:2.4mm 2.8mm}
+ol.terms,ul.terms{padding-left:5.5mm;margin:0 0 3mm}ol.terms li,ul.terms li{margin-bottom:1.2mm;line-height:1.5}ol.terms li::marker{color:#1257C8;font-weight:bold}
+ul.vl{margin:0;padding-left:3.6mm}ul.vl li{margin:0 0 1.3mm;line-height:1.45}ul.vl li:last-child{margin-bottom:0}ul.vl li::marker{color:#7a8394}td.ok ul.vl li::marker{color:#2FA77A}td.no ul.vl li::marker{color:#D45A5F}.intro{line-height:1.6;margin:0 0 4mm;text-align:justify}.cond{font-size:8.6pt;color:#5b6577;font-style:normal}
 table.verdict{border-collapse:separate;border-spacing:0;border:.6pt solid #c9d6ea;border-radius:2.5mm;overflow:hidden}table.verdict th{vertical-align:middle}table.verdict th.ok{background:#0E7A55}table.verdict th.no{background:#A8262E}table.verdict tbody tr:nth-child(even) td{background:#F6F8FC}table.verdict td{border-bottom:.5pt solid #dfe6f1}table.verdict tbody tr:last-child td{border-bottom:0}table.verdict td.ok{background:#F1FAF5!important;border-left:2pt solid #2FA77A;color:#1F3B30}table.verdict td.no{background:#FDF3F3!important;border-left:2pt solid #D45A5F;color:#4A2427}table.verdict tbody tr:nth-child(even) td.ok{background:#E6F5ED!important}table.verdict tbody tr:nth-child(even) td.no{background:#FAE8E8!important}.badge{display:inline-flex;align-items:center;justify-content:center;width:5mm;height:5mm;border-radius:50%;background:#fff;margin-right:1.6mm;vertical-align:-1.2mm}.badge .mk{width:3.4mm;height:3.4mm}.badge.ok{color:#0E7A55}.badge.no{color:#A8262E}
 .tab{position:absolute;top:112mm;right:0;width:8mm;height:16mm;background:#1257C8;border-radius:2.2mm 0 0 2.2mm;display:flex;align-items:center;justify-content:center}.tab .ico{width:4.6mm;height:4.6mm;color:#fff}.ico.big{width:11mm;height:11mm;color:#fff;display:block}.sref{white-space:nowrap;font-weight:bold;color:#1257C8}.sref .ico{width:1.05em;height:1.05em;vertical-align:-.15em;margin-right:.25em}
 figure.cut{overflow:visible}figure.cut img{object-fit:contain}.cap{font-size:8.8pt;color:#0B2A5B;text-align:center;margin:0 0 2mm}.figs .narrow{flex:1}.figs .narrow figure{margin-bottom:1mm}
@@ -125,7 +136,7 @@ td{padding:2.3mm 2.5mm;border-bottom:.5pt solid #c9d6ea;vertical-align:top}tbody
 .ack{margin:4mm 0 2mm;background:#EAF2FB;padding:2.2mm 3mm}
 .signs{display:flex;gap:8mm;margin-top:9mm;font-size:9.5pt;text-align:center;align-items:flex-end}.signs div{flex:1}.signs i{display:block;border-bottom:.7pt solid #2B2F36;height:9mm;margin-bottom:1mm}.signs .stamp{border:.8pt dashed #1257C8;height:22mm;display:flex;align-items:center;justify-content:center;color:#7a8394}
 table.form td{height:10.6mm;font-size:9.6pt;vertical-align:middle}table.form td:nth-child(3){text-align:center;font-size:12pt}
-table.scope td{font-size:9.8pt;line-height:1.6;padding:3.5mm 2.5mm}
+table.scope td{font-size:9.4pt;line-height:1.45;padding:3mm 2.8mm}
 .hero{display:flex;align-items:center;gap:6mm;background:#0B2A5B;color:#fff;padding:4mm 6mm;border-left:5mm solid #00B4F0;margin-bottom:2mm}.hero b{font-size:30pt;white-space:nowrap;color:#fff}.hero span{font-size:10pt}
 ol.steps{list-style:none;padding:0;counter-reset:s}ol.steps li{counter-increment:s;position:relative;padding:1.4mm 0 1.4mm 11mm;border-bottom:.5pt solid #c9d6ea}ol.steps li:before{content:counter(s);position:absolute;left:0;top:1mm;width:7mm;height:7mm;border-radius:50%;background:#00B4F0;color:#fff;font-weight:bold;text-align:center;line-height:7mm}
 .contact{display:flex;gap:6mm;align-items:center;border:1.2pt solid #1257C8;padding:4mm;margin-top:6mm}.contact img{width:34mm}

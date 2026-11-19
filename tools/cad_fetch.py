@@ -569,19 +569,25 @@ def _links_left_out(tool: str, code: int, said: str) -> list[str]:
 
 
 def _drop_placeholders(dest: Path, entries: list[Entry], left_out: list[str]) -> list[str]:
-    """7z 25 writes an empty file where a link is to be and turns it into the link at the end – a link it then
-    refuses stays behind as that empty file (7z 23 wrote nothing). An empty file under the name of a link is not
-    what the archive holds, so it is removed: of a symbolic link always, of a hard link (whose copy may rightly be an
-    empty file) only when 7z named it as left out. `entries` passed unsafe_entries, so every path is inside dest."""
+    """7z 25 writes an empty file where a link is to be (a link to a folder too) and turns it into the link at the
+    end – a link it then refuses stays behind as that empty file (7z 23 wrote nothing). An empty file under the name
+    of a link is not what the archive holds, so it is removed: of a symbolic link always, of a hard link (whose copy
+    may rightly be an empty file) only when 7z named it as left out. Never a name that the archive also holds as a
+    file (the empty file there may be its own), and never a path that does not lie in dest (on Windows a 'D:' in a
+    part of a name leads to another drive)."""
     named = [x.replace("\\", "/") for x in left_out]
+    files = {e.path.replace("\\", "/").strip("/") for e in entries if e.link is None and not e.is_dir}
+    root = os.path.realpath(dest)
     gone = []
     for e in entries:
-        if e.link is None or e.is_dir:
+        if e.link is None:
             continue
         name = e.path.replace("\\", "/").strip("/")
-        if e.hard and not any(x == name or x.startswith(name + " : ") for x in named):
+        if name in files or (e.hard and not any(x == name or x.startswith(name + " : ") for x in named)):
             continue
         p = os.path.join(dest, *name.split("/"))
+        if os.path.commonpath([root, os.path.realpath(os.path.dirname(p))]) != root:
+            continue
         try:
             st = os.lstat(p)
         except OSError:  # nothing there: the program left the link out altogether

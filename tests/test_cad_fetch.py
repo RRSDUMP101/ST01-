@@ -545,24 +545,55 @@ def test_empty_file_left_for_a_refused_link_is_removed(tmp_path):
     said23 = "ERROR: Dangerous link path was ignored : sub/back : ../a.txt\n\nSub items Errors: 1\n"
     said25 = ("ERROR: Dangerous link path was ignored : sub/back : ../a.txt\n"
               "ERROR: Dangerous link via another link was ignored : via : l/a.txt\n"
-              "ERROR: Hard link to symbolic link was ignored : h : l\n\nSub items Errors: 3\n")
+              "ERROR: Dangerous link via another link was ignored : h : l\n"
+              "ERROR: Dangerous link path was ignored : dl : ../d\n\nSub items Errors: 4\n")
     assert cf._links_left_out("7z", 2, said23) == ["sub/back : ../a.txt"]
     left_out = cf._links_left_out("7z", 2, said25)
-    assert left_out == ["sub/back : ../a.txt", "via : l/a.txt", "h : l"]
-    assert cf._links_left_out("7z", 2, said25.replace("Errors: 3", "Errors: 4")) == []  # an error that is no link
+    assert left_out == ["sub/back : ../a.txt", "via : l/a.txt", "h : l", "dl : ../d"]
+    assert cf._links_left_out("7z", 2, "ERROR: Hard link to symbolic link was ignored : /t/h : /t/l\n\n"
+                                        "Sub items Errors: 1\n") == ["/t/h : /t/l"]
+    assert cf._links_left_out("7z", 2, said25.replace("Errors: 4", "Errors: 5")) == []  # an error that is no link
     assert cf._links_left_out("7z", 0, said25) == [] and cf._links_left_out("unar", 2, said25) == []
     dest = tmp_path / "d"
-    _write_tree(dest, {"a.txt": b"a", "sub/back": b"", "via": b"", "h": b"", "copy": b"", "empty.txt": b"", "full": b"x",
-                       "twice": b""})
+    _write_tree(dest, {"a.txt": b"a", "sub/back": b"", "via": b"", "h": b"", "dl": b"", "copy": b"", "empty.txt": b"",
+                       "full": b"x", "twice": b"", "dup": b""})
     os.link(dest / "twice", dest / "twin")  # a hard link that was made: two names for one file
     os.symlink("a.txt", dest / "kept")
     entries = [E("a.txt", 1), E("sub", is_dir=True), E("sub/back", link="../a.txt"), E("via", link="l/a.txt"),
-               E("h", link="l", hard=True), E("copy", link="empty.txt", hard=True), E("empty.txt"), E("full", link="a.txt"),
-               E("twin", link="twice", hard=True), E("twice"), E("kept", link="a.txt"), E("never", link="a.txt")]
-    assert cf._drop_placeholders(dest, entries, left_out) == ["sub/back", "via", "h"]
-    assert _read_tree(dest) == {"a.txt": b"a", "copy": b"", "empty.txt": b"", "full": b"x", "twice": b"", "twin": b""}
+               E("h", link="l", hard=True), E("dl", is_dir=True, link="../d"), E("copy", link="empty.txt", hard=True),
+               E("empty.txt"), E("full", link="a.txt"), E("twin", link="twice", hard=True), E("twice"),
+               E("kept", link="a.txt"), E("never", link="a.txt"),
+               E("dup", link="a.txt"), E("dup")]  # the same name twice: the empty file may be the archive's own
+    assert cf._drop_placeholders(dest, entries, left_out) == ["sub/back", "via", "h", "dl"]
+    assert _read_tree(dest) == {"a.txt": b"a", "copy": b"", "empty.txt": b"", "full": b"x", "twice": b"", "twin": b"",
+                                "dup": b""}
     assert os.readlink(dest / "kept") == "a.txt" and (dest / "sub").is_dir()
     assert cf._drop_placeholders(dest, entries, left_out) == []  # nothing more to take away
+    outside = tmp_path / "victim"
+    outside.write_bytes(b"")
+    os.symlink("..", dest / "up")  # a folder link out of dest that came from somewhere else: never followed
+    assert cf._drop_placeholders(dest, [E("up/victim", link="a.txt")], ["up/victim : a.txt"]) == []
+    assert outside.exists()
+
+
+def test_unpack_removes_what_7z_25_leaves_for_a_refused_link(tmp_path, monkeypatch):
+    """unpack() itself, with the extraction of 7z 25 played: the files, plus an empty file for the refused link."""
+    (tmp_path / "up.rar").write_bytes(rar5([{"name": "a.txt", "data": b"a"}, {"name": "sub/back", "link": "../a.txt"}]))
+    listing = cf.Listing("7z", "Rar5", [cf.Entry("a.txt", 1), cf.Entry("sub/back", link="../a.txt")])
+    monkeypatch.setattr(cf, "list_archive", lambda *a, **k: listing)
+    said = "ERROR: Dangerous link path was ignored : sub/back : ../a.txt\n\nSub items Errors: 1\n"
+
+    def played(tool, archive, dest, password, tick, every):
+        _write_tree(dest, {"a.txt": b"a", "sub/back": b""})
+        return 2, said
+
+    monkeypatch.setattr(cf, "_extract", played)
+    monkeypatch.setattr(cf.shutil, "which", lambda name: f"/usr/bin/{name}" if name in ("7z", "unrar") else None)
+    log = []
+    got = cf.unpack(tmp_path / "up.rar", tmp_path / "up", tools=("7z",), log=log.append)
+    assert got["tool"] == "7z" and _read_tree(tmp_path / "up") == {"a.txt": b"a"}
+    assert not os.path.lexists(tmp_path / "up" / "sub" / "back")
+    assert any("ข้ามลิงก์ 1 รายการ" in x and "sub/back" in x and "ลบไฟล์เปล่า" in x and "1 ไฟล์" in x for x in log)
 
 
 def test_unsafe_entries_rules():

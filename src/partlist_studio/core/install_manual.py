@@ -123,13 +123,14 @@ PRODUCTS: dict[str, Product] = {
                          "แบบ RRS: ด้านหน้า/หลัง/ข้าง/บน กว้าง 1960 ยาว 2600"),
     "box_body": Product("box_body", "ตู้ทึบ / ตู้แห้ง (Dry Van) เปิดข้าง-หลัง", "box", 2600, 1960, 1900,
                         "ภาพตัวอย่างในสไลด์เป็นรถบรรทุก – ขนาดสำหรับ Ranger Super Duty ต้องออกแบบใหม่ตามกรอบ BEMM"),
-    "trailer_box": Product("trailer_box", "หางลากพื้นเรียบตู้ทึบ 1.8 × 5.7 ม.", "trailer", 5700, 1800, 2300,
-                           "แบบ RRS (ZW3D \"รวมหางลาก ford\"): ตู้ 1.80 × 5.70 × 2.30 ม. ประตูข้าง 4 บานต่อด้าน · "
-                           "ยาวรวม ~7260 (คันลาก ~1480) · กว้างรวม ~2540 ที่บังโคลน – วัดจากกล่องขอบเขตในไฟล์ ต้องยืนยัน"),
+    "trailer_box": Product("trailer_box", "หางลากพื้นเรียบตู้ทึบ 1.8 × 5.7 ม.", "trailer", 5700, 1800, 2350,
+                           "แบบ RRS (ZW3D \"รวมหางลาก ford\" 19 พ.ย. 2026): ตู้ 1.80 × 5.70 × 2.35 ม. ประตูข้าง 4 บานต่อด้าน · "
+                           "ยาวรวม ~7356 ไม่รวมหัวลาก (คันลากยื่นหน้าตู้ 1556) · กว้างรวม ~2394 ที่บังโคลน – "
+                           "วัดจากกล่องขอบเขตในไฟล์ ต้องยืนยัน"),
 }
 # products taken out of the program: a saved job that still names one opens as its successor
 RETIRED_PRODUCTS = {"trailer_5m": "trailer_box"}  # the 5.0 x 1.8 m trailer of the first slide deck
-TRAILER_OUTER_WIDTH = 2540  # across the mudguards of trailer_box (from the boxes in its .Z3 file)
+TRAILER_OUTER_WIDTH = 2394  # across the mudguards of trailer_box (boxes in its .Z3 file of 19 Nov 2026)
 
 
 # --------------------------------------------------------------------------- the job

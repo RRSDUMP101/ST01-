@@ -49,10 +49,30 @@ def page(section, body, cls=""):
 def raw(body, cls):
     n[0] += 1
     pages.append(f'<section class="page {cls}">{sref(body)}</section>')
+_OK = ('<svg class="mk" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" '
+       'stroke-linejoin="round"><path d="M6 12.5l4 4 8-9"/></svg>')
+_NO = ('<svg class="mk" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round">'
+       '<path d="M7 7l10 10M17 7L7 17"/></svg>')
+
+
+def _head(h):
+    """'✔ text' / '✘ text' headers become a coloured column with a badge; returns (html, column class)."""
+    if h.startswith("✔ "):
+        return f'<span class="badge ok">{_OK}</span>{h[2:]}', "ok"
+    if h.startswith("✘ "):
+        return f'<span class="badge no">{_NO}</span>{h[2:]}', "no"
+    return h, ""
+
+
 def table(head, rows, widths=None, cls=""):
     cg = "".join(f'<col style="width:{w}%">' for w in widths) if widths else ""
-    th = "".join(f"<th>{h}</th>" for h in head)
-    tr = "".join("<tr>" + "".join(f"<td>{c}</td>" for c in r) + "</tr>" for r in rows)
+    heads = [_head(h) for h in head]
+    kinds = [k for _, k in heads]
+    if any(kinds):
+        cls = (cls + " verdict").strip()
+    th = "".join(f'<th class="{k}">{h}</th>' if k else f"<th>{h}</th>" for h, k in heads)
+    tr = "".join("<tr>" + "".join(f'<td class="{kinds[i]}">{c}</td>' if i < len(kinds) and kinds[i] else f"<td>{c}</td>"
+                                  for i, c in enumerate(r)) + "</tr>" for r in rows)
     return f'<table class="{cls}"><colgroup>{cg}</colgroup><thead><tr>{th}</tr></thead><tbody>{tr}</tbody></table>'
 def opener(letter, title, sub):
     return f'<div class="opener"><div class="band"><span class="letter">{icon(int(letter), "ico big") if str(letter).isdigit() else letter}</span><h1>{title}</h1><img src="logo_white.png"></div><p class="sub">{sub}</p></div>'
@@ -63,6 +83,7 @@ def field(label, w=""):
 
 
 CSS = '''
+table.verdict{border-collapse:separate;border-spacing:0;border:.6pt solid #c9d6ea;border-radius:2.5mm;overflow:hidden}table.verdict th{vertical-align:middle}table.verdict th.ok{background:#0E7A55}table.verdict th.no{background:#A8262E}table.verdict tbody tr:nth-child(even) td{background:#F6F8FC}table.verdict td{border-bottom:.5pt solid #dfe6f1}table.verdict tbody tr:last-child td{border-bottom:0}table.verdict td.ok{background:#F1FAF5!important;border-left:2pt solid #2FA77A;color:#1F3B30}table.verdict td.no{background:#FDF3F3!important;border-left:2pt solid #D45A5F;color:#4A2427}table.verdict tbody tr:nth-child(even) td.ok{background:#E6F5ED!important}table.verdict tbody tr:nth-child(even) td.no{background:#FAE8E8!important}.badge{display:inline-flex;align-items:center;justify-content:center;width:5mm;height:5mm;border-radius:50%;background:#fff;margin-right:1.6mm;vertical-align:-1.2mm}.badge .mk{width:3.4mm;height:3.4mm}.badge.ok{color:#0E7A55}.badge.no{color:#A8262E}
 .tab{position:absolute;top:112mm;right:0;width:8mm;height:16mm;background:#1257C8;border-radius:2.2mm 0 0 2.2mm;display:flex;align-items:center;justify-content:center}.tab .ico{width:4.6mm;height:4.6mm;color:#fff}.ico.big{width:11mm;height:11mm;color:#fff;display:block}.sref{white-space:nowrap;font-weight:bold;color:#1257C8}.sref .ico{width:1.05em;height:1.05em;vertical-align:-.15em;margin-right:.25em}
 figure.cut{overflow:visible}figure.cut img{object-fit:contain}.cap{font-size:8.8pt;color:#0B2A5B;text-align:center;margin:0 0 2mm}.figs .narrow{flex:1}.figs .narrow figure{margin-bottom:1mm}
 

@@ -123,10 +123,13 @@ PRODUCTS: dict[str, Product] = {
                          "แบบ RRS: ด้านหน้า/หลัง/ข้าง/บน กว้าง 1960 ยาว 2600"),
     "box_body": Product("box_body", "ตู้ทึบ / ตู้แห้ง (Dry Van) เปิดข้าง-หลัง", "box", 2600, 1960, 1900,
                         "ภาพตัวอย่างในสไลด์เป็นรถบรรทุก – ขนาดสำหรับ Ranger Super Duty ต้องออกแบบใหม่ตามกรอบ BEMM"),
-    "trailer_5m": Product("trailer_5m", "หางลาก ถาดยาว 5.0 ม. กว้างใน 1.8 ม. (2 เพลา)", "trailer", 5000, 1800, 2300,
-                          "ยาวรวม 6500 (คานลาก 1500) · กว้างนอก 2443.77 · สูงบรรทุก 2300 / รวม 3000"),
+    "trailer_box": Product("trailer_box", "หางลากพื้นเรียบตู้ทึบ 1.8 × 5.7 ม.", "trailer", 5700, 1800, 2300,
+                           "แบบ RRS (ZW3D \"รวมหางลาก ford\"): ตู้ 1.80 × 5.70 × 2.30 ม. ประตูข้าง 4 บานต่อด้าน · "
+                           "ยาวรวม ~7260 (คันลาก ~1480) · กว้างรวม ~2540 ที่บังโคลน – วัดจากกล่องขอบเขตในไฟล์ ต้องยืนยัน"),
 }
-TRAILER_OUTER_WIDTH = 2444
+# products taken out of the program: a saved job that still names one opens as its successor
+RETIRED_PRODUCTS = {"trailer_5m": "trailer_box"}  # the 5.0 x 1.8 m trailer of the first slide deck
+TRAILER_OUTER_WIDTH = 2540  # across the mudguards of trailer_box (from the boxes in its .Z3 file)
 
 
 # --------------------------------------------------------------------------- the job
@@ -209,7 +212,9 @@ class InstallJob:
     @classmethod
     def from_dict(cls, data: dict) -> InstallJob:
         names = {f.name for f in fields(cls)}
-        return cls(**{k: v for k, v in data.items() if k in names})
+        job = cls(**{k: v for k, v in data.items() if k in names})
+        job.product = RETIRED_PRODUCTS.get(job.product, job.product)
+        return job
 
     def save(self, path: str | Path) -> None:
         Path(path).write_text(json.dumps({"format": "rrs-install/1", "job": self.to_dict()}, ensure_ascii=False,

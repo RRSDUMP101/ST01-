@@ -47,7 +47,7 @@ def test_tray_model_follows_the_job():
     assert len([p for p in shorter.parts if p.name == "คานขวาง"]) == 4
     box = a3.build_for_job(_job(product="box_body"))
     assert any(p.name == "หลังคา" for p in box.parts) and "captive" in box.steps[2].warning and box.problems() == []
-    assert a3.build_for_job(_job(product="trailer_5m")) is None
+    assert a3.build_for_job(_job(product="trailer_box")) is None
 
 
 def test_the_13_steps_on_an_imported_model():
@@ -365,7 +365,7 @@ def test_assembly_tab(window, tmp_path):
     tab.toggle_play()
     assert not tab._playing
     # a trailer has no sample model; an imported one takes its place
-    page.inputs["product"].setCurrentIndex(page.inputs["product"].findData("trailer_5m"))
+    page.inputs["product"].setCurrentIndex(page.inputs["product"].findData("trailer_box"))
     tab.rebuild(force=True)
     assert tab.model is None and tab.bom.rowCount() == 0 and "นำเข้า" in tab.note.text()
     obj = tmp_path / "t.obj"

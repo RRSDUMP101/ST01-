@@ -72,7 +72,7 @@ def test_lamps_and_parking_sensors():
 
 
 def test_trailer_towing():
-    job = _job(product="trailer_5m")
+    job = _job(product="trailer_box")
     assert job.tow_hitch == "4.5T"
     f = im.check(job)
     assert _status(f, "atm") == im.PASS and _status(f, "mirrors") == im.WARN
@@ -81,9 +81,17 @@ def test_trailer_towing():
     assert _status(im.check(job), "atm") == im.FAIL
     job.tow_hitch = ""
     assert _status(im.check(job), "hitch") == im.FAIL
-    job = _job(product="trailer_5m", kerb_front=1300, kerb_rear=900, payload=1500, trailer_load=3500)
+    job = _job(product="trailer_box", kerb_front=1300, kerb_rear=900, payload=1500, trailer_load=3500)
     assert _status(im.check(job), "gcm") == im.FAIL
-    assert _status(im.check(_job(product="trailer_5m", trailer_led_ma=300)), "led") == im.WARN
+    assert _status(im.check(_job(product="trailer_box", trailer_led_ma=300)), "led") == im.WARN
+
+
+def test_old_trailer_taken_out(tmp_path):
+    assert "trailer_5m" not in im.PRODUCTS and im.PRODUCTS["trailer_box"].kind == "trailer"
+    path = tmp_path / "old.rrsinst"  # a job saved while the 5.0 m trailer was still offered
+    path.write_text('{"format": "rrs-install/1", "job": {"product": "trailer_5m", "body_length": 5000}}', encoding="utf-8")
+    job = im.InstallJob.load(path)
+    assert job.product == "trailer_box" and job.product_spec.kind == "trailer" and job.body_length == 5000
 
 
 def test_procedure_checklist_and_file(tmp_path):
@@ -91,7 +99,7 @@ def test_procedure_checklist_and_file(tmp_path):
     assert "mount_bolt" in tray and "fuel_filler" in tray and "tow_hitch" not in tray and "mount_flex" not in tray
     assert "mount_flex" in [s.id for s in im.procedure(_job(product="box_body"))]
     assert "fuel_filler" not in [s.id for s in im.procedure(_job(tub_removed=False))]
-    trailer = [s.id for s in im.procedure(_job(product="trailer_5m"))]
+    trailer = [s.id for s in im.procedure(_job(product="trailer_box"))]
     assert "tow_wiring" in trailer and "mount_bolt" not in trailer
     assert len({s.id for s in im.STEPS}) == len(im.STEPS) and all(s.phase in im.PHASES for s in im.STEPS)
 
@@ -133,9 +141,9 @@ def test_install_page(window, tmp_path):
     assert page.ftable.rowCount() == len(page.findings) and "✔" in page.verdict.text()
     page.inputs["cab"].setCurrentIndex(page.inputs["cab"].findData("double"))  # the 2.60 m tray on a double cab
     assert page.job.cab == "double" and page.verdict.text().startswith("❌")
-    page.inputs["product"].setCurrentIndex(page.inputs["product"].findData("trailer_5m"))
+    page.inputs["product"].setCurrentIndex(page.inputs["product"].findData("trailer_box"))
     page.apply_product()
-    assert page.job.body_length == 5000 and page.job.tow_hitch == "4.5T"
+    assert page.job.body_length == 5700 and page.job.tow_hitch == "4.5T"
     assert page.stable.rowCount() == len(im.procedure(page.job))
     row = next(r for r in range(page.stable.rowCount()) if page.stable.item(r, 0).data(Qt.UserRole) == "rcv_batt")
     page.stable.item(row, 5).setText("12.5")

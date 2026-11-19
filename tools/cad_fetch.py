@@ -24,6 +24,7 @@ import os
 import posixpath
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -553,9 +554,11 @@ def _extract(tool: str, archive: Path, dest: Path, password: str, tick, every: f
 
 def _links_left_out(tool: str, code: int, said: str) -> list[str]:
     """The links the program refused to make, when that is all it complains about: 7z and unrar leave out every
-    link with '..' in its target, also one that stays inside the folder, and end with an error code for it."""
+    link with '..' in its target, also one that stays inside the folder, and end with an error code for it.
+    7z 25 also refuses a link that is reached, or points, through another link."""
     if tool == "7z" and code == 2:
-        found = re.findall(r"Dangerous (?:symbolic )?link path was ignored : (.+)", said)
+        found = re.findall(r"(?:Dangerous (?:symbolic )?link (?:path|via another link)|Hard link to symbolic link)"
+                           r" was ignored : (.+)", said)
         errors = re.search(r"Sub items Errors: (\d+)", said)
         return found if errors and int(errors.group(1)) == len(found) else []
     if tool == "unrar" and code == 1:
@@ -563,6 +566,30 @@ def _links_left_out(tool: str, code: int, said: str) -> list[str]:
         found = [m.group(1) for m in (re.match(r"Skipping the potentially unsafe (.+) link", x) for x in lines) if m]
         return found if len(found) == len(lines) else []
     return []
+
+
+def _drop_placeholders(dest: Path, entries: list[Entry], left_out: list[str]) -> list[str]:
+    """7z 25 writes an empty file where a link is to be and turns it into the link at the end – a link it then
+    refuses stays behind as that empty file (7z 23 wrote nothing). An empty file under the name of a link is not
+    what the archive holds, so it is removed: of a symbolic link always, of a hard link (whose copy may rightly be an
+    empty file) only when 7z named it as left out. `entries` passed unsafe_entries, so every path is inside dest."""
+    named = [x.replace("\\", "/") for x in left_out]
+    gone = []
+    for e in entries:
+        if e.link is None or e.is_dir:
+            continue
+        name = e.path.replace("\\", "/").strip("/")
+        if e.hard and not any(x == name or x.startswith(name + " : ") for x in named):
+            continue
+        p = os.path.join(dest, *name.split("/"))
+        try:
+            st = os.lstat(p)
+        except OSError:  # nothing there: the program left the link out altogether
+            continue
+        if stat.S_ISREG(st.st_mode) and st.st_size == 0 and st.st_nlink == 1:
+            os.unlink(p)
+            gone.append(e.path)
+    return gone
 
 
 def _tree_size(root: Path) -> tuple[int, int]:
@@ -660,7 +687,9 @@ def unpack(archive: str | Path, dest: str | Path, *, tools: tuple[str, ...] = TO
     left_out = _links_left_out(tool, code, said)
     if left_out:
         code = 0
-        log(f"ข้ามลิงก์ {len(left_out)} รายการที่ {tool} ไม่ยอมสร้าง (ไฟล์จริงแตกครบ): " + " · ".join(left_out[:5]))
+        emptied = _drop_placeholders(dest, listing.entries, left_out) if tool == "7z" else []
+        log(f"ข้ามลิงก์ {len(left_out)} รายการที่ {tool} ไม่ยอมสร้าง (ไฟล์จริงแตกครบ): " + " · ".join(left_out[:5])
+            + (f" – ลบไฟล์เปล่าที่ {tool} วางไว้แทนลิงก์ {len(emptied)} ไฟล์" if emptied else ""))
     if code != 0:
         _archive_fault(said, archive)
         hint = ""

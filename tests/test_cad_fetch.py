@@ -539,6 +539,32 @@ def test_links_out_are_refused_links_inside_are_kept(tmp_path):
     assert any("ข้ามลิงก์ 1 รายการ" in line and "sub/back" in line for line in log)
 
 
+def test_empty_file_left_for_a_refused_link_is_removed(tmp_path):
+    """7z 25 leaves an empty file where it refused a link (7z 23 left nothing): made by hand, no 7z needed."""
+    E = cf.Entry
+    said23 = "ERROR: Dangerous link path was ignored : sub/back : ../a.txt\n\nSub items Errors: 1\n"
+    said25 = ("ERROR: Dangerous link path was ignored : sub/back : ../a.txt\n"
+              "ERROR: Dangerous link via another link was ignored : via : l/a.txt\n"
+              "ERROR: Hard link to symbolic link was ignored : h : l\n\nSub items Errors: 3\n")
+    assert cf._links_left_out("7z", 2, said23) == ["sub/back : ../a.txt"]
+    left_out = cf._links_left_out("7z", 2, said25)
+    assert left_out == ["sub/back : ../a.txt", "via : l/a.txt", "h : l"]
+    assert cf._links_left_out("7z", 2, said25.replace("Errors: 3", "Errors: 4")) == []  # an error that is no link
+    assert cf._links_left_out("7z", 0, said25) == [] and cf._links_left_out("unar", 2, said25) == []
+    dest = tmp_path / "d"
+    _write_tree(dest, {"a.txt": b"a", "sub/back": b"", "via": b"", "h": b"", "copy": b"", "empty.txt": b"", "full": b"x",
+                       "twice": b""})
+    os.link(dest / "twice", dest / "twin")  # a hard link that was made: two names for one file
+    os.symlink("a.txt", dest / "kept")
+    entries = [E("a.txt", 1), E("sub", is_dir=True), E("sub/back", link="../a.txt"), E("via", link="l/a.txt"),
+               E("h", link="l", hard=True), E("copy", link="empty.txt", hard=True), E("empty.txt"), E("full", link="a.txt"),
+               E("twin", link="twice", hard=True), E("twice"), E("kept", link="a.txt"), E("never", link="a.txt")]
+    assert cf._drop_placeholders(dest, entries, left_out) == ["sub/back", "via", "h"]
+    assert _read_tree(dest) == {"a.txt": b"a", "copy": b"", "empty.txt": b"", "full": b"x", "twice": b"", "twin": b""}
+    assert os.readlink(dest / "kept") == "a.txt" and (dest / "sub").is_dir()
+    assert cf._drop_placeholders(dest, entries, left_out) == []  # nothing more to take away
+
+
 def test_unsafe_entries_rules():
     E = cf.Entry
     fine = [E("a/b.txt", 1), E("a", is_dir=True), E("a/l", link="b.txt"), E("a/up", link="../a/b.txt")]

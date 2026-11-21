@@ -306,7 +306,7 @@ duratray ตะแกรงห้นา1 → ตะแกรงหน้า (ก
 
 ### 6.3 นำโมเดลจริงจาก CAD เข้า
 
-ปุ่ม **นำเข้าโมเดล (STEP / IGES / OBJ / STL)…** · โค้ด `core/cad_import.py` · บรรทัดคำสั่ง
+ปุ่ม **นำเข้าโมเดล (STEP / IGES / ZW3D / OBJ / STL)…** · โค้ด `core/cad_import.py` (ไฟล์ ZW3D `.Z3`: `core/z3_model.py` – ชิ้นเป็นกล่องตามตำแหน่ง + คำเตือนของแบบ ดู `docs/TRAILER_INSTALL.md` ข้อ 5.3) · บรรทัดคำสั่ง
 `python tools/cad_to_rrsasm.py <ไฟล์.igs|.stp> <ผลลัพธ์.rrsasm> [--max-faces N] [--up y|z]`
 
 | ไฟล์ | ได้อะไร | หมายเหตุ |

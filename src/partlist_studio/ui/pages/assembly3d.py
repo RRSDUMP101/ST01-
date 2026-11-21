@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComb
 from ...core import assembly3d as a3
 from ...core import cad_import
 from ...core import install_manual as im
+from ...core import z3_model
 from ..assembly_view import Assembly3DView
 from ..part_popup import PartPopup, encode_photo
 from ..state import AppState
@@ -24,8 +25,8 @@ from ..widgets import FlowLayout, button, fill, run_async, table
 PART_HEADERS = ["แสดง", "ชิ้นส่วน", "กลุ่ม", "ขั้น", "ขนาด", "Part No."]
 C_SHOW, C_NAME, C_GROUP, C_STEP, C_SIZE, C_PN = range(6)
 BOM_HEADERS = ["#", "ชิ้นส่วน", "ขนาด", "Part No.", "จำนวน"]
-MODEL_FILTER = ("โมเดล 3 มิติ (*.step *.stp *.igs *.iges *.obj *.stl);;CAD: STEP / IGES (*.step *.stp *.igs *.iges);;"
-                "Mesh: OBJ / STL (*.obj *.stl)")
+MODEL_FILTER = ("โมเดล 3 มิติ (*.step *.stp *.igs *.iges *.z3 *.z3asm *.obj *.stl);;CAD: STEP / IGES (*.step *.stp *.igs *.iges);;"
+                "ZW3D (*.z3 *.z3asm *.z3prt);;Mesh: OBJ / STL (*.obj *.stl)")
 ALL_GROUPS = "ทุกกลุ่ม"
 JOB_KEYS = ("product", "cab", "body_length", "body_width", "body_height", "cab_gap", "bolt_size", "bolt_grade",
             "rigid_subframe", "lamp_low", "lamp_high", "lamp_from_edge")
@@ -61,9 +62,9 @@ class AssemblyTab(QWidget):
         row.addWidget(self.title, 1)
         for text, slot, kind, tip in (
                 ("สร้างจากงานนี้", lambda: self.rebuild(force=True), "", "โมเดลตัวอย่างจากขนาดในแท็บ ข้อมูลงาน"),
-                ("นำเข้าโมเดล (STEP / IGES / OBJ / STL)…", lambda: self.import_files(), "accent",
-                 "โมเดลจริงจาก CAD: STEP หรือ IGES ทั้งชุดประกอบ (ต้องติดตั้ง cadquery-ocp) · หรือ OBJ (1 object ต่อ 1 ชิ้น) "
-                 "· หรือ STL (1 ไฟล์ต่อ 1 ชิ้น)"),
+                ("นำเข้าโมเดล (STEP / IGES / ZW3D / OBJ / STL)…", lambda: self.import_files(), "accent",
+                 "โมเดลจริงจาก CAD: STEP หรือ IGES ทั้งชุดประกอบ (ต้องติดตั้ง cadquery-ocp) · ไฟล์ ZW3D .Z3 (ชิ้นเป็นกล่องตามตำแหน่ง"
+                 " + คำเตือนของแบบ) · หรือ OBJ (1 object ต่อ 1 ชิ้น) · หรือ STL (1 ไฟล์ต่อ 1 ชิ้น)"),
                 ("เปิด…", lambda: self.open_model(), "", "เปิดไฟล์คู่มือประกอบ (.rrsasm)"),
                 ("บันทึก…", lambda: self.save_model(), "", "บันทึกโมเดล + ขั้นตอน (.rrsasm)"),
                 ("คู่มือประกอบ PDF", lambda: self.export_pdf(), "primary", "ภาพ 3 มิติทุกขั้น + ตารางชิ้นส่วน + จุดตรวจ")):
@@ -308,7 +309,7 @@ class AssemblyTab(QWidget):
         self.title.setText(model.name if model else "ยังไม่มีโมเดล 3 มิติสำหรับผลิตภัณฑ์นี้")
         problems = model.problems() if model else []
         self._show_note((model.note if model else
-                         "หางลากยังไม่มีโมเดลตัวอย่าง – นำเข้าโมเดลจริงจาก CAD (STEP / IGES / OBJ / STL)"), problems)
+                         "หางลากยังไม่มีโมเดลตัวอย่าง – นำเข้าแบบจริงจาก CAD (ไฟล์ ZW3D .Z3 ของหาง หรือ STEP / IGES / OBJ / STL)"), problems)
         self._fill_groups()
         self._fill_parts()
         self._options_changed()
@@ -937,6 +938,10 @@ class AssemblyTab(QWidget):
             paths, _ = QFileDialog.getOpenFileNames(self, "เลือกโมเดล 3 มิติจาก CAD", "", MODEL_FILTER)
         if not paths:
             return None
+        z3 = [p for p in paths if z3_model.is_z3_file(p)]
+        if z3:  # read on a worker: the model is set when it is done
+            self.import_z3(z3[0], ignored=len(paths) - 1)
+            return None
         cad = [p for p in paths if cad_import.is_cad_file(p)]
         if cad:  # read on a worker: the model is set when it is done
             self.import_cad(cad[0], ignored=len(paths) - 1)
@@ -950,6 +955,34 @@ class AssemblyTab(QWidget):
         self.state.notify(f"นำเข้า {len(model.parts)} ชิ้น {a3.face_count(model):,} หน้า · {len(model.steps)} กลุ่ม/ขั้น – "
                           "แก้ชื่อ กลุ่ม และขั้นในตารางได้")
         return model
+
+    def import_z3(self, path: str, ignored: int = 0) -> bool:
+        """A ZW3D file: its parts as boxes where the file places them, the design's faults in the note. Read on a
+        worker thread (a big assembly takes a few seconds)."""
+        if self._cad_busy:
+            self.state.notify(f"กำลังนำเข้า {self._cad_busy} อยู่ – รอให้เสร็จก่อน")
+            return False
+        name, note = Path(path).name, self.note.text()
+        self._cad_busy = name
+        self.note.setText(f"กำลังอ่านไฟล์ ZW3D {name} …")
+        if ignored:
+            self.state.notify(f"นำเข้าไฟล์ CAD ได้ครั้งละ 1 ไฟล์ – ใช้ {name} (อีก {ignored} ไฟล์ไม่ได้นำเข้า)")
+
+        def done(got) -> None:
+            self._cad_busy = ""
+            model, check = got
+            self.set_model(model)
+            warn = len(check.lines())
+            self.state.notify(f"เปิด {name}: {len(model.parts)} ชิ้น (กล่องตามตำแหน่งในแบบ) · {len(model.steps)} ขั้น"
+                              + (f" · คำเตือนของแบบ {warn} ข้อ – ชี้เมาส์ที่บันทึกใต้ชื่อโมเดลเพื่อดู" if warn else ""))
+
+        def failed(message: str) -> None:
+            self._cad_busy = ""
+            self.note.setText(note)
+            QMessageBox.warning(self, "นำเข้าโมเดล", f"เปิด {name} ไม่ได้\n\n{message}")
+
+        run_async(z3_model.model_from_z3, done, failed, path)
+        return True
 
     def import_cad(self, path: str, ignored: int = 0, use=None) -> bool:
         """STEP / IGES: read by OpenCascade behind a worker thread (in a child process, see `read_cad_isolated`),

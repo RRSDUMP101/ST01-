@@ -1,0 +1,186 @@
+"""A ZW3D file opened as a 3D assembly (core/z3_model.py): boxes where the file places them, the box trailer's 13 steps,
+and what is wrong with the design. The files are made here, like in test_z3_reader – never a file of a customer."""
+
+import os
+import time
+
+import numpy as np
+import pytest
+from test_z3_reader import Z3Builder, move, write
+
+from partlist_studio.core import assembly3d as a3
+from partlist_studio.core import z3_model as zm
+from partlist_studio.core import z3_reader as zr
+
+
+def trailer(tmp_path, name: str = "รวมหางลาก ford.Z3"):
+    """A small box trailer drawn like the RRS one: +Y to the rear, Z up, model +X = the left of the vehicle."""
+    b = Z3Builder(fmt=3000)
+    top = b.obj3d("รวมหางลาก ford")
+    b.obj3d("4x5500 p2", box=(-45, 45, -2845, 2845, -282, 0))
+    b.obj3d("4x5500 p2_Mirror_1", box=(-45, 45, -2845, 2795, -282, 0))  # 50 shorter: the RRS rails differ like this
+    b.obj3d("บน p4", box=(-900, 900, -25, 25, -72, 0))
+    b.obj3d("พื้นตีนไก่", box=(-900, 900, -2850, 2850, 0, 5))
+    b.obj3d("ตู้ p1", box=(-25, 25, -50, 50, 0, 2250))
+    b.obj3d("ตู้ p1_Mirror", box=(-25, 25, -50, 50, 0, 2250))
+    door = b.obj3d("ประตูตู้ 1", box=(-18, 18, -700, 700, 0, 2200))  # an assembly with a shape of its own
+    door2 = b.obj3d("ประตูตู้ 1_Mirror_6", box=(-18, 18, -700, 700, 0, 2200))
+    b.obj3d("บานพับ ใหญ่", box=(0, 70, -50, 50, 0, 100))
+    b.obj3d("Part002", box=(0, 25, -30, 30, 0, 40))
+    b.obj3d("Part005", box=(-900, 900, 0, 150, 0, 54))
+    b.obj3d("ล่าง p4", box=(-50, 50, -1500, 0, 0, 50))
+    b.obj3d("Part006", box=(-150, 150, -4400, 0, 0, 7))  # the plate under the drawbar reaches its tip
+    b.obj3d("ล่าง p1", box=(-100, 100, -8000, 0, 0, 100))  # stale: 8 m of drawbar
+    b.obj3d("ไฟหลังสีแดง", box=(-45, 45, 0, 28, 0, 87))
+    b.obj3d("กันนำ้บนหลังคา", box=(-900, 900, -2850, 2850, 0, 30))  # sara am before mai tho, as in the RRS file
+    b.obj3d("แบบเก่า", box=(0, 10, 0, 10, 0, 10))  # in the file, used by nothing
+    b.component(top, "4x5500 p2", at=move(857, 0, 707))
+    b.component(top, "4x5500 p2_Mirror_1", at=move(-857, 0, 707))
+    for k, y in enumerate((-600, 0, 600)):
+        b.component(top, "บน p4", instance=f"บน p4_{k + 1}", at=move(0, y, 698))
+    b.component(top, "พื้นตีนไก่", at=move(0, 0, 700))
+    b.component(top, "ตู้ p1", at=move(875, -2800, 705))
+    b.component(top, "ตู้ p1_Mirror", at=move(-875, -2800, 705))
+    b.component(top, "ประตูตู้ 1", at=move(900, -1500, 750))
+    b.component(top, "ประตูตู้ 1_Mirror_6", at=move(-900, -1500, 750))
+    b.component(door, "บานพับ ใหญ่", instance="บานพับ ใหญ่_1", at=move(18, -650, 200))
+    b.component(door2, "บานพับ ใหญ่", instance="บานพับ ใหญ่_1", at=move(-88, -650, 200))
+    b.component(top, "Part002", instance="Part002_1", at=move(900, -2200, 700))  # on the +X side only
+    b.component(top, "Part002", instance="Part002_2", at=move(900, -800, 700))
+    b.component(top, "Part005", instance="Part005_1", at=move(0, 2800, 2955))
+    b.component(top, "Part005", instance="Part005_2", at=move(0, 2800, 2955))  # the same place twice
+    b.component(top, "ล่าง p4", at=move(0, -2850, 450))
+    b.component(top, "Part006", at=move(0, 0, 441))
+    b.component(top, "ล่าง p1", at=move(0, -2850, 450))
+    b.component(top, "ไฟหลังสีแดง", instance="ไฟหลังสีแดง_1", at=move(700, 2860, 2900))
+    b.component(top, "ไฟหลังสีแดง", instance="ไฟหลังสีแดง_2", at=move(-700, 2860, 2900))
+    b.component(top, "กันนำ้บนหลังคา", at=move(0, 0, 3000))
+    return write(tmp_path, b.build(), name)
+
+
+def by_cad(model, text):
+    return [p for p in model.parts if p.name == text or f"ชื่อในไฟล์: {text}" in p.note]
+
+
+def test_the_box_trailer_opens_as_boxes_in_its_13_steps(tmp_path):
+    model, check = zm.model_from_z3(trailer(tmp_path))
+    assert model.name == "รวมหางลาก ford" and model.source == "file" and model.problems() == []
+    assert [n for n, s in enumerate(model.steps, 1) if s.no_parts] == [3, 5, 10, 11, 13]  # no part of this model
+    assert len(model.parts) == 22  # 20 parts + the 2 door leaves, which are assemblies with a shape of their own
+    assert check.bodies == 2 and all(p.shape == "box" for p in model.parts)
+    assert len(model.steps) == 13 and model.steps[0].phase == zm.TRAILER_PHASES[0] and model.steps[12].no_parts
+    steps = {p.group: p.step for p in model.parts}
+    assert steps == {"คานแม่": 1, "คานขวาง": 2, "พื้นตู้": 6, "โครงตู้": 7, "หลังคา": 8, "ประตูข้าง": 9, "คันลาก": 4,
+                     "ไฟ + ป้าย": 12}
+    # axes: X(program) = Y(file) to the rear, Y(program) = -X(file) = right of the vehicle, Z up
+    rail = [p for p in model.parts if p.group == "คานแม่"]
+    left = next(p for p in rail if p.centre()[1] < 0)
+    lo, hi = left.bounds()
+    assert np.allclose(lo, (-2845, -902, 425)) and np.allclose(hi, (2845, -812, 707)) and "ซ้าย" in left.name
+    assert "ขวา" in next(p for p in rail if p.centre()[1] > 0).name
+    # the 2 door leaves named by where they are; the file name stays in the note
+    leaves = sorted(p.name for p in model.parts if p.name.startswith("ประตูข้าง"))
+    assert leaves == ["ประตูข้างขวา บานที่ 1", "ประตูข้างซ้าย บานที่ 1"]
+    assert "ชื่อในไฟล์: ประตูตู้ 1" in next(p for p in model.parts if p.name == "ประตูข้างซ้าย บานที่ 1").note
+    # misspelling of the file corrected for the technician, and still known by its own spelling
+    roof = by_cad(model, "กันนำ้บนหลังคา")
+    assert len(roof) == 1 and roof[0].name == "กันน้ำบนหลังคา" and roof[0].group == "หลังคา"
+    assert "กล่องขอบเขต" in model.note and "13 ขั้น" in model.note
+
+
+def test_what_is_wrong_with_the_design_is_found(tmp_path):
+    model, check = zm.model_from_z3(trailer(tmp_path))
+    assert check.duplicates == [("Part005_1", "Part005_2")]
+    assert check.stale == ["ล่าง p1"]  # cut back to the other parts: the drawbar ends where Part006 ends
+    stale = next(p for p in model.parts if p.name.startswith("ล่าง p1"))
+    assert stale.bounds()[0][0] == pytest.approx(-4400) and "กล่องเกินชิ้นจริง" in stale.note
+    assert check.alone == {"Part002": 2}  # on one side only
+    assert check.uneven == [("4x5500 p2", pytest.approx(50))]
+    assert check.unused == 1 and check.unused_names == ["แบบเก่า"]
+    for text in ("ชิ้นวางซ้ำที่เดียวกัน: Part005_1 = Part005_2", "ไม่มีคู่อีกด้าน: Part002 2 ชิ้น",
+                 "ซ้าย/ขวาไม่เท่ากัน 50 มม.: 4x5500 p2", "วัตถุในไฟล์ที่ไม่ได้ใช้ในชุดประกอบ 1 รายการ"):
+        assert text in model.note
+    assert f"คำเตือนของแบบ {len(check.lines())} ข้อ" in model.note
+    lo, hi = model.bounds()
+    assert lo[0] == pytest.approx(-4400) and hi[0] == pytest.approx(2950)  # the stale box no longer sets the length
+
+
+def test_any_other_z3_gets_a_step_per_group(tmp_path):
+    b = Z3Builder()
+    top = b.obj3d("ชุดทดสอบ")
+    b.obj3d("แผ่น", box=(0, 100, 0, 50, 0, 5))
+    b.obj3d("เสา", box=(0, 20, 0, 20, 0, 300))
+    b.component(top, "แผ่น", at=move(0, 0, 0))
+    b.component(top, "เสา", n=2, at=move(10, 10, 5))
+    model, check = zm.model_from_z3(write(tmp_path, b.build(), "ชุดทดสอบ.Z3"))
+    assert len(model.parts) == 3 and len(model.steps) == 2 and "13 ขั้น" not in model.note
+    assert {p.group for p in model.parts} == {"แผ่น", "เสา"} and check.bodies == 0
+
+
+def test_a_file_that_cannot_be_opened_says_so_in_thai(tmp_path):
+    with pytest.raises(zr.Z3Error):
+        zm.model_from_z3(write(tmp_path, b"not a ZW3D file" * 40, "เสีย.Z3"))
+    b = Z3Builder()
+    b.obj3d("ว่าง")  # a part with no box: nothing to draw
+    with pytest.raises(zr.Z3Error, match="ไม่มีชิ้นที่มีตำแหน่งและขนาด"):
+        zm.model_from_z3(write(tmp_path, b.build(), "ว่าง.Z3"))
+    assert zm.is_z3_file("a.Z3") and zm.is_z3_file("b.z3asm") and not zm.is_z3_file("c.step")
+
+
+def test_saved_and_opened_again_as_rrsasm(tmp_path):
+    model, _check = zm.model_from_z3(trailer(tmp_path))
+    model.save(tmp_path / "หาง.rrsasm")
+    back = a3.AssemblyModel.load(tmp_path / "หาง.rrsasm")
+    assert [(p.name, p.step, p.group) for p in back.parts] == [(p.name, p.step, p.group) for p in model.parts]
+    assert back.note == model.note and len(back.steps) == 13
+
+
+@pytest.fixture(scope="module")
+def app():
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    QtWidgets = pytest.importorskip("PySide6.QtWidgets")
+    return QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+
+
+def test_the_page_opens_a_z3_on_a_worker(app, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+
+    from partlist_studio.ui.main_window import MainWindow
+    from partlist_studio.ui.pages import assembly3d as page
+    from partlist_studio.ui.state import AppState
+
+    w = MainWindow(AppState(data_dir=tmp_path / "data"))
+    try:
+        w.go("install")
+        tab = w.pages["install"].assembly
+        assert "*.z3" in page.MODEL_FILTER and "*.z3asm" in page.MODEL_FILTER
+        path = trailer(tmp_path)
+        assert tab.import_files([str(path)]) is None and tab._cad_busy == path.name
+        assert not tab.import_z3(str(path))  # one at a time
+        end = time.monotonic() + 30
+        while tab._cad_busy and time.monotonic() < end:
+            app.processEvents()
+            time.sleep(0.01)
+        app.processEvents()
+        assert not tab._cad_busy and tab.model is not None and len(tab.model.parts) == 22
+        assert tab.title.text() == "รวมหางลาก ford" and "คำเตือนของแบบ" in tab.note.text()
+        assert tab.parts.rowCount() == 22 and len(tab.model.steps) == 13
+        tab.go(9, animate=False)
+        assert tab.bom.rowCount() >= 2
+        tab.view.resize(600, 400)
+        assert not tab.view.render_image(600, 400, fit=True).isNull()
+        # a file that cannot be read: told, and the model stays
+        said = []
+        monkeypatch.setattr(QMessageBox, "warning", lambda _parent, title, text: said.append((title, text)))
+        kept = tab.model
+        bad = write(tmp_path, b"junk" * 100, "เสีย.Z3")
+        tab.import_files([str(bad)])
+        end = time.monotonic() + 30
+        while tab._cad_busy and time.monotonic() < end:
+            app.processEvents()
+            time.sleep(0.01)
+        app.processEvents()
+        assert tab.model is kept and said and said[-1][0] == "นำเข้าโมเดล" and "เสีย.Z3" in said[-1][1]
+    finally:
+        w.state.dirty = False
+        w.close()

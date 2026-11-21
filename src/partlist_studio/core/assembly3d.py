@@ -89,6 +89,8 @@ class Part3D:
     level: str = ""  # the designer's level, taken from another file of the same assembly (adopt_groups)
     file_group: str = ""  # the group before the 13 steps gave the part the group the technician reads …
     auto_group: str = ""  # … and that group: while `group` still is this one, sorting again starts from file_group
+    drawing: str = ""  # the 2D drawing of the CAD file that shows the part ('ประตูตู้ 1_2D') …
+    drawing_how: str = ""  # … and why that one: its own, its mirrored twin's, its assembly's, the general drawing
 
     def detailed(self) -> Part3D:
         """The part with its real shape where it has one besides the box it is drawn as; else the part itself."""
@@ -138,6 +140,7 @@ class Step:
     ref: str = ""  # BEMM section
     no_parts: bool = False  # a step of work or checking that fits no new part (it is not a mistake that it is empty)
     phase: str = ""  # the part of the work the step belongs to: 'งานบนจิ๊ก' · 'ยกขึ้นรถ' · 'งานบนรถ'
+    items: list = field(default_factory=list)  # bought-in items with no CAD shape: [{'name': …, 'qty': 2 or ''}]
 
     @classmethod
     def from_dict(cls, d: dict) -> Step:
@@ -163,6 +166,7 @@ class AssemblyModel:
     source: str = "auto"  # 'auto' = built from the job (rebuilt when the job changes) · 'file' = imported / edited
     note: str = ""
     photos: dict = field(default_factory=dict)  # part name → a photo of the real part (JPEG, base64) for its detail card
+    drawing_files: dict = field(default_factory=dict)  # 2D drawing name → a PDF / picture of it exported from the CAD
 
     def groups(self) -> list[str]:
         out: list[str] = []
@@ -247,7 +251,8 @@ class AssemblyModel:
     def to_dict(self) -> dict:
         return {"format": "rrs-assembly/1", "name": self.name, "source": self.source, "note": self.note,
                 "steps": [asdict(s) for s in self.steps], "parts": [asdict(p) for p in self.parts],
-                **({"photos": self.photos} if self.photos else {})}
+                **({"photos": self.photos} if self.photos else {}),
+                **({"drawing_files": self.drawing_files} if self.drawing_files else {})}
 
     @classmethod
     def from_dict(cls, d: dict) -> AssemblyModel:
@@ -255,7 +260,8 @@ class AssemblyModel:
             raise ValueError("ไม่ใช่ไฟล์โมเดลประกอบ (ไม่มี parts)")
         return cls(str(d.get("name", "")), [Part3D.from_dict(p) for p in d["parts"]],
                    [Step.from_dict(s) for s in d.get("steps", [])], str(d.get("source", "file")), str(d.get("note", "")),
-                   {str(k): str(v) for k, v in (d.get("photos") or {}).items()})
+                   {str(k): str(v) for k, v in (d.get("photos") or {}).items()},
+                   {str(k): str(v) for k, v in (d.get("drawing_files") or {}).items()})
 
     def save(self, path: str | Path) -> None:
         Path(path).write_text(json.dumps(self.to_dict(), ensure_ascii=False), encoding="utf-8")
@@ -263,6 +269,28 @@ class AssemblyModel:
     @classmethod
     def load(cls, path: str | Path) -> AssemblyModel:
         return cls.from_dict(json.loads(Path(path).read_text(encoding="utf-8")))
+
+
+# --------------------------------------------------------------------------- bought-in items
+_ITEM = re.compile(r"^(.*?)\s*[×xX]\s*(\d+)\s*$")
+
+
+def items_text(items: list) -> str:
+    """The bought-in items of a step as one line to edit: 'หัวลาก Ø50 × 1; โซ่นิรภัย × 2; ไฟส่องป้าย'."""
+    return "; ".join(f"{i['name']} × {i['qty']}" if i.get("qty") not in ("", None) else i["name"] for i in items)
+
+
+def parse_items(text: str) -> list[dict]:
+    """The line back: '; ' between items, ' × n' (or ' x n') at the end of one gives how many; none = not known yet."""
+    out = []
+    for piece in re.split(r"[;\n]", text):
+        piece = piece.strip()
+        if not piece:
+            continue
+        m = _ITEM.match(piece)
+        out.append({"name": m.group(1).strip(), "qty": int(m.group(2))} if m and m.group(1).strip() else
+                   {"name": piece, "qty": ""})
+    return out
 
 
 # --------------------------------------------------------------------------- imported models
@@ -1162,10 +1190,15 @@ def part_details(model: AssemblyModel, part: Part3D, job=None) -> dict:
                              ("คำเตือน", step.warning), ("อ้างอิง BEMM", step.ref)):
             if value:
                 rows.append((label, value))
+    if part.drawing:
+        attached = model.drawing_files.get(part.drawing, "")
+        rows.append(("แบบ 2 มิติ", f"{part.drawing}" + (f" ({part.drawing_how})" if part.drawing_how else "")
+                     + (" · แนบไฟล์แล้ว" if attached else " · ยังไม่ได้แนบไฟล์ PDF ที่ส่งออกจาก CAD")))
     rows.append(("ตำแหน่งกลางชิ้น", f"X {c[0]:,.0f} · Y {c[1]:,.0f} · Z {c[2]:,.0f} มม."))
     subtitle = " · ".join(x for x in (part.group, f"ขั้นที่ {part.step}" if step is not None else "", part.part_no) if x)
     return {"title": part.name, "subtitle": subtitle, "description": step.detail if step is not None else "", "rows": rows,
-            "step": part.step if step is not None else 0, "count": len(same), "photo": model.photos.get(part.name, "")}
+            "step": part.step if step is not None else 0, "count": len(same), "photo": model.photos.get(part.name, ""),
+            "drawing": part.drawing, "drawing_file": model.drawing_files.get(part.drawing, "") if part.drawing else ""}
 
 
 def build_for_job(job) -> AssemblyModel | None:
@@ -1191,6 +1224,13 @@ def render_steps_html(model: AssemblyModel, images: dict, job_no: str = "", done
         return "".join(f"<tr><td align='center'>{b.no}</td><td>{e(b.name)}</td><td>{e(b.size)}</td><td>{e(b.part_no)}</td>"
                        f"<td align='center'>{b.qty}</td></tr>" for b in lines)
 
+    def bought(step: Step) -> str:  # items with no CAD shape: under the parts, marked so
+        if not step.items:
+            return ""
+        return ("<tr><td colspan='5' bgcolor='#FFF4E5'><b>ชิ้นซื้อสำเร็จ (ไม่มีแบบ CAD)</b></td></tr>"
+                + "".join(f"<tr><td align='center'>ซ</td><td colspan='3'>{e(i['name'])}</td>"
+                          f"<td align='center'>{e(str(i.get('qty', '')) or 'ระบุ')}</td></tr>" for i in step.items))
+
     for n, s in enumerate(model.steps, 1):
         plan = step_plan(model, n)
         pictures = images.get(n)
@@ -1208,9 +1248,9 @@ def render_steps_html(model: AssemblyModel, images: dict, job_no: str = "", done
         ref = f"<p style='color:#6B7A90'>BEMM {e(s.ref)}</p>" if s.ref else ""
         if plan is None:
             rows = rows_of(model.bom(n))
-            if not rows and s.no_parts:
+            if not rows and s.no_parts and not s.items:
                 rows = "<tr><td colspan='5' style='color:#6B7A90'>ขั้นนี้เป็นงาน / การตรวจ – ไม่มีชิ้นส่วนใหม่</td></tr>"
-            blocks.append(head + table + cols + rows + "</table>" + ref)
+            blocks.append(head + table + cols + rows + bought(s) + "</table>" + ref)
             continue
         # a crowded step: the picture of all groups, a table of the groups, then the groups with their numbers
         summary = (f"<p><b>ขั้นนี้มี {len(plan.groups)} กลุ่ม · {len(plan.lines)} รายการ · {sum(plan.pieces.values())} ชิ้น</b> – "
@@ -1221,7 +1261,7 @@ def render_steps_html(model: AssemblyModel, images: dict, job_no: str = "", done
         for g in plan.groups:
             out.append(f"<tr><td bgcolor='{plan.colour[g]}'></td><td><b>{e(g)}</b></td><td align='center'>{len(plan.of_group[g])}"
                        f"</td><td align='center'>{plan.pieces[g]}</td><td align='center'>{plan.span(g)[2:]}</td></tr>")
-        out.append("</table>" + ref)
+        out.append("</table>" + (table + cols + bought(s) + "</table>" if s.items else "") + ref)
         details = pictures[1:] or [("", groups) for groups in pdf_pictures(plan)]  # no pictures given: the lists alone
         for i, (file, groups) in enumerate(details, 1):
             out.append(f"<h3 style='page-break-before:always'>ขั้นที่ {n} · ภาพย่อย {i} / {len(details)} – {e(' · '.join(groups))}</h3>"

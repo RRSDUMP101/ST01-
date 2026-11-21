@@ -55,6 +55,10 @@ def trailer(tmp_path, name: str = "รวมหางลาก ford.Z3"):
     b.component(top, "ไฟหลังสีแดง", instance="ไฟหลังสีแดง_1", at=move(700, 2860, 2900))
     b.component(top, "ไฟหลังสีแดง", instance="ไฟหลังสีแดง_2", at=move(-700, 2860, 2900))
     b.component(top, "กันนำ้บนหลังคา", at=move(0, 0, 3000))
+    b.drawing("ประตูตู้ 1_2D")  # the 2D drawings of the file: one of a door, one of the whole
+    b.component(-1, "ประตูตู้ 1", instance="")
+    b.drawing("รวมหางลาก ford_2D")
+    b.component(-1, "รวมหางลาก ford", instance="")
     return write(tmp_path, b.build(), name)
 
 
@@ -103,6 +107,41 @@ def test_what_is_wrong_with_the_design_is_found(tmp_path):
     assert f"คำเตือนของแบบ {len(check.lines())} ข้อ" in model.note
     lo, hi = model.bounds()
     assert lo[0] == pytest.approx(-4400) and hi[0] == pytest.approx(2950)  # the stale box no longer sets the length
+
+
+def test_every_part_knows_its_drawing_and_the_steps_their_bought_in_items(tmp_path):
+    model, _check = zm.model_from_z3(trailer(tmp_path))
+    door = by_cad(model, "ประตูตู้ 1")[0]
+    assert (door.drawing, door.drawing_how) == ("ประตูตู้ 1_2D", "แบบของชิ้นนี้")
+    twin = by_cad(model, "ประตูตู้ 1_Mirror_6")[0]  # a mirrored copy has no drawing of its own
+    assert twin.drawing == "ประตูตู้ 1_2D" and "ภาพกลับด้าน" in twin.drawing_how
+    hinges = [p for p in model.parts if p.name.startswith("บานพับ")]
+    assert len(hinges) == 2 and all(h.drawing == "ประตูตู้ 1_2D" for h in hinges)  # the drawing of the door they are in
+    assert sorted(h.drawing_how for h in hinges) == ["แบบของชุด ประตูตู้ 1", "แบบของชุด ประตูตู้ 1_Mirror_6"]
+    rail = next(p for p in model.parts if p.group == "คานแม่")
+    assert (rail.drawing, rail.drawing_how) == ("รวมหางลาก ford_2D", "แบบรวม")
+    info = a3.part_details(model, door)
+    assert ("แบบ 2 มิติ", "ประตูตู้ 1_2D (แบบของชิ้นนี้) · ยังไม่ได้แนบไฟล์ PDF ที่ส่งออกจาก CAD") in info["rows"]
+    model.drawing_files["ประตูตู้ 1_2D"] = str(tmp_path / "door.pdf")
+    info = a3.part_details(model, door)
+    assert info["drawing_file"].endswith("door.pdf") and any(v.endswith("แนบไฟล์แล้ว") for _k, v in info["rows"])
+    # bought-in items of the trailer, where they are fitted
+    last = model.steps[11]
+    assert a3.items_text(last.items).startswith("ล้อหน้า / ขาตั้ง × 1; โซ่นิรภัย × 2")
+    assert {"name": "แผ่นสะท้อนแสง", "qty": ""} in last.items and model.steps[3].items[0]["qty"] == 1
+    html = a3.render_steps_html(model, {})
+    assert "ชิ้นซื้อสำเร็จ (ไม่มีแบบ CAD)" in html and "โซ่นิรภัย" in html and ">ระบุ<" in html
+    back = a3.AssemblyModel.from_dict(model.to_dict())
+    assert back.steps[11].items == last.items and back.drawing_files == model.drawing_files and back.parts[0].drawing
+
+
+def test_bought_in_items_as_one_line():
+    items = a3.parse_items("หัวลาก Ø50 × 1; โซ่นิรภัย x 2 ;ไฟส่องป้าย;  ;สลัก M12×40 × 4\nปลั๊ก X 1")
+    assert items == [{"name": "หัวลาก Ø50", "qty": 1}, {"name": "โซ่นิรภัย", "qty": 2}, {"name": "ไฟส่องป้าย", "qty": ""},
+                     {"name": "สลัก M12×40", "qty": 4}, {"name": "ปลั๊ก", "qty": 1}]
+    assert a3.parse_items(a3.items_text(items)) == items and a3.parse_items("") == [] and a3.parse_items("× 3") == [
+        {"name": "× 3", "qty": ""}]
+    assert a3.Step("ก").items == [] and a3.Step.from_dict({"title": "ก"}).items == []
 
 
 def test_any_other_z3_gets_a_step_per_group(tmp_path):
@@ -167,6 +206,33 @@ def test_the_page_opens_a_z3_on_a_worker(app, tmp_path, monkeypatch):
         assert tab.parts.rowCount() == 22 and len(tab.model.steps) == 13
         tab.go(9, animate=False)
         assert tab.bom.rowCount() >= 2
+        tab.go(12, animate=False)  # its bought-in items under the parts, and they can be edited
+        rows = [tab.bom.item(r, 1).text() for r in range(tab.bom.rowCount())]
+        assert "โซ่นิรภัย" in rows and tab.bom.item(rows.index("โซ่นิรภัย"), 0).text() == "ซ"
+        tab.edit_btn.setChecked(True)
+        assert tab.items_edit.text().startswith("ล้อหน้า / ขาตั้ง × 1")
+        tab.items_edit.setText("หัวลาก Ø70 × 1")
+        tab.items_edit.editingFinished.emit()
+        assert tab.model.steps[11].items == [{"name": "หัวลาก Ø70", "qty": 1}] and "ชิ้นซื้อสำเร็จ" in tab.step_info.text()
+        tab.edit_btn.setChecked(False)
+        # the drawing of a part: attached once, then opened for every part shown in it
+        from PySide6.QtGui import QDesktopServices
+        opened = []
+        monkeypatch.setattr(QDesktopServices, "openUrl", lambda url: opened.append(url.toLocalFile()))
+        pdf = tmp_path / "ประตู.pdf"
+        pdf.write_bytes(b"%PDF-1.4\n")
+        door = next(p for p in tab.model.parts if p.drawing == "ประตูตู้ 1_2D")
+        hinge = next(p for p in tab.model.parts if p.name.startswith("บานพับ"))
+        tab.show_part_card(door)
+        assert tab.popup.drawing_btn.isVisibleTo(tab.popup) and tab.popup.drawing_btn.text() == "แนบแบบ 2 มิติ (PDF)…"
+        assert tab.open_drawing(door.id, str(pdf)) and opened == [str(pdf.resolve())]
+        assert tab.popup.drawing_btn.text() == "เปิดแบบ 2 มิติ" and tab.popup.redraw_btn.isVisibleTo(tab.popup)
+        assert tab.open_drawing(hinge.id) and opened[-1] == str(pdf.resolve())  # the same drawing, no question
+        rail = next(p for p in tab.model.parts if p.group == "คานแม่")
+        tab.popup.put_away()
+        from PySide6.QtWidgets import QFileDialog
+        monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *a, **k: ("", ""))  # the user cancels
+        assert not tab.open_drawing(rail.id) and len(opened) == 2  # its drawing (the whole) has no file: nothing
         tab.view.resize(600, 400)
         assert not tab.view.render_image(600, 400, fit=True).isNull()
         # a file that cannot be read: told, and the model stays

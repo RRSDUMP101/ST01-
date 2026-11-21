@@ -184,6 +184,16 @@ class Z3Object:
 
 
 @dataclass
+class Z3View:
+    """A view of a 2D drawing: the 3D object it shows. `drawing` is the drawing that holds the view where the file
+    tells it (format 3200: the view record lies in the drawing's segment); "" in the older formats."""
+
+    target: str
+    file: str = ""
+    drawing: str = ""
+
+
+@dataclass
 class Z3Embedded:
     """The container appended at HQR=<offset>: ZW3D's own backup store, not objects of the model."""
 
@@ -207,6 +217,7 @@ class Z3File:
     embedded: Z3Embedded | None = None
     records: int = 0
     loose_references: int = 0  # component records owned by no object (parts shown in drawing views)
+    views: list[Z3View] = field(default_factory=list)  # those records: what each view of a drawing shows
     warnings: list[str] = field(default_factory=list)  # Thai
 
     @property
@@ -522,6 +533,7 @@ class _Container:
     index: _Index | None = None
     entries: list[tuple[bytes, int]] = field(default_factory=list)  # (raw 32-byte name field, root record id)
     full_names: bool = False  # format 3200: the entries hold whole names, never a descriptor
+    segments: list[tuple[int, int, int]] = field(default_factory=list)  # format 3200: (root id, start, end), absolute
     no_zstd: bool = False  # format 3200 and the zstandard package is not installed
     fatal: bool = False
 
@@ -799,6 +811,7 @@ def _read_segments(mm, base: int, end: int, box: _Container, check) -> _Containe
     check("index_codes", "รหัสในดัชนีเป็นแบบที่รู้จัก", ix.unknown_codes == 0, f"ไม่รู้จัก {ix.unknown_codes} จุด")
     check("tiling", "ระเบียนข้อมูลเรียงต่อกันพอดีจนถึงดัชนี", not untiled, f"ไม่พอดี {untiled} {of}")
     box.entries = [(name, rid) for name, rid, _at, _size in listed]
+    box.segments = sorted((rid, base + at, base + at + seg_size) for _name, rid, at, seg_size in listed)
     box.full_names = True
     box.fatal = any(not k.ok for k in box.checks)
     return box
@@ -959,6 +972,15 @@ def _need_zstd(result: Z3File) -> None:
     )
 
 
+def _segment_owner(segments: list[tuple[int, int, int]], at: int, objects: dict[int, Z3Object]) -> str:
+    """The drawing whose segment holds the record at `at` ("" when the file has no segments or it is no drawing)."""
+    for rid, start, end in segments:
+        if start <= at < end:
+            obj = objects.get(rid)
+            return obj.name if obj is not None and obj.kind == "drawing" else ""
+    return ""
+
+
 def _read_into(result: Z3File, mm) -> None:
     size = len(mm)
     header = _parse_header(bytes(mm[:_TEXT_END]))
@@ -1061,6 +1083,8 @@ def _read_into(result: Z3File, mm) -> None:
         instance, file, target = names[0], names[1], names[2]
         if owner == -1:
             result.loose_references += 1
+            if target or file:
+                result.views.append(Z3View(target, file, _segment_owner(main.segments, int(ix.off[i]), objects)))
             continue
         if owner in orphans:
             continue
@@ -1423,3 +1447,16 @@ def tree_lines(node: BomNode | None) -> list[str]:
     if node is not None:
         walk(node, "", "", True)
     return lines
+
+
+def drawings_of(z3: Z3File) -> dict[str, list[str]]:
+    """3D object name (folded) -> the drawings that show it. Where the file does not say which drawing holds a view
+    (formats before 3200), the drawing named "<object>_2D" – ZW3D's own name for it – exactly."""
+    out: dict[str, list[str]] = {}
+    names = {o.name for o in z3.objects if o.kind == "drawing"}
+    for v in z3.views:
+        drawing = v.drawing or (f"{v.target}_2D" if f"{v.target}_2D" in names else "")
+        target = v.target or Path(v.file).stem
+        if drawing and drawing not in out.setdefault(_fold(target), []):
+            out[_fold(target)].append(drawing)
+    return {k: v for k, v in out.items() if v}

@@ -8,7 +8,7 @@ from pathlib import Path
 from struct import error as struct_error
 
 from PySide6.QtCore import QObject, Qt, QTimer, QUrl, Signal
-from PySide6.QtGui import QBrush, QColor, QIcon, QPainter, QPixmap
+from PySide6.QtGui import QBrush, QColor, QDesktopServices, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComboBox, QFileDialog, QFormLayout, QHBoxLayout,
                                QInputDialog, QLabel, QLineEdit, QMessageBox, QSpinBox,
                                QPlainTextEdit, QSlider, QSplitter, QTableWidgetItem, QVBoxLayout, QWidget)
@@ -154,6 +154,7 @@ class AssemblyTab(QWidget):
         self.popup.play.connect(self.play_part)
         self.popup.attach_photo.connect(lambda part_id: self.attach_photo(part_id))
         self.popup.remove_photo.connect(lambda part_id: self.attach_photo(part_id, remove=True))
+        self.popup.open_drawing.connect(lambda part_id, change: self.open_drawing(part_id, change=change))
         bar_box = QWidget()
         bar = FlowLayout(bar_box, h_spacing=6)  # wraps on a narrow window instead of making the page wider
         for text, name in (("ISO", "iso"), ("ISO 2", "iso2"), ("บน", "top"), ("หน้า", "front"), ("ท้าย", "rear"), ("ข้าง", "side")):
@@ -234,6 +235,12 @@ class AssemblyTab(QWidget):
             edit.editingFinished.connect(self._step_fields_edited)
             self.step_fields[key] = edit
             form.addRow(label, edit)
+        self.items_edit = QLineEdit()
+        self.items_edit.setPlaceholderText("ชื่อ × จำนวน; ชื่อ × จำนวน – เช่น หัวลาก Ø50 × 1; โซ่นิรภัย × 2")
+        self.items_edit.setToolTip("ชิ้นที่ซื้อสำเร็จและไม่มีแบบ CAD ของขั้นนี้ – ออกในตารางของขั้นและในคู่มือประกอบ PDF\n"
+                                   "คั่นรายการด้วย ; · ไม่ใส่ × จำนวน = ยังไม่รู้จำนวน")
+        self.items_edit.editingFinished.connect(self._items_edited)
+        form.addRow("ชิ้นซื้อสำเร็จ", self.items_edit)
         row_box = QWidget()
         row = FlowLayout(row_box, h_spacing=6)
         for text, slot, tip in (("+ ก่อน", lambda: self.add_step(False), "เพิ่มขั้นว่างก่อนขั้นนี้"),
@@ -470,6 +477,30 @@ class AssemblyTab(QWidget):
         self.state.notify(f"{'ลบ' if remove else 'แนบ'}รูปจริงของ {part.name} แล้ว – กด บันทึก… เพื่อเก็บลงไฟล์คู่มือประกอบ")
         return True
 
+    def open_drawing(self, part_id: str, path: str = "", change: bool = False) -> bool:
+        """The 2D drawing of a part: the PDF (or picture) exported from the CAD program is attached once per drawing –
+        every part shown in that drawing then opens it. The file stays where it is; the model keeps its path."""
+        part = self.model.part(part_id) if self.model else None
+        if part is None or not part.drawing:
+            return False
+        name, have = part.drawing, self.model.drawing_files.get(part.drawing, "")
+        if change or not have or not Path(have).is_file():
+            if not path:
+                path, _ = QFileDialog.getOpenFileName(self, f"ไฟล์ของแบบ {name} (ส่งออกจาก ZW3D)", "",
+                                                      "แบบ 2 มิติ (*.pdf *.png *.jpg *.jpeg *.dwg *.dxf)")
+            if not path:
+                return False
+            self.model.drawing_files[name] = str(Path(path).resolve())
+            self.model.source = "file"
+            if not self.popup.isHidden() and self.popup.part_id == part_id:
+                self.show_part_card(part, keep_edits=True)
+            self.state.notify(f"แนบไฟล์ของแบบ {name} แล้ว – ทุกชิ้นในแบบนี้เปิดไฟล์นี้ · กด บันทึก… เพื่อเก็บลงคู่มือประกอบ")
+            if change:
+                return True
+            have = self.model.drawing_files[name]
+        QDesktopServices.openUrl(QUrl.fromLocalFile(have))
+        return True
+
     def select_part_row(self, row: int, more: bool = False) -> None:
         model = self.parts.selectionModel()
         index = self.parts.model().index(row, 0)
@@ -609,12 +640,14 @@ class AssemblyTab(QWidget):
             info += [f"<b>จุดตรวจ:</b> {step.check}"] if step.check else []
             info += [f"<span style='color:#D64545'><b>⚠ {step.warning}</b></span>"] if step.warning else []
             info += [f"<span style='color:#6B7A90'>BEMM {step.ref}</span>"] if step.ref else []
+            info += [f"<b>ชิ้นซื้อสำเร็จ:</b> {len(step.items)} รายการ (ในตารางด้านล่าง)"] if step.items else []
             info += ["<span style='color:#6B7A90'>ขั้นนี้เป็นงาน / การตรวจ – ไม่มีชิ้นส่วนใหม่</span>"] if step.no_parts else []
         self.step_info.setText("<br>".join(info))
         self.step_info.setVisible(not self.edit_btn.isChecked())
         self.editor.setEnabled(step is not None)
         for key, edit in self.step_fields.items():
             edit.setText(getattr(step, key) if step else "")
+        self.items_edit.setText(a3.items_text(step.items) if step else "")
         self._fill_step_list()
         done = self.done_steps()
         self.done.setEnabled(step is not None)
@@ -633,7 +666,7 @@ class AssemblyTab(QWidget):
         t.clearSelection()
         if plan is None:
             lines = model.bom(self.step or None) if model else []
-            fill(t, [[b.no, b.name, b.size, b.part_no, b.qty] for b in lines])
+            fill(t, [[b.no, b.name, b.size, b.part_no, b.qty] for b in lines] + self._bought_rows())
             for r in range(t.rowCount()):
                 t.setRowHeight(r, t.verticalHeader().defaultSectionSize())
             t.blockSignals(False)
@@ -676,6 +709,11 @@ class AssemblyTab(QWidget):
                 if value.no == view.picked_line:
                     t.selectRow(r)
                     picked = r
+        for values in self._bought_rows():  # bought-in items under the groups, as in a plain step
+            r = t.rowCount()
+            t.setRowCount(r + 1)
+            for c, v in enumerate(values):
+                t.setItem(r, c, QTableWidgetItem(str(v)))
         t.blockSignals(False)
         self._list_fill = fill_no = self._list_fill + 1
 
@@ -688,6 +726,13 @@ class AssemblyTab(QWidget):
                 t.scrollToItem(t.item(picked, 0), QAbstractItemView.EnsureVisible)
 
         QTimer.singleShot(0, scroll)
+
+    def _bought_rows(self) -> list[list]:
+        """The rows of the step's bought-in items (no CAD shape): 'ซ' in the number column, 'ระบุ' for an unknown count."""
+        if not self.model or not 0 < self.step <= len(self.model.steps):
+            return []
+        return [["ซ", i["name"], "ซื้อสำเร็จ (ไม่มีแบบ CAD)", "", i.get("qty") or "ระบุ"]
+                for i in self.model.steps[self.step - 1].items]
 
     @staticmethod
     def _swatch(colour: QColor) -> QIcon:
@@ -738,6 +783,16 @@ class AssemblyTab(QWidget):
                 setattr(step, key, edit.text().strip())
                 changed = True
         if changed:
+            self.model.source = "file"
+            self._show_step()
+
+    def _items_edited(self) -> None:
+        if self._loading or not self.model or not 0 < self.step <= len(self.model.steps):
+            return
+        step = self.model.steps[self.step - 1]
+        items = a3.parse_items(self.items_edit.text())
+        if items != step.items:
+            step.items = items
             self.model.source = "file"
             self._show_step()
 

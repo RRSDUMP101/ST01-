@@ -100,10 +100,11 @@ def trailer_sequence() -> list[a3.Step]:
         s("ประกอบคันลาก", "เชื่อมคันลาก (A-frame) และแผ่นประกบเข้ากับโครง",
           check="ท่อกลางคันลากอยู่แนวกลาง ±2 มม. · หัวคันลากห่างหน้าตู้ 1,556 มม.",
           warning="ตำแหน่งยึดหัวลากยังไม่มีในแบบ – ใช้ตามแบบหัวลากที่ RRS กำหนด", tools="ตลับเมตร เอ็นแนวกลาง เครื่องเชื่อม",
-          phase=jig),
+          phase=jig, items=a3.parse_items("หัวลาก (คอปเปอร์) ให้ตรงกับลูกบอลชุดลาก Ford Ø50 / Ø70 × 1; สลักยึดหัวลาก")),
         s("ชุดเพลา / ล้อ + บังโคลน", "ติดตั้งชุดเพลาและล้อ แล้วติดบังโคลน",
           check="ล้ออยู่กลางบังโคลน · ตำแหน่งเพลาตามที่ RRS ยืนยัน · แรงขันน็อตล้อตามผู้ผลิตเพลา",
-          tools="แม่แรง ประแจทอร์ก", phase=jig),
+          tools="แม่แรง ประแจทอร์ก", phase=jig,
+          items=a3.parse_items("ชุดเพลา + ดุม + แหนบ; ล้อ + ยาง; ชุดเบรกหาง (ถ้ามี)")),
         s("ปูพื้น + แผ่นตีนไก่", "ปูแผ่นพื้นและแผ่นตีนไก่", tools="เครื่องเชื่อม / สว่าน", phase=body),
         s("ตั้งโครงตู้", "ตั้งเสามุม คานบน/ล่างหัวตู้และท้ายตู้ และฉากหุ้มมุม",
           check="เสาดิ่ง · ทแยงขอบบนตู้สองแนวเท่ากัน (5,977 ±3 มม.)", tools="ระดับน้ำ ลูกดิ่ง ตลับเมตร เครื่องเชื่อม",
@@ -111,12 +112,16 @@ def trailer_sequence() -> list[a3.Step]:
         s("หลังคา", "ติดตั้งรางหลังคา แผ่นหลังคา กันน้ำ และฝาครอบท้ายบน", check="ทดสอบรั่วด้วยน้ำ", phase=body),
         s("ประตูข้าง 8 บาน", "แขวนบานประตูข้างด้วยบานพับ ติดเสากลางและหูรับกลอน",
           check="บานพับห่างกัน 466 ±2 มม. · บานพับตัวล่างสูงจากผิวพื้น 190 มม. · เปิด-ปิดคล่อง",
-          warning="บานในยังไม่มีบานพับในแบบ – รอ RRS", tools="ประแจ สว่าน ตลับเมตร", phase=body),
-        s("ประตูหน้า + ประตูท้าย", "ติดตั้งประตูหน้าและประตูท้าย", warning="บานพับและกลอนยังไม่มีในแบบ", phase=body),
+          warning="บานในยังไม่มีบานพับในแบบ – รอ RRS", tools="ประแจ สว่าน ตลับเมตร", phase=body,
+          items=a3.parse_items("กลอน / มือจับประตูข้าง; ซีลขอบประตู")),
+        s("ประตูหน้า + ประตูท้าย", "ติดตั้งประตูหน้าและประตูท้าย", warning="บานพับและกลอนยังไม่มีในแบบ", phase=body,
+          items=a3.parse_items("บานพับประตูหน้า / ท้าย; กลอน / มือจับประตูหน้า / ท้าย")),
         s("กล่องเก็บของหน้าตู้", "ติดตั้งกล่องเก็บของหน้าตู้", check="ฝาปิดสนิท", phase=body),
         s("ไฟ ป้าย กล้อง + สายไฟ หัวลาก ขาตั้ง โซ่", "ติดไฟ ป้ายทะเบียน กล้องมองหลัง เดินสายไฟถึงปลั๊กหัวหาง "
           "ติดหัวลาก ล้อหน้า/ขาตั้ง และโซ่นิรภัย", check="ไฟติดครบทุกวงจร · ภาพกล้องขึ้นจอรถ",
-          warning="หัวลาก ขาตั้ง โซ่ ปลั๊ก สายไฟ และไฟระดับล่าง ยังไม่มีในแบบ – ใส่เป็นรายการซื้อสำเร็จ", phase=fit),
+          warning="หัวลาก ขาตั้ง โซ่ ปลั๊ก สายไฟ และไฟระดับล่าง ยังไม่มีในแบบ – ใส่เป็นรายการซื้อสำเร็จ", phase=fit,
+          items=a3.parse_items("ล้อหน้า / ขาตั้ง × 1; โซ่นิรภัย × 2; ปลั๊ก 12 ขาแบน AS4177.5 × 1; ชุดสายไฟหาง × 1; "
+                               "ไฟท้าย / ไฟเบรก / ไฟเลี้ยว / ไฟถอย ระดับล่าง × 2; แผ่นสะท้อนแสง; ไฟข้าง; ไฟส่องป้าย × 1")),
         s("ต่อพ่วงกับรถ Ford", "ต่อหางกับรถตามเช็กลิสต์ติดตั้ง (ชุดลาก ปลั๊ก 12 ขา น้ำหนักกดลูกบอล เบรกพ่วง)",
           check="ชุดลาก Ford 3.5T/4.5T · LED ≥ 550 mA · ชั่งน้ำหนักกดลูกบอล · GCM ≤ 8,000 กก.",
           ref="1.14 / 4.6.12", phase=fit, no_parts=True),
@@ -242,6 +247,8 @@ def model_from_z3(path: str | Path) -> tuple[a3.AssemblyModel, Z3Check]:
         elif best is None or gap > PARTNER_TOL:
             check.alone[_base(q.name)] = check.alone.get(_base(q.name), 0) + 1
 
+    drawing_of = _drawings(z3, top, path, library, shown)
+
     # parts
     parts: list[a3.Part3D] = []
     for k, q in enumerate(shown):
@@ -254,6 +261,7 @@ def model_from_z3(path: str | Path) -> tuple[a3.AssemblyModel, Z3Check]:
                            + (" – กล่องเกินชิ้นจริง ภาพถูกตัดให้อยู่ในตัวหาง" if k in stale else ""))
         if q.kind == "assembly":
             p.note += " · ตัวชุดประกอบ (รูปทรงของชุดเอง ไม่นับรวมกับชิ้นลูก)"
+        p.drawing, p.drawing_how = drawing_of(q)
         parts.append(p)
     model = a3.AssemblyModel(top.name, parts, source="file")
 
@@ -295,6 +303,43 @@ def model_from_z3(path: str | Path) -> tuple[a3.AssemblyModel, Z3Check]:
         head.append(f"ยังไม่ได้จัดกลุ่ม {sum(1 for p in parts if p.group == UNSORTED)} ชิ้น – อยู่ที่ขั้น 12")
     model.note = " · ".join(head + warn)
     return model, check
+
+
+def _drawings(z3: zr.Z3File, top: zr.Z3Object, path: Path, library: zr.Z3Library, shown: list):
+    """The 2D drawing for each part, the nearest that shows it: its own → its mirrored twin's ('_Mirror' copies have
+    none of their own) → the drawing of the nearest assembly it is in → the drawing of the whole. Drawings of a part
+    kept in another file (a mudguard) are in that file."""
+    known: dict[str, tuple[str, str]] = {k: (v[0], "") for k, v in zr.drawings_of(z3).items()}
+    for f in sorted({q.file for q in shown if q.file}):
+        where = library.locate(path.parent, f)
+        if where is None:
+            continue
+        side = library.read(where)
+        if side.ok:
+            for k, v in zr.drawings_of(side).items():
+                known.setdefault(k, (v[0], f))
+
+    def look(name: str) -> tuple[str, str] | None:
+        return known.get(zr._fold(name))
+
+    def drawing_of(q) -> tuple[str, str]:
+        def said(hit, how):
+            return hit[0], how + (f" · ในไฟล์ {hit[1]}" if hit[1] else "")
+
+        hit = look(q.name)
+        if hit:
+            return said(hit, "แบบของชิ้นนี้")
+        hit = look(a3.MIRROR.sub("", q.name).strip())
+        if hit:
+            return said(hit, "แบบของชิ้นต้นแบบ – ชิ้นนี้เป็นภาพกลับด้าน")
+        for owner in reversed(q.path[1:]):
+            hit = look(owner) or look(a3.MIRROR.sub("", owner).strip())
+            if hit:
+                return said(hit, f"แบบของชุด {owner}")
+        hit = look(top.name)
+        return said(hit, "แบบรวม") if hit else ("", "")
+
+    return drawing_of
 
 
 def _name_doors(parts: list[a3.Part3D], shown: list) -> None:

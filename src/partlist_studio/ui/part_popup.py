@@ -78,6 +78,7 @@ class PartPopup(QFrame):
     play = Signal(str)  # part id: show how this part is fitted (it travels to its place)
     attach_photo = Signal(str)  # part id
     remove_photo = Signal(str)
+    open_drawing = Signal(str, bool)  # part id, choose another file
     closed = Signal()
 
     WIDTH = 380
@@ -206,9 +207,15 @@ class PartPopup(QFrame):
         self.photo_btn.clicked.connect(lambda: self.attach_photo.emit(self.part_id))
         self.remove_btn = button("ลบรูป", tooltip="เอารูปจริงของชิ้นนี้ออก")
         self.remove_btn.clicked.connect(lambda: self.remove_photo.emit(self.part_id))
+        self.drawing_btn = button("แบบ 2 มิติ…", tooltip="เปิดไฟล์แบบ 2 มิติของชิ้นนี้ (PDF / รูป ที่ส่งออกจาก ZW3D) – "
+                                                       "ครั้งแรกให้เลือกไฟล์ แล้วทุกชิ้นในแบบเดียวกันเปิดไฟล์นี้")
+        self.drawing_btn.clicked.connect(lambda: self.open_drawing.emit(self.part_id, False))
+        self.redraw_btn = button("เปลี่ยนไฟล์แบบ…", tooltip="เลือกไฟล์แบบ 2 มิติอื่นแทนไฟล์ที่แนบไว้")
+        self.redraw_btn.clicked.connect(lambda: self.open_drawing.emit(self.part_id, True))
         self.cancel_btn = button("ยกเลิก", tooltip="ปิดโดยไม่บันทึก")
         self.cancel_btn.clicked.connect(self.dismiss)
-        for b in (self.save_btn, self.play_btn, self.step_btn, self.zoom_btn, self.photo_btn, self.remove_btn, self.cancel_btn):
+        for b in (self.save_btn, self.play_btn, self.step_btn, self.zoom_btn, self.photo_btn, self.remove_btn,
+                  self.drawing_btn, self.redraw_btn, self.cancel_btn):
             row.addWidget(b)
         lay.addWidget(row_box)
         self.hide()
@@ -264,6 +271,9 @@ class PartPopup(QFrame):
         self.step_btn.setEnabled(bool(self._step))
         self.play_btn.setText("▶ เล่นชิ้นนี้")
         self.play_btn.setEnabled(bool(self._step))  # a part of the vehicle is not fitted
+        self.drawing_btn.setVisible(bool(info.get("drawing")))
+        self.drawing_btn.setText("เปิดแบบ 2 มิติ" if info.get("drawing_file") else "แนบแบบ 2 มิติ (PDF)…")
+        self.redraw_btn.setVisible(bool(info.get("drawing_file")))
 
         alone = replace(part.detailed(), explode=[0.0, 0.0, 0.0], step=0)  # its real shape, not the box that saves faces
         self.mini.set_model(a3.AssemblyModel(part.name, [alone], source="file"))

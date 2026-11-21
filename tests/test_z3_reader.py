@@ -1176,3 +1176,23 @@ def test_tool_with_nothing_to_read(tool, tmp_path, capsys):
     assert tool.main([str(tmp_path / "ไม่มี.Z3")]) == 1
     assert tool.main([str(tmp_path)]) == 1
     assert "ไม่พบ" in capsys.readouterr().err
+
+
+def test_what_each_drawing_shows(tmp_path):
+    # format 3200: a view lies in the segment of its drawing, so even a drawing not named after its part is found
+    b = Z3Builder32()
+    top = b.obj3d("ชุดบน")
+    b.obj3d("แผ่น", box=(0, 1, 0, 1, 0, 1))
+    b.obj3d("เสา", box=(0, 1, 0, 1, 0, 1))
+    b.component(top, "แผ่น")
+    b.component(top, "เสา")
+    for drawing, shows in (("แบบพิเศษ", "แผ่น"), ("ชุดบน_2D", "ชุดบน")):
+        rid = b.drawing(drawing)
+        b.cell = b.cells[rid]
+        b.component(-1, shows, instance="")
+    f = z3.read_z3(write(tmp_path, b.build()))
+    assert f.loose_references == 2 and [(v.target, v.drawing) for v in f.views] == [("แผ่น", "แบบพิเศษ"), ("ชุดบน", "ชุดบน_2D")]
+    assert z3.drawings_of(f) == {"แผ่น": ["แบบพิเศษ"], "ชุดบน": ["ชุดบน_2D"]}
+    # older formats do not say which drawing holds a view: ZW3D's own name "<object>_2D", exactly
+    old = z3.read_z3(write(tmp_path, model().build(), "เก่า.Z3"))
+    assert [v.drawing for v in old.views] == [""] and z3.drawings_of(old) == {"แผ่นพื้น": ["แผ่นพื้น_2D"]}

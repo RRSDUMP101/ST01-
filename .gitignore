@@ -32,3 +32,6 @@ docs/warranty_booklet/sheet*.png
 docs/warranty_booklet/p14.png
 docs/trailer_booklet/booklet.html
 docs/trailer_booklet/sheet*.png
+docs/owner_manual_flatbed/booklet.html
+docs/owner_manual_flatbed/sheet*.png
+docs/owner_manual_flatbed/__pycache__/

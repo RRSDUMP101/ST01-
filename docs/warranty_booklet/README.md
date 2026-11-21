@@ -1,5 +1,7 @@
 # สมุดรับประกันและการบำรุงรักษา – ผลิตภัณฑ์ RRS (Ford Ranger Super Duty)
 
+> **เล่มล่าสุด (ต้นฉบับหลัก): `RRS_Warranty_Booklet_Interior_Blue_3.pdf`** – ฉบับปรูฟที่ออกแบบใหม่ (ได้รับ 21 พ.ย. 2026) 40 หน้า · หน้า 221.2 × 246.3 มม. (ขนาดเล่ม 21.5 × 24 ซม. + ระยะตัดตกประมาณ 3 มม.) · ฟอนต์ Noto Sans / Noto Sans Thai · การแก้ไขต่อจากนี้ให้ยึดเล่มนี้ ไฟล์ `build.py` / `common.py` และ `RRS-Warranty-Logbook-FordSuperDuty.pdf` เป็นฉบับร่างก่อนหน้า (สร้างจาก HTML)
+
 เล่มเดียวสำหรับทุกรุ่น 40 หน้า – ติ๊กรุ่นที่ปกและบัตรรับประกัน: กระบะดั้มพ์ (Dump Body) · เครน (Truck-Mounted Crane) · หางลากพ่วงจูง (Tow Trailer) · กระบะพื้นเรียบคาร์โก้ (Cargo Flatbed) ·
 ภาค ก.–ง. กระบะดั้มพ์และทั่วไป · จ. เครน · ฉ. หางลาก · ช. กระบะพื้นเรียบคาร์โก้ · ขนาด 21.5 × 24 ซม. ธีมขาว–น้ำเงิน
 
@@ -9,7 +11,8 @@
 | `common.py` | สไตล์และฟังก์ชันจัดหน้าที่ใช้ร่วมกับสมุดหางลาก (`../trailer_booklet`) |
 | `pdf.js` | พิมพ์ `booklet.html` เป็น PDF ด้วย Playwright และรายงานหน้าที่เนื้อหาล้น |
 | `sheet.js` | ภาพรวมทุกหน้า (`sheet1.png`, `sheet2.png`) สำหรับตรวจการจัดวาง |
-| `RRS-Warranty-Logbook-FordSuperDuty.pdf` | เล่มล่าสุด |
+| `RRS_Warranty_Booklet_Interior_Blue_3.pdf` | **เล่มล่าสุด** – ฉบับปรูฟออกแบบใหม่ |
+| `RRS-Warranty-Logbook-FordSuperDuty.pdf` | ฉบับร่างก่อนหน้า (สร้างจาก `build.py`) |
 | `logo.png` `logo_white.png` | โลโก้ RRSDUMP สีน้ำเงินเข้ม (พื้นขาว) และสีขาว (พื้นน้ำเงิน) พื้นหลังโปร่งใส – ทำจาก `source_images/logo_rrsdump.webp` |
 | `kit.png` `tray.png` `ph_*` | รูปที่ใช้ในเล่ม (ตัดและปรับจาก `source_images/`) |
 | `source_images/` | รูปต้นฉบับที่ RRS ส่งมา |

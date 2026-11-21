@@ -141,6 +141,7 @@ class Step:
     no_parts: bool = False  # a step of work or checking that fits no new part (it is not a mistake that it is empty)
     phase: str = ""  # the part of the work the step belongs to: 'งานบนจิ๊ก' · 'ยกขึ้นรถ' · 'งานบนรถ'
     items: list = field(default_factory=list)  # bought-in items with no CAD shape: [{'name': …, 'qty': 2 or ''}]
+    media: list = field(default_factory=list)  # videos / photos of the real work of this step: paths, kept where they are
 
     @classmethod
     def from_dict(cls, d: dict) -> Step:
@@ -272,6 +273,14 @@ class AssemblyModel:
 
 
 # --------------------------------------------------------------------------- bought-in items
+PHOTO_SUFFIXES = (".jpg", ".jpeg", ".png", ".bmp", ".webp")
+MEDIA_FILTER = "วิดีโอ / รูปงานจริง (*.mp4 *.mov *.m4v *.avi *.mkv *.jpg *.jpeg *.png *.webp)"
+
+
+def is_photo(path: str) -> bool:
+    return Path(path).suffix.lower() in PHOTO_SUFFIXES
+
+
 _ITEM = re.compile(r"^(.*?)\s*[×xX]\s*(\d+)\s*$")
 
 
@@ -1243,6 +1252,10 @@ def render_steps_html(model: AssemblyModel, images: dict, job_no: str = "", done
             f"<p><b>จุดตรวจ:</b> {e(s.check)}</p>" if s.check else "",
             f"<p style='color:#D64545'><b>⚠ {e(s.warning)}</b></p>" if s.warning else ""))
         img = f"<p><img src='{e(pictures[0][0])}' width='640'></p>" if pictures else ""
+        photos = [m for m in s.media if is_photo(m) and Path(m).is_file()]
+        videos = [Path(m).name for m in s.media if not is_photo(m)]
+        img += "".join(f"<p><img src='{e(Path(m).as_uri())}' width='300'></p>" for m in photos[:2])
+        img += (f"<p style='color:#6B7A90'>วิดีโองานจริงของขั้นนี้: {e(', '.join(videos))}</p>" if videos else "")
         head = (f"<h2 style='page-break-before:always'>{e(s.phase) + ' · ' if s.phase else ''}ขั้นที่ {n} / {len(model.steps)} – "
                 f"{e(s.title)} {'☑' if n in done else '☐'}</h2>{img}<p>{e(s.detail)}</p>{extra}")
         ref = f"<p style='color:#6B7A90'>BEMM {e(s.ref)}</p>" if s.ref else ""

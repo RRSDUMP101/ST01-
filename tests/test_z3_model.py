@@ -69,13 +69,14 @@ def by_cad(model, text):
 def test_the_box_trailer_opens_as_boxes_in_its_13_steps(tmp_path):
     model, check = zm.model_from_z3(trailer(tmp_path))
     assert model.name == "รวมหางลาก ford" and model.source == "file" and model.problems() == []
-    assert [n for n, s in enumerate(model.steps, 1) if s.no_parts] == [3, 5, 10, 11, 13]  # no part of this model
+    assert [n for n, s in enumerate(model.steps, 1) if s.no_parts] == [1, 2, 3, 6, 8, 13, 15, 16, 17, 19]  # no part here
     assert len(model.parts) == 22  # 20 parts + the 2 door leaves, which are assemblies with a shape of their own
     assert check.bodies == 2 and all(p.shape == "box" for p in model.parts)
-    assert len(model.steps) == 13 and model.steps[0].phase == zm.TRAILER_PHASES[0] and model.steps[12].no_parts
+    assert len(model.steps) == 19 and [s.phase for s in model.steps[:4]] == [zm.TRAILER_PHASES[0]] * 3 + [zm.TRAILER_PHASES[1]]
+    assert model.steps[-1].phase == zm.TRAILER_PHASES[3] and model.steps[-1].no_parts
     steps = {p.group: p.step for p in model.parts}
-    assert steps == {"คานแม่": 1, "คานขวาง": 2, "พื้นตู้": 6, "โครงตู้": 7, "หลังคา": 8, "ประตูข้าง": 9, "คันลาก": 4,
-                     "ไฟ + ป้าย": 12}
+    assert steps == {"คานแม่": 4, "คานขวาง": 5, "พื้นตู้": 9, "โครงตู้": 11, "หลังคา": 12, "ประตูข้าง": 10,
+                     "บานพับ + หูรับกลอน": 14, "คันลาก": 7, "ไฟ + ป้าย": 18}
     # axes: X(program) = Y(file) to the rear, Y(program) = -X(file) = right of the vehicle, Z up
     rail = [p for p in model.parts if p.group == "คานแม่"]
     left = next(p for p in rail if p.centre()[1] < 0)
@@ -89,7 +90,7 @@ def test_the_box_trailer_opens_as_boxes_in_its_13_steps(tmp_path):
     # misspelling of the file corrected for the technician, and still known by its own spelling
     roof = by_cad(model, "กันนำ้บนหลังคา")
     assert len(roof) == 1 and roof[0].name == "กันน้ำบนหลังคา" and roof[0].group == "หลังคา"
-    assert "กล่องขอบเขต" in model.note and "13 ขั้น" in model.note
+    assert "กล่องขอบเขต" in model.note and "19 ขั้น 4 ช่วงงาน" in model.note
 
 
 def test_what_is_wrong_with_the_design_is_found(tmp_path):
@@ -126,13 +127,13 @@ def test_every_part_knows_its_drawing_and_the_steps_their_bought_in_items(tmp_pa
     info = a3.part_details(model, door)
     assert info["drawing_file"].endswith("door.pdf") and any(v.endswith("แนบไฟล์แล้ว") for _k, v in info["rows"])
     # bought-in items of the trailer, where they are fitted
-    last = model.steps[11]
+    last = model.steps[17]
     assert a3.items_text(last.items).startswith("ล้อหน้า / ขาตั้ง × 1; โซ่นิรภัย × 2")
-    assert {"name": "แผ่นสะท้อนแสง", "qty": ""} in last.items and model.steps[3].items[0]["qty"] == 1
+    assert {"name": "แผ่นสะท้อนแสง", "qty": ""} in last.items and model.steps[6].items[0]["qty"] == 1
     html = a3.render_steps_html(model, {})
     assert "ชิ้นซื้อสำเร็จ (ไม่มีแบบ CAD)" in html and "โซ่นิรภัย" in html and ">ระบุ<" in html
     back = a3.AssemblyModel.from_dict(model.to_dict())
-    assert back.steps[11].items == last.items and back.drawing_files == model.drawing_files and back.parts[0].drawing
+    assert back.steps[17].items == last.items and back.drawing_files == model.drawing_files and back.parts[0].drawing
 
 
 def test_bought_in_items_as_one_line():
@@ -152,7 +153,7 @@ def test_any_other_z3_gets_a_step_per_group(tmp_path):
     b.component(top, "แผ่น", at=move(0, 0, 0))
     b.component(top, "เสา", n=2, at=move(10, 10, 5))
     model, check = zm.model_from_z3(write(tmp_path, b.build(), "ชุดทดสอบ.Z3"))
-    assert len(model.parts) == 3 and len(model.steps) == 2 and "13 ขั้น" not in model.note
+    assert len(model.parts) == 3 and len(model.steps) == 2 and "ช่วงงาน" not in model.note
     assert {p.group for p in model.parts} == {"แผ่น", "เสา"} and check.bodies == 0
 
 
@@ -171,7 +172,7 @@ def test_saved_and_opened_again_as_rrsasm(tmp_path):
     model.save(tmp_path / "หาง.rrsasm")
     back = a3.AssemblyModel.load(tmp_path / "หาง.rrsasm")
     assert [(p.name, p.step, p.group) for p in back.parts] == [(p.name, p.step, p.group) for p in model.parts]
-    assert back.note == model.note and len(back.steps) == 13
+    assert back.note == model.note and len(back.steps) == 19
 
 
 @pytest.fixture(scope="module")
@@ -203,18 +204,32 @@ def test_the_page_opens_a_z3_on_a_worker(app, tmp_path, monkeypatch):
         app.processEvents()
         assert not tab._cad_busy and tab.model is not None and len(tab.model.parts) == 22
         assert tab.title.text() == "รวมหางลาก ford" and "คำเตือนของแบบ" in tab.note.text()
-        assert tab.parts.rowCount() == 22 and len(tab.model.steps) == 13
-        tab.go(9, animate=False)
+        assert tab.parts.rowCount() == 22 and len(tab.model.steps) == 19
+        tab.go(10, animate=False)
         assert tab.bom.rowCount() >= 2
-        tab.go(12, animate=False)  # its bought-in items under the parts, and they can be edited
+        tab.go(18, animate=False)  # its bought-in items under the parts, and they can be edited
         rows = [tab.bom.item(r, 1).text() for r in range(tab.bom.rowCount())]
         assert "โซ่นิรภัย" in rows and tab.bom.item(rows.index("โซ่นิรภัย"), 0).text() == "ซ"
         tab.edit_btn.setChecked(True)
         assert tab.items_edit.text().startswith("ล้อหน้า / ขาตั้ง × 1")
         tab.items_edit.setText("หัวลาก Ø70 × 1")
         tab.items_edit.editingFinished.emit()
-        assert tab.model.steps[11].items == [{"name": "หัวลาก Ø70", "qty": 1}] and "ชิ้นซื้อสำเร็จ" in tab.step_info.text()
+        assert tab.model.steps[17].items == [{"name": "หัวลาก Ø70", "qty": 1}] and "ชิ้นซื้อสำเร็จ" in tab.step_info.text()
         tab.edit_btn.setChecked(False)
+        # videos / photos of the real work, kept by path, opened from the step
+        clip, photo = tmp_path / "งาน.mov", tmp_path / "งาน.jpg"
+        clip.write_bytes(b"x")
+        from PySide6.QtGui import QColor, QImage
+        img = QImage(8, 8, QImage.Format_RGB32)
+        img.fill(QColor("white"))
+        img.save(str(photo))
+        assert tab.media_btn.text() == "แนบวิดีโอ / รูปงานจริง…"
+        assert tab.attach_step_media([str(clip), str(photo), str(clip)]) == 2 and tab.media_btn.text().endswith("(2)…")
+        assert tab.model.steps[17].media == [str(clip.resolve()), str(photo.resolve())]
+        html = a3.render_steps_html(tab.model, {})
+        assert "วิดีโองานจริงของขั้นนี้: งาน.mov" in html and photo.resolve().as_uri() in html
+        back = a3.AssemblyModel.from_dict(tab.model.to_dict())
+        assert back.steps[17].media == tab.model.steps[17].media
         # the drawing of a part: attached once, then opened for every part shown in it
         from PySide6.QtGui import QDesktopServices
         opened = []
@@ -225,6 +240,12 @@ def test_the_page_opens_a_z3_on_a_worker(app, tmp_path, monkeypatch):
         hinge = next(p for p in tab.model.parts if p.name.startswith("บานพับ"))
         tab.show_part_card(door)
         assert tab.popup.drawing_btn.isVisibleTo(tab.popup) and tab.popup.drawing_btn.text() == "แนบแบบ 2 มิติ (PDF)…"
+        assert tab.open_step_media(0) and opened == [str(clip.resolve())]
+        clip.unlink()
+        monkeypatch.setattr(QMessageBox, "warning", lambda *a: None)
+        assert not tab.open_step_media(0) and not tab.open_step_media(5)
+        assert tab.attach_step_media(clear=True) == 0
+        opened.clear()
         assert tab.open_drawing(door.id, str(pdf)) and opened == [str(pdf.resolve())]
         assert tab.popup.drawing_btn.text() == "เปิดแบบ 2 มิติ" and tab.popup.redraw_btn.isVisibleTo(tab.popup)
         assert tab.open_drawing(hinge.id) and opened[-1] == str(pdf.resolve())  # the same drawing, no question

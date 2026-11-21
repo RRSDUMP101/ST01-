@@ -10,7 +10,7 @@ from struct import error as struct_error
 from PySide6.QtCore import QObject, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QBrush, QColor, QDesktopServices, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComboBox, QFileDialog, QFormLayout, QHBoxLayout,
-                               QInputDialog, QLabel, QLineEdit, QMessageBox, QSpinBox,
+                               QInputDialog, QLabel, QLineEdit, QMenu, QMessageBox, QSpinBox,
                                QPlainTextEdit, QSlider, QSplitter, QTableWidgetItem, QVBoxLayout, QWidget)
 
 from ...core import assembly3d as a3
@@ -221,6 +221,10 @@ class AssemblyTab(QWidget):
         self.step_info.setWordWrap(True)
         self.step_info.setTextFormat(Qt.RichText)
         lay.addWidget(self.step_info)
+        self.media_btn = button("วิดีโอ / รูปงานจริง…", tooltip="วิดีโอหรือรูปถ่ายงานประกอบจริงของขั้นนี้ – แนบครั้งเดียวแล้วเปิดดูได้ทุกครั้ง\n"
+                                "(ไฟล์อยู่ที่เดิม คู่มือประกอบเก็บเฉพาะที่อยู่ไฟล์ · รูปถ่ายออกในคู่มือ PDF)")
+        self.media_btn.clicked.connect(self._media_menu)
+        lay.addWidget(self.media_btn)
         self.edit_btn = button("✎ แก้ไขขั้นตอน", tooltip="แก้แรงขัน เครื่องมือ จุดตรวจ คำเตือน · เพิ่ม ลบ เลื่อนลำดับขั้น")
         self.edit_btn.setCheckable(True)
         self.edit_btn.toggled.connect(self._edit_toggled)
@@ -648,6 +652,8 @@ class AssemblyTab(QWidget):
         for key, edit in self.step_fields.items():
             edit.setText(getattr(step, key) if step else "")
         self.items_edit.setText(a3.items_text(step.items) if step else "")
+        self.media_btn.setEnabled(step is not None)
+        self.media_btn.setText(f"วิดีโอ / รูปงานจริง ({len(step.media)})…" if step and step.media else "แนบวิดีโอ / รูปงานจริง…")
         self._fill_step_list()
         done = self.done_steps()
         self.done.setEnabled(step is not None)
@@ -785,6 +791,54 @@ class AssemblyTab(QWidget):
         if changed:
             self.model.source = "file"
             self._show_step()
+
+    def _media_menu(self) -> None:
+        """The videos and photos of the step: open one, attach more, or take them away."""
+        if not self.model or not 0 < self.step <= len(self.model.steps):
+            return
+        step = self.model.steps[self.step - 1]
+        if not step.media:
+            self.attach_step_media()
+            return
+        menu = QMenu(self)
+        for i, path in enumerate(step.media):
+            gone = "" if Path(path).is_file() else "  (ไม่พบไฟล์)"
+            menu.addAction(("🖼 " if a3.is_photo(path) else "▶ ") + Path(path).name + gone).triggered.connect(
+                lambda _c=False, i=i: self.open_step_media(i))
+        menu.addSeparator()
+        menu.addAction("แนบเพิ่ม…").triggered.connect(lambda: self.attach_step_media())
+        menu.addAction("เอาออกทั้งหมด").triggered.connect(lambda: self.attach_step_media(clear=True))
+        menu.exec(self.media_btn.mapToGlobal(self.media_btn.rect().bottomLeft()))
+
+    def attach_step_media(self, paths: list[str] | None = None, clear: bool = False) -> int:
+        """Videos / photos of the real work for the step on show. Returns how many the step has after."""
+        if not self.model or not 0 < self.step <= len(self.model.steps):
+            return 0
+        step = self.model.steps[self.step - 1]
+        if clear:
+            step.media = []
+        else:
+            if paths is None:
+                paths, _ = QFileDialog.getOpenFileNames(self, f"วิดีโอ / รูปงานจริงของขั้นที่ {self.step}", "", a3.MEDIA_FILTER)
+            if not paths:
+                return len(step.media)
+            for path in (str(Path(x).resolve()) for x in paths):
+                if path not in step.media:
+                    step.media.append(path)
+        self.model.source = "file"
+        self._show_step()
+        self.state.notify(f"ขั้นที่ {self.step} มีวิดีโอ / รูปงานจริง {len(step.media)} ไฟล์ – กด บันทึก… เพื่อเก็บลงคู่มือประกอบ")
+        return len(step.media)
+
+    def open_step_media(self, index: int) -> bool:
+        if not self.model or not 0 < self.step <= len(self.model.steps):
+            return False
+        media = self.model.steps[self.step - 1].media
+        if not 0 <= index < len(media) or not Path(media[index]).is_file():
+            QMessageBox.warning(self, "วิดีโอ / รูปงานจริง", "ไม่พบไฟล์ – ย้ายหรือลบไปแล้ว แนบใหม่ได้ที่ปุ่มเดิม")
+            return False
+        QDesktopServices.openUrl(QUrl.fromLocalFile(media[index]))
+        return True
 
     def _items_edited(self) -> None:
         if self._loading or not self.model or not 0 < self.step <= len(self.model.steps):

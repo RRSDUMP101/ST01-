@@ -91,10 +91,10 @@ TOC = [
     ("5", "การปรับตั้งกลอนล็อก", "Adjusting the latch", 21),
     ("6", "การถอด / ประกอบชิ้นส่วนของกระบะ", "Removing / installing body parts", 22),
     ("6.1", "ตะแกรงกันหัว", "Headboard", 22), ("6.2", "ฝาท้าย", "Tailgate", 23), ("6.3", "ฝาข้างขวา / ซ้าย", "Side gate RH / LH", 24),
-    ("6.4", "บังโคลน", "Mudguard", 26),
-    ("7", "การบรรทุกและการผูกรัดสินค้า", "Loading and tying down", 27),
-    ("8", "การดูแลรักษาและค่าแรงขัน", "Care, maintenance and torque values", 28),
-    ("9", "ข้อมูลสำหรับศูนย์บริการ", "Service-centre data", 29),
+    ("6.4", "บังโคลน", "Mudguard", 26), ("6.5", "คอกเสริม", "Add-on rack", 27),
+    ("7", "การบรรทุกและการผูกรัดสินค้า", "Loading and tying down", 30),
+    ("8", "การดูแลรักษาและค่าแรงขัน", "Care, maintenance and torque values", 31),
+    ("9", "ข้อมูลสำหรับศูนย์บริการ", "Service-centre data", 32),
 ]
 rows = "".join(f'<tr class="{"grp" if "." not in n else ""}"><td class="n">{n}</td><td>{t} <span class="en">({e})</span></td><td class="pg">{p}</td></tr>' for n, t, e, p in TOC)
 page("สารบัญ (Index)", band("สารบัญ", "Index") + f'<table class="toc"><colgroup><col style="width:9%"><col style="width:81%"><col style="width:10%"></colgroup><tbody>{rows}</tbody></table>')
@@ -348,6 +348,48 @@ page("6. การถอด / ประกอบชิ้นส่วน (Removi
            ("ถอดบังโคลนออก ระวังสายไฟไฟท้ายและสายกล้องที่เดินใกล้ขายึด", "Remove the mudguard, taking care of the tail-lamp and camera wiring near the bracket."),
            ("การประกอบ: ใส่สลักด้วยมือก่อน ขันแบบไขว้ และตรวจระยะห่างระหว่างบังโคลนกับยางตามคู่มือ Ford", "To install: start the bolts by hand, tighten crosswise and check the mudguard-to-tyre clearance per the Ford manual.")))
 
+# ---------------------------------------------------------------- 6.5 add-on rack (from the 3D model; video 1000008358 shows the body without it)
+RK = 420  # rack lift in the exploded view (mm)
+up = lambda p: (p[0], p[1] + RK, p[2])
+page("6. การถอด / ประกอบชิ้นส่วน (Removing / installing parts)", band("6. ขั้นตอนการถอด / ประกอบชิ้นส่วนของกระบะ", "Replacing body parts – procedures") + forcab("Single Cab") +
+     h3("6.5 การถอด / ประกอบคอกเสริม", "Removing / installing the add-on rack") +
+     para("คอกเสริมเป็นชุดผนังที่ติดบนขอบบนของฝาข้างและฝาท้าย เพื่อเพิ่มความสูงของกระบะ ถอดออกได้เมื่อต้องการใช้กระบะแบบฝาเตี้ย (ภาพหน้าถัดไป)",
+          "The add-on rack is a set of walls mounted on the top rails of the side gates and tailgate to raise the body. It can be removed when a low-sided body is needed (see next page).") +
+     M.view("rack_exploded", [("n", up(P["side_rack"]), 1, 40, -110), ("n", up((0, 470, -960)), 1, 0, -100), ("n", up((1252, 500, -400)), 2, 110, -40),
+                              ("n", up((1130, 870, 300)), 3, 60, -70), ("c", P["latch_sg"][0], 26), ("n", P["latch_sg"][0], 4, 70, 50),
+                              ("c", up((1275, 590, 940)), 26), ("n", up((1275, 590, 940)), 5, 80, 20), ("c", up((-1320, 560, 935)), 26), ("n", up((-1320, 560, 935)), 6, 30, -60)], cls="h2") +
+     table(["#", "ชิ้นส่วน (Part)", "จำนวน (Qty)"], [
+         ['<span class="numdot">1</span>', "คอกเสริมข้าง ขวา / ซ้าย<span class=\"en-line\">Side rack RH / LH</span>", "2"],
+         ['<span class="numdot">2</span>', "คอกเสริมท้าย<span class=\"en-line\">Tail rack</span>", "1"],
+         ['<span class="numdot">3</span>', "ราวท่อ<span class=\"en-line\">Pipe hoop</span>", "1"],
+         ['<span class="numdot">4</span>', "สลัก M12×1.25 พร้อมแหวนและน็อต ยึดคอกกับขอบบนฝา (ข้างละ 3 · ท้าย 3)<span class=\"en-line\">M12×1.25 bolt, washer and nut, rack to gate top rail (3 per side · 3 at the rear)</span>", "9"],
+         ['<span class="numdot">5</span>', "สลักเสียบพร้อมกิ๊บล็อก มุมหลัง (คอกข้าง – คอกท้าย)<span class=\"en-line\">Pin and R-clip, rear corners (side rack – tail rack)</span>", "2"],
+         ['<span class="numdot">6</span>', "สลักเสียบพร้อมกิ๊บล็อก มุมหน้า (คอกข้าง – เสาตะแกรงกันหัว)<span class=\"en-line\">Pin and R-clip, front corners (side rack – headboard post)</span>", "2"]], [7, 78, 15], "plist"))
+
+page("6. การถอด / ประกอบชิ้นส่วน (Removing / installing parts)", band("6. ขั้นตอนการถอด / ประกอบชิ้นส่วนของกระบะ", "Replacing body parts – procedures") + forcab("Single Cab") +
+     h3("6.5 (ต่อ) จุดยึดคอกเสริม", "(cont.) Rack fixing points") +
+     warn(("การยกคอกเสริมต้องใช้ผู้ปฏิบัติงานอย่างน้อย 2 คนต่อชิ้น ยกขึ้นตรง ๆ และห้ามปีนหรือยืนบนขอบฝาขณะยก", "Lift each rack piece with at least 2 people, straight up; never climb or stand on the gate rails while lifting."),
+          ("ห้ามขับรถขณะคอกเสริมยึดไม่ครบทุกจุด และห้ามผูกรัดสินค้ากับคอกเสริมหรือราวท่อแทนจุดผูกรัดบนพื้น", "Never drive with the rack partly fixed, and never tie the load to the rack or hoop instead of the floor tie-down points.")) +
+     M.row(M.view("z_rack_bolt", [("c", P["latch_sg"][0], 40), ("n", P["latch_sg"][0], 4, -90, -60)], "④ สลักยึดคอกกับขอบบนฝา (Fixed)", "box l"),
+           M.view("z_rack_bolt_x", [("a", P["latch_sg"][0], (1143, 440, 957))], "④ ถอดสลักออก แล้วยกคอกขึ้น (Bolt out, lift)", "box l"),
+           M.view("z_rack_rear", [("c", (1275, 590, 940), 120)], "⑤ มุมหลัง: สลักเสียบ + กิ๊บล็อก (Rear corner pin and R-clip)", "box l"),
+           M.view("z_rack_front", [("c", (-1320, 560, 935), 120)], "⑥ มุมหน้า: สลักเสียบ + กิ๊บล็อก (Front corner pin and R-clip)", "box l")) +
+     M.view("norack", [], "กระบะเมื่อถอดคอกเสริมออก (Body without the rack)", "xxs"))
+
+page("6. การถอด / ประกอบชิ้นส่วน (Removing / installing parts)", band("6. ขั้นตอนการถอด / ประกอบชิ้นส่วนของกระบะ", "Replacing body parts – procedures") + forcab("Single Cab") +
+     h4("6.5.1 การถอดคอกเสริม", "Removing the rack") +
+     steps(("ปิดและล็อกฝาข้างและฝาท้ายทุกด้าน และนำสินค้าออกจากกระบะ", "Close and lock all gates and unload the body."),
+           ("ถอดกิ๊บล็อกและดึงสลักเสียบที่มุมหลังทั้งสองข้าง ⑤ และมุมหน้าทั้งสองข้าง ⑥ เก็บกิ๊บไว้กับสลัก", "Remove the R-clips and pull the pins at both rear corners ⑤ and both front corners ⑥; keep each clip with its pin."),
+           ("คลายและถอดสลักยึด ④ ของคอกเสริมท้าย 3 ตัว แล้วยกคอกเสริมท้ายพร้อมราวท่อขึ้นตรง ๆ", "Remove the 3 fixing bolts ④ of the tail rack, then lift the tail rack and the hoop straight up."),
+           ("คลายและถอดสลักยึด ④ ของคอกเสริมข้างทีละด้าน ด้านละ 3 ตัว แล้วยกคอกขึ้นตรง ๆ", "Remove the 3 fixing bolts ④ of each side rack, one side at a time, and lift the rack straight up."),
+           ("วางคอกบนพื้นเรียบที่มีวัสดุรอง ใส่สลัก แหวน และน็อตกลับเข้ารูที่ขอบฝา เพื่อไม่ให้หายและกันน้ำเข้ารู", "Lay the racks on a padded, level surface; refit the bolts, washers and nuts in the gate-rail holes so they are not lost and water stays out.")) +
+     h4("6.5.2 การประกอบคอกเสริม", "Installing the rack") +
+     steps(("วางคอกเสริมข้างบนขอบบนฝาข้าง ให้รูของแผ่นยึดตรงกับรูบนขอบฝา ใส่สลัก ④ ด้วยมือก่อนครบ 3 ตัว", "Set each side rack on the side-gate top rail with its tab holes on the rail holes and start all 3 bolts ④ by hand."),
+           ("วางคอกเสริมท้ายพร้อมราวท่อ และใส่สลัก ④ ด้วยมือครบ 3 ตัว", "Set the tail rack with the hoop and start its 3 bolts ④ by hand."),
+           ("ใส่สลักเสียบที่มุมหลัง ⑤ และมุมหน้า ⑥ แล้วใส่กิ๊บล็อกให้ครบทุกตัว", "Fit the pins at the rear ⑤ and front ⑥ corners and lock each with its R-clip."),
+           ("ขันสลัก ④ ทุกตัวให้แน่นตามแรงขันในหัวข้อ 8 แล้วเปิด–ปิดฝาข้างและฝาท้ายเพื่อตรวจว่าไม่ติดขัด", "Tighten all bolts ④ to the torque in section 8, then open and close the gates to check nothing binds.")) +
+     remark(("ภาพจากแบบ 3D ของกระบะ Single Cab · แรงขันสลักยึดคอก และน้ำหนักคอกแต่ละชิ้น ให้ RRS ยืนยัน", "From the Single Cab 3D model · rack bolt torque and the weight of each rack piece to be confirmed by RRS.")))
+
 # ---------------------------------------------------------------- 7 loading
 page("7. การบรรทุกและการผูกรัด (Loading and tying down)", band("7. การบรรทุกและการผูกรัดสินค้า", "Loading and tying down") + forcab() +
      M.view("top", [("n", (-1155, 17, 800), 1, -45, 0), ("n", (-1155, 17, -800), 2, 45, 0), ("n", (-519, 17, 800), 3, -45, 0), ("n", (-519, 17, -800), 4, 45, 0), ("n", (132, 17, 800), 5, -45, 0), ("n", (132, 17, -800), 6, 45, 0), ("n", (782, 17, 800), 7, -45, 0), ("n", (782, 17, -800), 8, 45, 0)], "จุดผูกรัด 8 จุดบนพื้นกระบะ (8 tie-down points)", "t2") +
@@ -372,7 +414,7 @@ page("8. การดูแลรักษาและค่าแรงขั�
          ["บานพับฝาข้าง / ฝาท้าย (Gate hinges)", "M12×65 / M12×60", f"{B} N·m"],
          ["ตะแกรงกันหัว – เขาบน (Headboard top horns)", "M12×100", f"{B} N·m"],
          ["ตะแกรงกันหัว – แผงตะแกรง (Headboard panel)", "M8 / M6", f"{B} N·m"],
-         ["ขายึดบังโคลน (Mudguard bracket)", f"{B}", f"{B} N·m"]], [46, 26, 28]))
+         ["ขายึดบังโคลน (Mudguard bracket)", f"{B}", f"{B} N·m"], ["คอกเสริมกับขอบฝา (Add-on rack to gate rail)", "M12×1.25", f"{B} N·m"]], [46, 26, 28]))
 
 # ---------------------------------------------------------------- 9 service data
 page("9. ข้อมูลสำหรับศูนย์บริการ (Service-centre data)", band("9. ข้อมูลสำหรับศูนย์บริการ", "Service-centre data") +
@@ -407,7 +449,7 @@ ol.sublist{list-style:none;padding-left:6mm;margin:0 0 3mm}ol.sublist li{margin-
 .wbox{border:1.2pt solid #D9534F;border-radius:2mm;padding:2mm 3.5mm 1mm;margin:2.5mm 0;background:#FFF8F7}.wbox .wt{color:#B23B37;font-weight:bold;margin-bottom:1mm}
 .wbox ul.terms{margin-bottom:1mm}
 .remark{background:#EAF2FB;border-left:2.5pt solid #1257C8;padding:2mm 3.5mm;margin:2.5mm 0;font-size:9.6pt}.remark b{color:#0B2A5B}.remark p{margin:.6mm 0}
-.figbox{margin:1mm 0 2mm;text-align:center}.figbox svg.dwg{width:100%;max-height:52mm}.figbox.s svg.dwg{max-height:34mm}.figbox.m svg.dwg{max-height:44mm}table.care td{padding:1.4mm 2.2mm;font-size:9pt}table.care ul.vl li{margin-bottom:.4mm}.figbox svg.dwg.small{max-height:44mm}
+.figbox{margin:1mm 0 2mm;text-align:center}.figbox svg.dwg{width:100%;max-height:52mm}.figbox.s svg.dwg{max-height:34mm}.figbox.m svg.dwg{max-height:44mm}table.care td{padding:1.1mm 2.2mm;font-size:9pt}table.care ul.vl li{margin-bottom:.4mm}.figbox svg.dwg.small{max-height:44mm}
 .figrow{display:flex;gap:5mm;align-items:flex-end}.figrow .figbox{flex:1}
 .coverfig{position:absolute;top:150mm;left:30mm;right:16mm}.coverfig svg{width:100%;max-height:64mm}
 .cover .ctitle h1{font-size:34pt}.cover .cabs{font-size:10pt;color:#5b6577;margin-top:3mm}

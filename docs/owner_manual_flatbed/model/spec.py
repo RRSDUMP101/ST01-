@@ -25,3 +25,19 @@ VIEWS = [
 ]
 for v in VIEWS:
     if "crop" in v: v["sw"] = None
+
+# add-on rack (คอกเสริม): side racks, tail rack, pipe hoop, M12 fixing bolts on the gate top rails
+BOLTS = set(range(40, 49)) | set(range(51, 60))
+RACK = lambda i, b: IN(b) and ((b[1] >= 285 and b[0] > -1345) or i == 201 or i in BOLTS)
+INSIDE = (.9, .9, -.6)
+VIEWS += [
+    dict(name="norack", dir=REAR, keep=lambda i, b: IN(b) and not RACK(i, b)),
+    dict(name="rack_exploded", dir=REAR, keep=keep, move=[(RACK, (0, 420, 0))]),
+    dict(name="z_rack_front", dir=INSIDE, keep=near((-1420, 440, 820, -1220, 720, 1010)), crop=(-1420, 440, 820, -1220, 720, 1010), defl=.2),
+    dict(name="z_rack_rear", dir=REAR, keep=near((1200, 480, 860, 1330, 700, 1010)), crop=(1200, 480, 860, 1330, 700, 1010), defl=.2),
+    dict(name="z_rack_bolt", dir=REAR, keep=near((1080, 220, 900, 1210, 360, 1010)), crop=(1080, 220, 900, 1210, 360, 1010), defl=.2),
+    dict(name="z_rack_bolt_x", dir=REAR, keep=near((1080, 220, 900, 1210, 360, 1010)), crop=(1080, 220, 900, 1210, 360, 1010), defl=.2,
+         move=[(RACK, (0, 160, 0)), (lambda i, b: i in (40, 43, 47), (0, 0, 90)), (lambda i, b: i in (46,), (0, 0, -60))]),
+]
+for v in VIEWS:
+    if "crop" in v: v["sw"] = None

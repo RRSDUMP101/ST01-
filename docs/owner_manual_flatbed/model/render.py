@@ -51,6 +51,11 @@ for v in spec["VIEWS"]:
                 tr = gp_Trsf(); tr.SetRotation(gp_Ax1(gp_Pnt(*p), gp_Dir(*a)), math.radians(deg))
                 sh = BRepBuilderAPI_Transform(sh, tr, True).Shape()
                 BRepMesh_IncrementalMesh(sh, 2.0, False, 0.4, True)
+        for sel, mv in v.get("move", []):
+            if sel(i, bb):
+                tr = gp_Trsf(); tr.SetTranslation(__import__("OCP.gp", fromlist=["gp_Vec"]).gp_Vec(*mv))
+                sh = BRepBuilderAPI_Transform(sh, tr, True).Shape()
+                BRepMesh_IncrementalMesh(sh, 2.0, False, 0.4, True)
         bld.Add(comp, sh)
     d = gp_Dir(*v["dir"]); up = gp_Dir(*v.get("up", (0, 1, 0)))
     xd = up.Crossed(d)

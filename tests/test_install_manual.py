@@ -160,3 +160,24 @@ def test_install_page(window, tmp_path):
     assert (tmp_path / "steps.pdf").read_bytes()[:4] == b"%PDF" and pdf
     page.export("html", str(tmp_path / "steps.html"))
     assert "SO-77" in (tmp_path / "steps.html").read_text(encoding="utf-8")
+
+
+def test_3d_tab_fits_a_1080p_screen(window):
+    """The step buttons at the bottom of the 3D tab are on the screen without scrolling the page (1920 × 1080, 100 %):
+    the long job form scrolls in its own tab, and the tables of the 3D tab take the room there is."""
+    from PySide6.QtWidgets import QApplication
+
+    window.resize(1920, 1009)
+    window.show()
+    window.go("install")
+    page = window.pages["install"]
+    page.tabs.setCurrentWidget(page.assembly)
+    QApplication.processEvents()
+    frame = window._frames["install"]
+    assert frame.verticalScrollBar().maximum() == 0
+    a = page.assembly
+    assert a.part_btn.mapTo(frame.viewport(), a.part_btn.rect().bottomLeft()).y() <= frame.viewport().height()
+    assert a.bom.height() >= 150  # the list of the step keeps several rows
+    page.tabs.setCurrentWidget(page.form_scroll)  # the form is all there, in its own scroll area
+    QApplication.processEvents()
+    assert page.form_scroll.widget().height() >= page.form_scroll.widget().minimumSizeHint().height()

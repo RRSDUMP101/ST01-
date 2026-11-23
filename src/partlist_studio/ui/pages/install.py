@@ -7,7 +7,8 @@ from pathlib import Path
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QBrush, QPageSize, QPdfWriter, QTextDocument
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QFormLayout, QGridLayout, QGroupBox, QHBoxLayout,
-                               QLabel, QLineEdit, QSpinBox, QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget)
+                               QFrame, QLabel, QLineEdit, QScrollArea, QSpinBox, QTableWidgetItem, QTabWidget, QVBoxLayout,
+                               QWidget)
 
 from ...core import install_manual as im
 from .. import theme
@@ -100,7 +101,14 @@ class InstallPage(QWidget):
         lay.addWidget(self.verdict)
 
         self.tabs = QTabWidget()
-        self.tabs.addTab(self._form_tab(), "ข้อมูลงาน")
+        # the long form scrolls inside its tab: a tab widget is as tall as its tallest tab, and the form would make
+        # every tab (the 3D view with its step buttons at the bottom) taller than a 1080p screen
+        form = QScrollArea()
+        form.setWidgetResizable(True)
+        form.setFrameShape(QFrame.NoFrame)
+        form.setWidget(self._form_tab())
+        self.form_scroll = form
+        self.tabs.addTab(form, "ข้อมูลงาน")
         self.tabs.addTab(self._findings_tab(), "ผลตรวจ BEMM")
         self.tabs.addTab(self._steps_tab(), "ขั้นตอนติดตั้ง")
         self.assembly = AssemblyTab(state, lambda: self.job)

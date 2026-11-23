@@ -7,7 +7,7 @@ import time
 from pathlib import Path
 from struct import error as struct_error
 
-from PySide6.QtCore import QObject, Qt, QTimer, QUrl, Signal
+from PySide6.QtCore import QObject, QSize, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QBrush, QColor, QDesktopServices, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QCheckBox, QComboBox, QFileDialog, QFormLayout, QHBoxLayout,
                                QInputDialog, QLabel, QLineEdit, QMenu, QMessageBox, QSpinBox,
@@ -88,6 +88,16 @@ class AssemblyTab(QWidget):
         self._play_timer.setSingleShot(True)
         self._play_timer.timeout.connect(self._play_next)
         self.rebuild(force=True)
+
+    # ---- size: the whole tab on one screen ---------------------------------
+    def sizeHint(self) -> QSize:
+        """No taller than it must be: the page scroll area makes a page as tall as it would like, and the tables would
+        like more rows than a 1080p screen has room for – the step buttons at the bottom went below the screen. The
+        tables and the view take the room there is."""
+        return self.minimumSizeHint()
+
+    def hasHeightForWidth(self) -> bool:
+        return False  # else the wrapped note asks the scroll area for the height of the tables' wishes again
 
     # ---- panels -----------------------------------------------------------
     def _parts_panel(self) -> QWidget:
@@ -214,7 +224,7 @@ class AssemblyTab(QWidget):
         lay.addWidget(self.step_title)
         self.step_detail = QPlainTextEdit()
         self.step_detail.setPlaceholderText("วิธีประกอบ / ตำแหน่ง")
-        self.step_detail.setMaximumHeight(120)
+        self.step_detail.setMaximumHeight(96)
         self.step_detail.textChanged.connect(self._step_text_edited)
         lay.addWidget(self.step_detail)
         self.step_info = QLabel()
@@ -224,11 +234,14 @@ class AssemblyTab(QWidget):
         self.media_btn = button("วิดีโอ / รูปงานจริง…", tooltip="วิดีโอหรือรูปถ่ายงานประกอบจริงของขั้นนี้ – แนบครั้งเดียวแล้วเปิดดูได้ทุกครั้ง\n"
                                 "(ไฟล์อยู่ที่เดิม คู่มือประกอบเก็บเฉพาะที่อยู่ไฟล์ · รูปถ่ายออกในคู่มือ PDF)")
         self.media_btn.clicked.connect(self._media_menu)
-        lay.addWidget(self.media_btn)
         self.edit_btn = button("✎ แก้ไขขั้นตอน", tooltip="แก้แรงขัน เครื่องมือ จุดตรวจ คำเตือน · เพิ่ม ลบ เลื่อนลำดับขั้น")
         self.edit_btn.setCheckable(True)
         self.edit_btn.toggled.connect(self._edit_toggled)
-        lay.addWidget(self.edit_btn)
+        row_box = QWidget()  # one row for the two: the list of the step below gets the room
+        row = FlowLayout(row_box, h_spacing=6)
+        row.addWidget(self.media_btn)
+        row.addWidget(self.edit_btn)
+        lay.addWidget(row_box)
         self.editor = QWidget()
         form = QFormLayout(self.editor)
         form.setContentsMargins(0, 0, 0, 0)
@@ -270,7 +283,6 @@ class AssemblyTab(QWidget):
         lay.addWidget(self.bom, 1)
         self.done = QCheckBox("ประกอบขั้นนี้เสร็จ และตรวจแล้ว")
         self.done.toggled.connect(self._done_toggled)
-        lay.addWidget(self.done)
         row = QHBoxLayout()
         for text, slot, kind, tip in (("ภาพรวม", lambda: self.go(0), "", "ทุกชิ้นส่วน"),
                                       ("◀ ก่อนหน้า", lambda: self.go(self.step - 1), "", "ขั้นก่อนหน้า"),
@@ -293,7 +305,11 @@ class AssemblyTab(QWidget):
         lay.addWidget(self.part_btn)  # on a row of its own: the panel must not get wider
         self.progress = QLabel()
         self.progress.setObjectName("Hint")
-        lay.addWidget(self.progress)
+        row_box = QWidget()  # the tick and the count of steps done on one row
+        row = FlowLayout(row_box, h_spacing=12)
+        row.addWidget(self.done)
+        row.addWidget(self.progress)
+        lay.insertWidget(lay.indexOf(self.bom) + 1, row_box)
         return w
 
     # ---- model ------------------------------------------------------------

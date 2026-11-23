@@ -306,3 +306,154 @@ def mudguard():
         g.append(f'<line x1="{x}" y1="{y}" x2="{lx}" y2="{ly}" stroke="{NAVY}" stroke-width="1"/>')
         g.append(_num(k, lx, ly, 9))
     return _svg("".join(g), "-60 -2 520 225")
+
+
+# ---------------------------------------------------------------- part details (traced from RRS assembly footage, no people)
+def _dash(x, y, r):
+    return f'<circle cx="{x}" cy="{y}" r="{r}" fill="none" stroke="{NAVY}" stroke-width="2.2" stroke-dasharray="6 4"/>'
+
+
+def _hexes(x0, y0, w, h, s=9):
+    out = []
+    dx, dy = s * 1.75, s * 1.5
+    row = 0
+    y = y0 + s
+    while y < y0 + h - s * .6:
+        x = x0 + s + (dx / 2 if row % 2 else 0)
+        while x < x0 + w - s * .6:
+            pts = " ".join(f"{x + s * .78 * __import__('math').cos(a * 3.14159 / 3 + .5236):.1f},{y + s * .78 * __import__('math').sin(a * 3.14159 / 3 + .5236):.1f}" for a in range(6))
+            out.append(f'<polygon points="{pts}" fill="#fff" stroke="{INK}" stroke-width=".8"/>')
+            x += dx
+        y += dy
+        row += 1
+    return "".join(out)
+
+
+def details():
+    g = []
+    # headboard on the front edge of the floor
+    g.append(f'<rect x="176" y="22" width="268" height="88" fill="{LIGHT}" stroke="{INK}" stroke-width="2"/>')
+    g.append(f'<clipPath id="hb"><rect x="184" y="30" width="252" height="72"/></clipPath><g clip-path="url(#hb)">{_hexes(184, 30, 252, 72, 7)}</g>')
+    g.append(f'<rect x="184" y="30" width="252" height="72" fill="none" stroke="{INK}" stroke-width="1.4"/>')
+    for xx in (176, 436):
+        g.append(f'<rect x="{xx}" y="14" width="8" height="98" fill="{FILL}" stroke="{INK}" stroke-width="1.8"/>')
+    # floor (oblique view from the rear-left)
+    g.append(f'<path d="M70 172 L330 172 L444 112 L184 112 Z" fill="{FILL}" stroke="{INK}" stroke-width="2"/>')
+    g.append('<clipPath id="fl"><path d="M74 169 L328 169 L438 115 L186 115 Z"/></clipPath><g clip-path="url(#fl)">')
+    for r in range(0, 10):
+        y = 117 + r * 6
+        off = (r % 2) * 7
+        for c in range(0, 40):
+            x = 72 + c * 14 + off + (172 - y) * 1.9 - 0
+            g.append(f'<ellipse cx="{x:.0f}" cy="{y}" rx="2.2" ry="1.2" fill="none" stroke="{INK}" stroke-width=".6"/>')
+    g.append('</g>')
+    # rear rail and right side rail
+    g.append(f'<path d="M70 172 L330 172 L330 194 L70 194 Z" fill="#c9d2de" stroke="{INK}" stroke-width="2"/>')
+    g.append(f'<path d="M330 172 L444 112 L444 134 L330 194 Z" fill="#dfe5ee" stroke="{INK}" stroke-width="2"/>')
+    # plate hinges on the rear rail and the side rail
+    for xx in (118, 270):
+        g.append(f'<rect x="{xx}" y="176" width="22" height="14" rx="2" fill="#fff" stroke="{INK}" stroke-width="1.4"/><line x1="{xx}" y1="183" x2="{xx + 22}" y2="183" stroke="{INK}" stroke-width="1"/>')
+    for t in (.3, .72):
+        x, y = 330 + 114 * t, 183 - 60 * t
+        g.append(f'<path d="M{x - 8:.0f} {y + 4:.0f} l14 -7 l0 11 l-14 7 z" fill="#fff" stroke="{INK}" stroke-width="1.3"/>')
+    # tail-lamp housings under the rear corners
+    for xx in (74, 290):
+        g.append(f'<rect x="{xx}" y="196" width="36" height="24" rx="2" fill="#fff" stroke="{INK}" stroke-width="1.6"/>'
+                 f'<rect x="{xx + 4}" y="200" width="28" height="16" fill="{LIGHT}" stroke="{INK}" stroke-width="1"/><line x1="{xx + 18}" y1="200" x2="{xx + 18}" y2="216" stroke="{INK}"/>')
+    # under-frame and wheel hint
+    g.append(f'<path d="M120 194 L120 214 M280 194 L280 214" stroke="{INK}" stroke-width="2"/>')
+    # dashed callouts
+    spots = [(1, 250, 140, 22), (4, 129, 183, 17), (7, 92, 208, 21), (2, 310, 66, 26)]
+    for _, x, y, r in spots:
+        g.append(_dash(x, y, r))
+    # magnified bubbles along the bottom
+    bx = [8, 156, 304, 452]
+    for i, (n, x, y, r) in enumerate(spots):
+        cx = bx[i] + 70
+        g.append(f'<line x1="{x}" y1="{y + r}" x2="{cx}" y2="252" stroke="{INK}" stroke-width="1" stroke-dasharray="4 3"/>')
+    g.append(_zoom(8, 252, 140, 118, _hexdots(16, 262, 124, 98)))
+    g.append(_zoom(156, 252, 140, 118,
+         f'<rect x="164" y="300" width="124" height="34" fill="#c9d2de" stroke="{INK}" stroke-width="1.6"/>'
+         f'<rect x="196" y="278" width="60" height="26" rx="3" fill="#fff" stroke="{INK}" stroke-width="1.6"/>'
+         f'<rect x="196" y="304" width="60" height="26" rx="3" fill="#fff" stroke="{INK}" stroke-width="1.6"/>'
+         f'<rect x="190" y="299" width="72" height="10" rx="5" fill="{LIGHT}" stroke="{INK}" stroke-width="1.6"/>'
+         + "".join(f'<circle cx="{xx}" cy="{yy}" r="3.4" fill="#fff" stroke="{INK}" stroke-width="1.3"/>' for xx in (208, 244) for yy in (290, 320))))
+    g.append(_zoom(304, 252, 140, 118,
+         f'<rect x="322" y="276" width="104" height="70" rx="4" fill="#fff" stroke="{INK}" stroke-width="1.8"/>'
+         f'<rect x="332" y="286" width="84" height="50" fill="{LIGHT}" stroke="{INK}" stroke-width="1.3"/>'
+         f'<line x1="360" y1="286" x2="360" y2="336" stroke="{INK}"/><line x1="388" y1="286" x2="388" y2="336" stroke="{INK}"/>'
+         f'<rect x="314" y="262" width="120" height="12" fill="#c9d2de" stroke="{INK}" stroke-width="1.4"/>'))
+    g.append(_zoom(452, 252, 140, 118,
+         f'<rect x="462" y="262" width="120" height="98" fill="{LIGHT}" stroke="{INK}" stroke-width="2"/>'
+         f'<clipPath id="hz"><rect x="470" y="270" width="104" height="82"/></clipPath><g clip-path="url(#hz)">{_hexes(470, 270, 104, 82, 11)}</g>'
+         f'<rect x="470" y="270" width="104" height="82" fill="none" stroke="{INK}" stroke-width="1.4"/>'))
+    for i, (n, *_r) in enumerate(spots):
+        g.append(_num(n, bx[i] + 14, 266))
+    return _svg("".join(g), "0 0 600 376")
+
+
+def _hexdots(x0, y0, w, h):
+    out = [f'<rect x="{x0}" y="{y0}" width="{w}" height="{h}" fill="{FILL}" stroke="{INK}" stroke-width="1.6"/>']
+    for r in range(7):
+        for c in range(9):
+            x = x0 + 10 + c * 14 + (7 if r % 2 else 0)
+            y = y0 + 10 + r * 13
+            if x < x0 + w - 6:
+                out.append(f'<ellipse cx="{x}" cy="{y}" rx="4.2" ry="2.4" fill="#fff" stroke="{INK}" stroke-width="1"/>')
+    return "".join(out)
+
+
+# ---------------------------------------------------------------- how the body is made – line icons, no people
+def process_icon(k):
+    s = []
+    if k == 1:   # CAD design
+        s += [f'<rect x="20" y="10" width="120" height="74" rx="4" fill="#fff" stroke="{INK}" stroke-width="2"/>',
+              f'<rect x="28" y="18" width="104" height="58" fill="{FILL}" stroke="{INK}"/>',
+              f'<path d="M44 60 L96 60 L116 46 L64 46 Z M44 60 L44 66 L96 66 L96 60 M96 66 L116 52 L116 46" fill="none" stroke="{BLUE}" stroke-width="1.6"/>',
+              f'<path d="M64 46 L64 30 L116 30 L116 46" fill="none" stroke="{BLUE}" stroke-width="1.6"/>',
+              f'<path d="M70 84 L90 84 L96 100 L64 100 Z" fill="{LIGHT}" stroke="{INK}" stroke-width="1.6"/>']
+    elif k == 2:  # laser cutting
+        s += [f'<rect x="14" y="78" width="132" height="10" fill="{LIGHT}" stroke="{INK}" stroke-width="1.6"/>',
+              f'<rect x="14" y="14" width="132" height="12" fill="#fff" stroke="{INK}" stroke-width="2"/>',
+              f'<path d="M70 26 L90 26 L86 52 L74 52 Z" fill="#fff" stroke="{INK}" stroke-width="1.8"/><path d="M76 52 L80 60 L84 52" fill="{INK}"/>',
+              f'<line x1="80" y1="60" x2="80" y2="78" stroke="{RED}" stroke-width="2.4"/>',
+              f'<path d="M30 78 L60 78" stroke="{BLUE}" stroke-width="2" stroke-dasharray="4 3"/>'] + \
+             [f'<line x1="80" y1="78" x2="{80 + dx}" y2="{78 - dy}" stroke="{RED}" stroke-width="1.2"/>' for dx, dy in ((10, 8), (-9, 9), (14, 2), (-13, 3))]
+    elif k == 3:  # press brake bending
+        s += [f'<rect x="20" y="10" width="120" height="22" fill="#fff" stroke="{INK}" stroke-width="2"/>',
+              f'<path d="M72 32 L88 32 L80 54 Z" fill="{LIGHT}" stroke="{INK}" stroke-width="1.8"/>',
+              f'<path d="M20 70 L66 70 L80 58 L94 70 L140 70 L140 96 L20 96 Z" fill="#fff" stroke="{INK}" stroke-width="2"/>',
+              f'<path d="M14 50 L80 56 L146 50" fill="none" stroke="{BLUE}" stroke-width="3"/>',
+              f'<path d="M80 6 L80 2" stroke="{INK}"/><path d="M60 40 L60 50" stroke="{CYAN}" stroke-width="2" marker-end="url(#ar)"/>']
+    elif k == 4:  # part check
+        s += [f'<path d="M16 76 L100 76 L100 46 L112 46" fill="none" stroke="{BLUE}" stroke-width="4"/>',
+              f'<rect x="20" y="22" width="96" height="12" fill="#fff" stroke="{INK}" stroke-width="1.6"/>'] + \
+             [f'<line x1="{x}" y1="22" x2="{x}" y2="{28 if x % 16 else 31}" stroke="{INK}"/>' for x in range(28, 112, 8)] + \
+             [f'<circle cx="128" cy="78" r="16" fill="{GREEN}"/><path d="M120 78 l6 6 l11 -12" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round"/>']
+    elif k == 5:  # robot welding
+        s += [f'<rect x="20" y="86" width="40" height="12" fill="{LIGHT}" stroke="{INK}" stroke-width="1.6"/>',
+              f'<path d="M40 86 L40 66 L76 30 L110 44" fill="none" stroke="{INK}" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>',
+              f'<path d="M40 86 L40 66 L76 30 L110 44" fill="none" stroke="#fff" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>',
+              f'<circle cx="40" cy="66" r="6" fill="#fff" stroke="{INK}" stroke-width="1.6"/><circle cx="76" cy="30" r="6" fill="#fff" stroke="{INK}" stroke-width="1.6"/>',
+              f'<path d="M110 44 L118 70" stroke="{INK}" stroke-width="4"/>',
+              f'<rect x="90" y="80" width="56" height="12" fill="{LIGHT}" stroke="{INK}" stroke-width="1.6"/>'] + \
+             [f'<line x1="118" y1="78" x2="{118 + dx}" y2="{78 - dy}" stroke="{CYAN}" stroke-width="1.4"/>' for dx, dy in ((10, 6), (-10, 6), (0, 11), (12, -1))]
+    elif k == 6:  # weld finishing
+        s += [f'<rect x="14" y="70" width="132" height="24" fill="{LIGHT}" stroke="{INK}" stroke-width="1.6"/>',
+              f'<path d="M24 70 q8 -5 16 0 q8 -5 16 0 q8 -5 16 0" fill="none" stroke="{INK}" stroke-width="1.4"/>',
+              f'<ellipse cx="96" cy="62" rx="18" ry="6" fill="#fff" stroke="{INK}" stroke-width="1.8"/>',
+              f'<rect x="88" y="28" width="16" height="30" rx="4" fill="#fff" stroke="{INK}" stroke-width="1.8"/>',
+              f'<rect x="102" y="20" width="44" height="14" rx="6" fill="#fff" stroke="{INK}" stroke-width="1.8"/>'] + \
+             [f'<line x1="78" y1="68" x2="{78 - dx}" y2="{68 - dy}" stroke="{RED}" stroke-width="1.4"/>' for dx, dy in ((18, 10), (22, 2), (14, 18), (26, -4))]
+    elif k == 7:  # powder coating
+        s += [f'<line x1="70" y1="4" x2="70" y2="18" stroke="{INK}" stroke-width="1.6"/><path d="M66 18 q4 6 8 0" fill="none" stroke="{INK}" stroke-width="1.6"/>',
+              f'<rect x="40" y="24" width="60" height="70" fill="{LIGHT}" stroke="{INK}" stroke-width="2"/>',
+              f'<path d="M130 50 L112 56 L112 64 L130 60 Z" fill="#fff" stroke="{INK}" stroke-width="1.8"/><path d="M126 60 L130 82" stroke="{INK}" stroke-width="3"/>'] + \
+             [f'<circle cx="{x}" cy="{y}" r="1.4" fill="{BLUE}"/>' for x, y in ((106, 54), (102, 60), (104, 66), (98, 50), (100, 72), (96, 58), (94, 66))]
+    else:        # final inspection
+        s += [f'<path d="M14 70 L96 70 L120 56 L38 56 Z" fill="{FILL}" stroke="{INK}" stroke-width="1.8"/>',
+              f'<rect x="14" y="70" width="82" height="10" fill="#c9d2de" stroke="{INK}" stroke-width="1.6"/>',
+              f'<rect x="38" y="30" width="6" height="26" fill="#fff" stroke="{INK}"/><rect x="114" y="22" width="6" height="34" fill="#fff" stroke="{INK}"/>',
+              f'<rect x="104" y="12" width="44" height="58" rx="3" fill="#fff" stroke="{INK}" stroke-width="1.8"/>'] + \
+             [f'<path d="M112 {y} l4 4 l7 -8" fill="none" stroke="{GREEN}" stroke-width="2.2"/><line x1="128" y1="{y}" x2="142" y2="{y}" stroke="{INK}"/>' for y in (28, 42, 56)]
+    return _svg("".join(s), "0 0 160 104", "dwg icon")

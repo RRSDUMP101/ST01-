@@ -76,7 +76,7 @@ raw('''<div class="cover"><div class="stripe"></div>
 TOC = [
     ("", "วิธีใช้คู่มือเล่มนี้", "How to use this manual", 3),
     ("", "เงื่อนไขการรับประกัน", "Warranty conditions", 4), ("", "ส่วนประกอบเพิ่มเติม", "Conversion components", 6),
-    ("", "ภาพกระบะจริง", "The actual body", 7), ("", "สร้างโดย RRS", "Built by RRS", 8),
+    ("", "รายละเอียดชิ้นส่วน", "Part details", 7), ("", "สร้างโดย RRS", "Built by RRS", 8),
     ("", "เพื่อการขับขี่อย่างปลอดภัย", "For safe driving", 9),
     ("1", "ขนาดและน้ำหนัก", "Dimensions and weight", 12), ("1.1", "ขนาด", "Dimensions", 12), ("1.2", "น้ำหนัก", "Weight", 13),
     ("2", "ฝาท้าย – การล็อก / ปลดล็อก และการเปิด / ปิด", "Tailgate – locking, unlocking, opening and closing", 14),
@@ -144,42 +144,30 @@ parts = [("1", "ตะแกรงกันหัว", "Headboard"), ("2", "ฝ�
 page("ส่วนประกอบเพิ่มเติม (Conversion components)", band("ส่วนประกอบเพิ่มเติม", "Conversion components") + forcab() + fig(D.components()) +
      table(["#", "ชิ้นส่วน", "Part"], [[f'<span class="numdot">{n}</span>', t, f'<span class="en">{e}</span>'] for n, t, e in parts], [8, 50, 42], "plist"))
 
-# ---------------------------------------------------------------- real photos (RRS factory footage, Nov 2026)
-def photo(src, cap, h, k="", pos="center"):
-    return f'<figure class="ph {k}" style="height:{h}mm"><img src="img/{src}.jpg" style="object-position:{pos}"><figcaption>{cap}</figcaption></figure>'
-
-
-def pin(n, x, y):
-    return f'<span class="pin" style="left:{x}%;top:{y}%">{n}</span>'
-
-
-page("ภาพกระบะจริง (The actual body)", band("ภาพกระบะจริง", "The actual body – photos from the RRS assembly line") + forcab() +
-     para("ภาพจากสายการประกอบของ RRS ก่อนทำสี แสดงตำแหน่งชิ้นส่วนจริงที่อ้างถึงในคู่มือเล่มนี้ หมายเลขตรงกับตารางหน้าส่วนประกอบเพิ่มเติม",
-          "Photos from the RRS assembly line, before painting, showing the real parts this manual refers to. Numbers match the conversion-components table.") +
-     '<div class="phwrap">' + photo("real_rear", "ท้ายกระบะ: พื้น บานพับ และกล่องไฟท้าย (Rear of body: floor, hinges, lamp housing)", 53, pos="center 85%") +
-     pin(1, 22, 42) + pin(4, 37, 70) + pin(7, 82, 80) + '</div>' +
-     '<div class="phrow">' + photo("real_corner", "มุมท้าย: บานพับฝาท้าย และไฟท้าย (Rear corner)", 34, pos="center 95%") +
-     photo("real_frame", "โครงใต้พื้น และเสาตะแกรงกันหัว (Frame, headboard post)", 34) + pin(2, 96, 18) + '</div>' +
-     table(["#", "สิ่งที่เห็นในภาพ (What the photo shows)", "ผู้ใช้ควรรู้ (What it means for you)"], [
+# ---------------------------------------------------------------- part details and how it is made (2D line art traced from RRS assembly footage, Nov 2026)
+page("รายละเอียดชิ้นส่วน (Part details)", band("รายละเอียดชิ้นส่วน", "Part details") + forcab() +
+     para("ภาพขยายชิ้นส่วนที่อ้างถึงในคู่มือเล่มนี้ หมายเลขตรงกับตารางหน้าส่วนประกอบเพิ่มเติม",
+          "Close-ups of the parts this manual refers to. Numbers match the conversion-components table.") +
+     fig(D.details(), k="xl") +
+     table(["#", "ชิ้นส่วน (Part)", "ผู้ใช้ควรรู้ (What it means for you)"], [
          ['<span class="numdot">1</span>', "พื้นแผ่นเหล็กลายกันลื่นแบบเจาะรู<span class=\"en-line\">Perforated anti-slip steel floor</span>",
           "น้ำและเศษดินระบายผ่านรูได้ ล้างเศษหินที่ติดรูออกเป็นประจำ<span class=\"en-line\">Water drains through; rinse out stones caught in the holes</span>"],
          ['<span class="numdot">4</span>', "บานพับฝาแบบแผ่นยึดที่ขอบพื้น<span class=\"en-line\">Plate hinges on the floor edge</span>",
-          "จุดหล่อลื่นประจำเดือน (ดูหัวข้อ 8)<span class=\"en-line\">Monthly lubrication point</span>"],
+          "จุดหล่อลื่นประจำเดือน (ดูหัวข้อ 8)<span class=\"en-line\">Monthly lubrication point (see 8)</span>"],
          ['<span class="numdot">7</span>', "กล่องไฟท้ายที่มุมกระบะ<span class=\"en-line\">Tail-lamp housing at the body corner</span>",
           "ห้ามใช้เป็นที่เหยียบ หรือผูกเชือก<span class=\"en-line\">Do not step on it or tie ropes to it</span>"],
          ['<span class="numdot">2</span>', "ตะแกรงกันหัวแผ่นเจาะรูหกเหลี่ยม<span class=\"en-line\">Headboard with hexagon-perforated panel</span>",
-          "กันสินค้าเลื่อนเข้าหาเก๋ง ไม่ใช่จุดผูกรัดหลัก (ดูหัวข้อ 7)<span class=\"en-line\">Stops load moving forward; not a main tie-down point</span>"]], [7, 43, 50], "plist"))
+          "กันสินค้าเลื่อนเข้าหาเก๋ง ไม่ใช่จุดผูกรัดหลัก (ดูหัวข้อ 7)<span class=\"en-line\">Stops load moving forward; not a main tie-down point (see 7)</span>"]], [7, 43, 50], "plist"))
 
+STEPS = [("ออกแบบด้วย CAD", "CAD design"), ("ตัดแผ่นด้วยเลเซอร์", "Laser cutting"), ("พับขึ้นรูปด้วยเครื่องพับ CNC", "CNC bending"),
+         ("ตรวจขนาดชิ้นงาน", "Part check"), ("เชื่อมด้วยหุ่นยนต์", "Robot welding"), ("เจียรแต่งรอยเชื่อม", "Weld finishing"),
+         ("พ่นสีฝุ่น", "Powder coating"), ("ตรวจกระบะก่อนส่งมอบ", "Final inspection")]
 page("สร้างโดย RRS (Built by RRS)", band("สร้างโดย RRS", "Built by RRS – how your body is made") +
      para("กระบะทุกใบผลิตในโรงงาน RRS ตามแบบเดียวกัน ชิ้นส่วนอะไหล่จึงใส่แทนกันได้พอดี การเจาะ ตัด หรือเชื่อมเพิ่มภายหลังจะทำให้โครงสร้างต่างจากแบบ และอยู่นอกเงื่อนไขการรับประกัน",
           "Every body is built in the RRS factory to one drawing, so spare parts fit exactly. Drilling, cutting or welding afterwards changes the structure from the drawing and is outside the warranty.") +
-     '<div class="phgrid">' +
-     photo("mk_cad", "1 ออกแบบด้วย CAD (CAD design)", 31) + photo("mk_laser", "2 ตัดแผ่นด้วยเลเซอร์ (Laser cutting)", 31) +
-     photo("mk_bend", "3 พับขึ้นรูปด้วยเครื่องพับ CNC (CNC bending)", 31) + photo("mk_check", "4 ตรวจชิ้นงานหลังพับ (Part check)", 31) +
-     photo("mk_robot", "5 เชื่อมด้วยหุ่นยนต์ (Robot welding)", 31) + photo("mk_grind", "6 เจียรแต่งรอยเชื่อม (Weld finishing)", 31) +
-     photo("mk_powder", "7 พ่นสีฝุ่น (Powder coating)", 31) + photo("mk_review", "8 ตรวจงานร่วมกับทีมวิศวกร (Engineering check)", 31) + '</div>' +
-     remark(("ภาพจากวิดีโองานประกอบจริงของ RRS (พ.ย. 2569) · ขั้นที่ 7 เป็นภาพสายพ่นสีของโรงงาน ชนิดสีของกระบะรุ่นนี้ให้ยืนยันกับ RRS",
-             "Stills from RRS assembly footage (Nov 2026). Step 7 shows the factory paint line; confirm this body's finish with RRS.")))
+     '<div class="pgrid">' + "".join(f'<div class="pcard"><span class="numdot">{i}</span>{D.process_icon(i)}<p>{t}<span class="en-line">{e}</span></p></div>'
+                                     for i, (t, e) in enumerate(STEPS, 1)) + '</div>' +
+     remark(("ชนิดสีของกระบะรุ่นนี้ให้ยืนยันกับ RRS", "Confirm this body's finish with RRS.")))
 
 # ---------------------------------------------------------------- safe driving
 page("เพื่อการขับขี่อย่างปลอดภัย (For safe driving)", band("เพื่อการขับขี่อย่างปลอดภัย", "For safe driving") +
@@ -422,6 +410,6 @@ table.toc td{padding:.75mm 2.2mm;font-size:9.2pt}table.toc tr.grp td{background:
 table.plist td{padding:1.4mm 2.5mm}.numdot{display:inline-flex;width:6mm;height:6mm;border-radius:50%;background:#0B2A5B;color:#fff;font-weight:bold;align-items:center;justify-content:center;font-size:9pt}
 .wt-in{color:#B23B37;font-weight:bold}.rm-in{color:#0B2A5B;font-weight:bold}
 figure.ph{margin:0 0 2mm}figure.ph figcaption{font-size:8.2pt;padding:1mm 2.5mm}.phwrap{position:relative}.pin{position:absolute;width:6.5mm;height:6.5mm;border-radius:50%;background:#00B4F0;color:#0B2A5B;border:.8mm solid #fff;font-weight:bold;font-size:9pt;display:flex;align-items:center;justify-content:center;transform:translate(-50%,-50%);box-shadow:0 .4mm 1.2mm rgba(0,0,0,.35)}
-.phrow{display:flex;gap:4mm;position:relative}.phrow figure{flex:1}.phgrid{display:grid;grid-template-columns:1fr 1fr;gap:3mm;margin:2mm 0}.phgrid figure.ph{margin:0}
+.phrow{display:flex;gap:4mm;position:relative}.figbox.xl svg.dwg{max-height:98mm}.pgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:3mm;margin:3mm 0}.pcard{border:.8pt solid #c9d6ea;border-radius:2mm;padding:2mm;position:relative;text-align:center}.pcard .numdot{position:absolute;left:1.5mm;top:1.5mm}.pcard svg.dwg{width:100%;height:24mm}.pcard p{margin:1mm 0 0;font-size:9pt;line-height:1.3;font-weight:bold;color:#0B2A5B}.pcard .en-line{font-weight:normal}.phrow figure{flex:1}.phgrid{display:grid;grid-template-columns:1fr 1fr;gap:3mm;margin:2mm 0}.phgrid figure.ph{margin:0}
 table.dodont th:first-child{background:#1F9D6B}table.dodont th:last-child{background:#D9534F}
 ''')

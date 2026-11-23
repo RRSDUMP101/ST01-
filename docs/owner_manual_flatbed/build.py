@@ -12,6 +12,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "warranty_booklet"))
 from common import *  # noqa: E402,F403
 import drawings as D  # noqa: E402
+import model as M  # noqa: E402
+P = M.PT
 
 set_footer("คู่มือการใช้งาน · กระบะพื้นเรียบคาร์โก้ RRS · Ford Ranger Super Duty")
 B = "____"
@@ -69,7 +71,7 @@ raw('''<div class="cover"><div class="stripe"></div>
 <div class="ctitle"><small>OWNER MANUAL</small><h1>คู่มือการใช้งาน</h1>
 <p>กระบะพื้นเรียบคาร์โก้ RRS เปิด 3 ทาง<br><span style="color:#1257C8">RRS Cargo Flatbed · 3-way opening</span></p>
 <p class="cabs">Single Cab · Super Cab · Double Cab<br>สำหรับ Ford Ranger Super Duty</p></div>
-<div class="coverfig">''' + D.components() + '''</div>
+<div class="coverfig">''' + M.view("iso") + '''</div>
 <div class="cfoot"><span>รหัสคู่มือ (P/N) ____________</span><span>Serial No. กระบะ ____________</span></div></div>''', "nocrop")
 
 # ---------------------------------------------------------------- contents
@@ -141,17 +143,21 @@ parts = [("1", "ตะแกรงกันหัว", "Headboard"), ("2", "ฝ�
          ("4", "บานพับฝาข้าง (ข้างละ 3 จุด)", "Side gate hinges (3 per side)"), ("5", "กลอนล็อกฝา (มือจับ)", "Gate latch (handle)"),
          ("6", "ตะขอผ้าใบ / จุดผูกรัด", "Rope hooks / tie-down points"), ("7", "โรบาร์หลัง ไฟท้าย ป้ายทะเบียน", "Rear bar, tail lamps, number plate"),
          ("8", "บังโคลน", "Mudguard"), ("9", "แท่นยึดและขาเต้า (ยึดกับแชสซีส์)", "Mounting brackets (to the chassis)")]
-page("ส่วนประกอบเพิ่มเติม (Conversion components)", band("ส่วนประกอบเพิ่มเติม", "Conversion components") + forcab() + fig(D.components()) +
+page("ส่วนประกอบเพิ่มเติม (Conversion components)", band("ส่วนประกอบเพิ่มเติม", "Conversion components") + forcab() + M.view("iso", [("n", P["headboard"], 1, -130, -20), ("n", P["side_gate"], 2, -40, 120), ("n", P["tailgate"], 3, 110, 40),
+                        ("n", P["hinge_sg"][2], 4, 0, 110), ("n", P["lever_rh"], 5, 100, -40), ("n", P["tiedown"][4], 6, 60, -120),
+                        ("n", P["lamp_rh"], 7, 120, 30), ("n", P["mudguard"], 8, -30, 110), ("n", P["mount"], 9, -110, 90)], cls="m") +
      table(["#", "ชิ้นส่วน", "Part"], [[f'<span class="numdot">{n}</span>', t, f'<span class="en">{e}</span>'] for n, t, e in parts], [8, 50, 42], "plist"))
 
 # ---------------------------------------------------------------- part details and how it is made (2D line art traced from RRS assembly footage, Nov 2026)
 page("รายละเอียดชิ้นส่วน (Part details)", band("รายละเอียดชิ้นส่วน", "Part details") + forcab() +
-     para("ภาพขยายชิ้นส่วนที่อ้างถึงในคู่มือเล่มนี้ หมายเลขตรงกับตารางหน้าส่วนประกอบเพิ่มเติม",
-          "Close-ups of the parts this manual refers to. Numbers match the conversion-components table.") +
-     fig(D.details(), k="xl") +
+     para("ภาพลายเส้นจากแบบ 3D ของกระบะ แสดงชิ้นส่วนที่อ้างถึงในคู่มือเล่มนี้ หมายเลขตรงกับตารางหน้าส่วนประกอบเพิ่มเติม",
+          "Line drawings from the 3D model of the body, showing the parts this manual refers to. Numbers match the conversion-components table.") +
+     M.view("iso", [("c", P["floor"], 55), ("n", P["floor"], 1, -90, -60), ("c", P["hinge_sg"][1], 30), ("n", P["hinge_sg"][1], 4, -60, 70),
+                     ("c", P["lamp_rh"], 38), ("n", P["lamp_rh"], 7, 70, 60), ("c", P["headboard"], 70), ("n", P["headboard"], 2, -110, -40)], cls="h") +
+     M.row(M.view("z_hinge_sg", cap="④ บานพับฝาข้าง (Side gate hinges)", cls="box"), M.view("z_hinge_tg", cap="⑦ ไฟท้าย และบานพับฝาท้าย (Lamps, tailgate hinges)", cls="box")) +
      table(["#", "ชิ้นส่วน (Part)", "ผู้ใช้ควรรู้ (What it means for you)"], [
-         ['<span class="numdot">1</span>', "พื้นแผ่นเหล็กลายกันลื่นแบบเจาะรู<span class=\"en-line\">Perforated anti-slip steel floor</span>",
-          "น้ำและเศษดินระบายผ่านรูได้ ล้างเศษหินที่ติดรูออกเป็นประจำ<span class=\"en-line\">Water drains through; rinse out stones caught in the holes</span>"],
+         ['<span class="numdot">1</span>', "พื้นแผ่นเหล็ก 3 แผ่น ยึดกับคานขวาง<span class=\"en-line\">Three steel floor plates on cross members</span>",
+          "ห้ามเจาะหรือเชื่อมเพิ่ม วางของหนักบนแนวคานขวาง<span class=\"en-line\">Do not drill or weld; set heavy loads over the cross members</span>"],
          ['<span class="numdot">4</span>', "บานพับฝาแบบแผ่นยึดที่ขอบพื้น<span class=\"en-line\">Plate hinges on the floor edge</span>",
           "จุดหล่อลื่นประจำเดือน (ดูหัวข้อ 8)<span class=\"en-line\">Monthly lubrication point (see 8)</span>"],
          ['<span class="numdot">7</span>', "กล่องไฟท้ายที่มุมกระบะ<span class=\"en-line\">Tail-lamp housing at the body corner</span>",
@@ -189,14 +195,14 @@ page("เพื่อการขับขี่อย่างปลอดภ�
 page("เพื่อการขับขี่อย่างปลอดภัย (For safe driving)", band("เพื่อการขับขี่อย่างปลอดภัย", "For safe driving") +
      warn(("ตรวจการล็อกของมือจับกลอนทุกจุดให้สมบูรณ์ หากล็อกไม่สนิท ฝาอาจเปิดออกขณะขับรถ และเกิดอุบัติเหตุได้",
            "Check that every latch handle is fully locked. If not, a gate may open while driving and cause an accident.")) +
-     figs((D.latch("locked"), "ลักษณะมือจับที่ล็อกสมบูรณ์"), (D.latch("half"), "ลักษณะมือจับที่ล็อกไม่สมบูรณ์")) +
+     M.row(M.view("z_lever", [("c", P["lever_rh"], 90)], "ลักษณะมือจับที่ล็อกสมบูรณ์ (Locked)", "box h"), M.view("z_lever_open", [("c", (1320, 236, 1093), 90)], "ลักษณะมือจับที่ไม่ได้ล็อก (Not locked)", "box h")) +
      warn(("ฝาท้ายที่เปิดไว้จะบังไฟท้ายและป้ายทะเบียน รถที่ตามมาจะมองไม่เห็นและอาจเกิดอุบัติเหตุ ก่อนขับรถ ตรวจให้แน่ใจว่าฝาท้ายปิดและล็อกแน่นหนาแล้ว",
            "An open tailgate hides the tail lamps and number plate from drivers behind and may cause an accident. Make sure the tailgate is closed and firmly locked before driving.")) +
-     fig(D.lamp_hidden()))
+     M.view("tg180", [("c", P["lamp_rh"], 60), ("c", P["lamp_lh"], 60), ("c", P["plate"], 55)], cls="h2"))
 
 # ---------------------------------------------------------------- 1 dimensions
 page("1. ขนาดและน้ำหนัก (Dimensions and weight)", band("1. ขนาดและน้ำหนัก", "Dimensions and weight") + h3("1.1 ขนาด", "Dimensions") + forcab("Single Cab") +
-     fig(D.top_view("2,669", note="Single Cab"), "กระบะพื้นเรียบคาร์โก้ Single Cab – มองจากด้านบน (top view)") +
+     M.view("top", [("t", (-65, 17, 0), "2,669 มม.", 0, 0), ("t", (-1300, 17, 0), "1,874 มม.", 0, 0)], "กระบะพื้นเรียบคาร์โก้ Single Cab – มองจากด้านบน (top view) จากแบบ 3D", "xxs") +
      table(["รายการ (Item)", "ค่า (Value)"], [["ความยาวพื้น × ความกว้างพื้น (Floor L × W)", "2,669 × 1,874 มม."], ["ความกว้างโครงหลัก (Main frame width)", "1,962 มม."],
                                              ["ความยาวรวม (Overall length)", "2,801 มม."], ["ความสูงฝาข้าง (Side gate height)", f"{B} มม."]], [60, 40]))
 
@@ -216,15 +222,15 @@ page("2. ฝาท้าย (Tailgate)", band("2. ฝาท้ายกระบ
      steps(("ยกฝาท้ายขึ้นจนชิดเสามุมหลังทั้งสองข้าง", "Raise the tailgate until it rests against both rear corner posts."),
            ("ยกมือจับขึ้น แล้วดึงมือจับผ่านตะขอออกไปทางด้านนอกตัวรถ ทั้งฝั่งซ้ายและฝั่งขวา", "Lift the handle and move it over the hook toward the outside of the vehicle, left and right."),
            ("กดมือจับลงจนแนบกับฝา", "Press the handle down until it sits flat against the gate.")) +
-     fig(D.latch_steps(True), "ลำดับการล็อก (Locking) ❶ ยกมือจับ ❷ ผ่านตะขอ ❸ กดลง", "s") +
+     M.row(M.view("z_lever_open", [('a', (1320, 236, 1093), (1320, 140, 975))], "การล็อก (Locking): ดันมือจับกลับเข้าแนบฝา", "box h"), M.view("z_lever", [('a', (1320, 135, 961), (1320, 236, 1093))], "การปลดล็อก (Unlocking): ดึงปลายมือจับออก", "box h")) +
      h4("2.1.2 การปลดล็อก", "Unlocking") +
      steps(("จับฝาท้ายไว้ด้วยมือข้างหนึ่ง", "Hold the tailgate with one hand."),
            ("ยกมือจับขึ้น แล้วดันมือจับผ่านตะขอเข้าหาตัวรถ ทั้งฝั่งซ้ายและฝั่งขวา", "Lift the handle and move it over the hook toward the centre of the vehicle, left and right.")) +
-     fig(D.latch_steps(False), "ลำดับการปลดล็อก (Unlocking)", "s"))
+     "")
 
 page("2. ฝาท้าย (Tailgate)", band("2. ฝาท้าย", "Tailgate") + forcab() + h3("2.2 การเปิด / ปิดฝาท้าย", "Opening / closing the tailgate") +
      h4("2.2.1 เปิด / ปิดฝาท้ายแบบ 90 องศา", "Opening / closing the tailgate at 90°") +
-     figs((D.gate_open(90), "เปิด (Open)"), (D.gate_open(90, opened=False), "ปิด (Close)")) +
+     M.row(M.view("tg90", [("a", (1273, 330, 300), (1560, 60, 300))], "เปิด 90° (Open)"), M.view("iso", [("c", P["tailgate"], 120)], "ปิด (Close)")) +
      steps(("ใส่สลิงรั้งที่ฝาท้ายทั้งสองข้างตามหัวข้อ 4.1", "Apply both tailgate stays as in 4.1."),
            ("ปลดล็อกตามหัวข้อ 2.1.2 แล้วค่อย ๆ ลดฝาลงจนสลิงรั้งตึงทั้งสองข้าง", "Unlock as in 2.1.2 and lower the gate gently until both stays are taut."),
            ("การปิด: ยกฝาขึ้นจนชิดเสามุม ตรวจว่าสลิงไม่ถูกหนีบ แล้วล็อกตามหัวข้อ 2.1.1", "To close: raise the gate against the posts, check the stays are clear, then lock as in 2.1.1.")) +
@@ -233,7 +239,7 @@ page("2. ฝาท้าย (Tailgate)", band("2. ฝาท้าย", "Tailgate
 
 page("2. ฝาท้าย (Tailgate)", band("2. ฝาท้าย", "Tailgate") + forcab() +
      h4("2.2.2 เปิด / ปิดฝาท้ายแบบ 180 องศา", "Opening / closing the tailgate at 180°") +
-     figs((D.gate_open(180), "เปิด (Open)"), (D.gate_open(180, opened=False), "ปิด (Close)")) +
+     M.row(M.view("tg180", [("a", (1273, 330, 300), (1330, -250, 300))], "เปิด 180° (Open)", "m"), M.view("iso", [("c", P["tailgate"], 120)], "ปิด (Close)", "m")) +
      steps(("เปิดฝาท้ายแบบ 90° ก่อน แล้วถอดสลิงรั้งออกตามหัวข้อ 4.2", "Open the tailgate to 90° first, then remove the stays as in 4.2."),
            ("ค่อย ๆ ลดฝาท้ายลงจนห้อยแนบท้ายกระบะ", "Lower the tailgate gently until it hangs against the rear of the body."),
            ("การปิด: ยกฝาขึ้นเป็นแบบ 90° ใส่สลิงรั้งกลับตามหัวข้อ 4.1 แล้วปิดและล็อก", "To close: raise it to 90°, refit the stays as in 4.1, then close and lock.")) +
@@ -252,10 +258,10 @@ page("3. ฝาข้าง (Side gate)", band("3. ฝาข้างกระ�
      h4("3.1.2 การปลดล็อก", "Unlocking") +
      steps(("จับฝาข้างไว้ที่ขอบบน", "Hold the side gate by its top edge."),
            ("ยกมือจับขึ้น แล้วดันผ่านตะขอไปทางตรงข้ามกับการล็อก ทั้งกลอนหน้าและกลอนหลัง", "Lift each handle and move it over the hook the opposite way to locking, front and rear latch.")) +
-     figs((D.latch("locked"), "ล็อก (locked)"), (D.latch("unlocked"), "ปลดล็อก (unlocked)")))
+     M.row(M.view("z_lever", [("c", P["lever_rh"], 90)], "ล็อก (locked)", "box h"), M.view("z_lever_open", [("c", (1320, 236, 1093), 90)], "ปลดล็อก (unlocked)", "box h")))
 
 page("3. ฝาข้าง (Side gate)", band("3. ฝาข้าง", "Side gate") + forcab() + h3("3.2 การเปิด / ปิดฝาข้าง", "Opening / closing the side gate") +
-     figs((D.side_gate(True), "เปิด (Open)"), (D.side_gate(False), "ปิด (Close)")) +
+     M.row(M.view("sg90", [("a", (0, 300, 982), (0, 30, 1260))], "เปิด (Open)"), M.view("iso", [("c", P["side_gate"], 150)], "ปิด (Close)")) +
      steps(("ถอดสลิงรั้งออกจากฝาท้ายก่อน ตามหัวข้อ 4.2", "Remove the tailgate stays first, as in 4.2."),
            ("ปลดล็อกฝาท้าย หากกลอนหลังของฝาข้างอยู่ด้านในฝาท้าย", "Unlock the tailgate if the rear latch of the side gate is behind it."),
            ("ปลดล็อกฝาข้างตามหัวข้อ 3.1.2 แล้วค่อย ๆ ลดฝาลงจนห้อยข้างกระบะ", "Unlock the side gate as in 3.1.2 and lower it gently until it hangs beside the body."),
@@ -285,7 +291,7 @@ page("4. สลิงรั้งฝาท้าย (Tailgate stays)", band("4. 
 # ---------------------------------------------------------------- 5 adjust
 page("5. การปรับตั้งกลอนล็อก (Adjusting the latch)", band("5. ขั้นตอนการปรับตั้งมือจับ", "How to adjust the handle") + forcab() +
      para("เมื่อล็อกมือจับแล้วรู้สึกว่าแน่นเกินไป หรือหลวมเกินไป ปรับตั้งได้ที่ตะขอบนเสามุม ดังนี้", "If a handle feels too tight or too loose when locked, adjust the hook on the corner post as follows.") +
-     fig(D.adjust(), "ตะขอ และน็อตล็อกบนเสามุม (Hook and lock nut on the corner post)") +
+     M.view("z_lever", [("c", (1265, 265, 955), 70), ("n", (1265, 265, 955), 1, -170, -60)], "หูล็อก ❶ และมือจับบนเสามุม (Keeper and handle on the corner post) – จากแบบ 3D", "box t") +
      steps(("ปลดล็อกมือจับที่ต้องการปรับ", "Unlock the handle to be adjusted."),
            (f"คลายน็อตล็อกของตะขอ ด้วยประแจแหวนหรือบล็อกเบอร์ {B}", f"Loosen the hook's lock nut with a {B} mm ring spanner or socket."),
            ("มือจับแน่นเกินไป: หมุนตะขอทวนเข็มนาฬิกา (คลายออก) · หลวมเกินไป: หมุนตามเข็มนาฬิกา (ขันเข้า) ครั้งละครึ่งรอบ", "Too tight: turn the hook counter-clockwise (out) · Too loose: turn it clockwise (in), half a turn at a time."),
@@ -299,32 +305,31 @@ page("6. การถอด / ประกอบชิ้นส่วน (Removi
            "Removing and installing the headboard, tailgate and side gates needs at least 2 people; the parts are heavy and can cause injury if dropped."),
           ("ใช้สลัก น็อต และแหวนของ RRS ขนาดและเกรดเดิมเท่านั้น และขันตามแรงขันในหัวข้อ 8", "Use RRS bolts, nuts and washers of the original size and grade only, and tighten to the values in section 8.")) +
      h3("6.1 การถอด / ประกอบตะแกรงกันหัว โดยการคลาย / ขันสลัก 8 จุด ตามลำดับในรูป", "Removing / installing the headboard by loosening / tightening 8 bolts in the order shown") +
-     fig(D.headboard(), "ตะแกรงกันหัว – ลำดับสลัก ❶–❽ (Headboard bolt order)", "s") +
-     steps(("เปิดฝาข้างทั้งสองข้าง เพื่อให้เข้าถึงสลักที่เสามุมหน้า", "Open both side gates to reach the bolts at the front corner posts."),
+     '<div class="side2">' + M.view("z_head", [("n", (-1378, 355, -702), 1, 0, 55), ("n", (-1378, 811, 448), 2, 0, -55), ("n", (-1378, 355, 702), 3, 0, 55), ("n", (-1378, 811, -448), 4, 0, -55), ("n", (-1378, 355, -90), 5, 0, 55), ("n", (-1378, 811, 91), 6, 0, -55), ("n", (-1378, 355, 90), 7, 0, 55), ("n", (-1378, 811, -91), 8, 0, -55)], "ตะแกรงกันหัว – ลำดับสลัก ❶–❽ (Headboard bolt order)") + '<div>' + steps(("เปิดฝาข้างทั้งสองข้าง เพื่อให้เข้าถึงสลักที่เสามุมหน้า", "Open both side gates to reach the bolts at the front corner posts."),
            ("ผู้ช่วยจับตะแกรงไว้ แล้วคลายสลักตามลำดับ ❽ → ❶ (ย้อนลำดับการขัน)", "With a helper holding the headboard, loosen the bolts in the order ❽ → ❶ (reverse of tightening)."),
            ("ยกตะแกรงขึ้นตรง ๆ ระวังอย่าให้กระแทกกระจกหลังเก๋ง", "Lift the headboard straight up, taking care not to strike the cab rear window."),
-           ("การประกอบ: วางตะแกรงตั้งฉากกับพื้น ใส่สลักทุกตัวด้วยมือ ขันตามลำดับ ❶ → ❽ แล้วตรวจว่าตะแกรงไม่แตะเก๋ง", "To install: stand it square, start every bolt by hand, tighten in the order ❶ → ❽, then check it does not touch the cab.")) +
+           ("การประกอบ: วางตะแกรงตั้งฉากกับพื้น ใส่สลักทุกตัวด้วยมือ ขันตามลำดับ ❶ → ❽ แล้วตรวจว่าตะแกรงไม่แตะเก๋ง", "To install: stand it square, start every bolt by hand, tighten in the order ❶ → ❽, then check it does not touch the cab.")) + '</div></div>' +
      remark(("สลักตะแกรงกันหัว: M8 / M6 และ M12×100 ที่เขาบน · แรงขันดูหัวข้อ 8", "Headboard bolts: M8 / M6 and M12×100 at the top horns · torque: see section 8.")))
 
 page("6. การถอด / ประกอบชิ้นส่วน (Removing / installing parts)", band("6. ขั้นตอนการถอด / ประกอบชิ้นส่วนของกระบะ", "Replacing body parts – procedures") + forcab() +
-     h3("6.2 การถอด / ประกอบฝาท้าย โดยการคลาย / ขันสลัก 4 จุด ตามลำดับในรูป", "Removing / installing the tailgate by loosening / tightening 4 bolts in the order shown") +
-     fig(D.hinge_bolts([(1, 3), (4, 2)], "ขอบล่างฝาท้าย · บานพับซ้าย / ขวา"), "ลำดับการขันสลัก ❶–❹ (Tightening order)") +
+     h3("6.2 การถอด / ประกอบฝาท้าย โดยการคลาย / ขันสลักบานพับ 3 จุด ตามลำดับในรูป", "Removing / installing the tailgate by loosening / tightening the bolts of 3 hinges in the order shown") +
+     M.view("z_hinge_tg", [("c", P["hinge_tg"][0], 45), ("n", P["hinge_tg"][0], 1, 0, -80), ("c", P["hinge_tg"][2], 45), ("n", P["hinge_tg"][2], 2, 0, -80), ("c", P["hinge_tg"][1], 45), ("n", P["hinge_tg"][1], 3, 0, -80)], "บานพับฝาท้าย 3 จุด ลำดับการขัน ❶–❸ (บานพับละ 2 สลัก)") +
      steps(("เปิดฝาท้ายแบบ 90° และถอดสลิงรั้งออกทั้งสองข้าง (หัวข้อ 4.2)", "Open the tailgate to 90° and remove both stays (4.2)."),
-           ("ผู้ช่วยจับฝาท้ายไว้ในแนวราบ แล้วคลายสลักบานพับตามลำดับ ❹ → ❶", "With a helper holding the tailgate level, loosen the hinge bolts in the order ❹ → ❶."),
+           ("ผู้ช่วยจับฝาท้ายไว้ในแนวราบ แล้วคลายสลักบานพับตามลำดับ ❸ → ❶", "With a helper holding the tailgate level, loosen the hinge bolts in the order ❸ → ❶."),
            ("ยกฝาท้ายออกจากรางพับ และวางบนพื้นเรียบที่มีวัสดุรองกันรอย", "Lift the tailgate off the folding rail and lay it on a padded, level surface."),
-           ("การประกอบ: วางฝาบนรางพับ ใส่สลัก น็อต และแหวนด้วยมือก่อน แล้วขันตามลำดับ ❶ → ❹", "To install: set the gate on the folding rail, start the bolts, nuts and washers by hand, then tighten in the order ❶ → ❹."),
+           ("การประกอบ: วางฝาบนรางพับ ใส่สลัก น็อต และแหวนด้วยมือก่อน แล้วขันตามลำดับ ❶ → ❸", "To install: set the gate on the folding rail, start the bolts, nuts and washers by hand, then tighten in the order ❶ → ❸."),
            ("ใส่สลิงรั้ง ปิดฝา และตรวจว่ากลอนทั้งสองข้างล็อกสนิท", "Refit the stays, close the gate and check both latches lock fully.")) +
      remark(("สลักบานพับฝา: M12×65 / M12×60 พร้อมน็อต M12 และแหวน 12 · แรงขันดูหัวข้อ 8", "Gate hinge bolts: M12×65 / M12×60 with M12 nuts and 12 mm washers · torque: see section 8."),
             ("จำนวนสลักจริงตามรุ่นการผลิต ให้ RRS ยืนยัน", "Actual number of bolts depends on the production batch; to be confirmed by RRS.")))
 
 page("6. การถอด / ประกอบชิ้นส่วน (Removing / installing parts)", band("6. ขั้นตอนการถอด / ประกอบชิ้นส่วนของกระบะ", "Replacing body parts – procedures") + forcab("Single Cab") +
-     h3("6.3 การถอด / ประกอบฝาข้างขวา / ซ้าย โดยการคลาย / ขันสลัก 6 จุด ตามลำดับในรูป", "Removing / installing the side gate RH / LH by loosening / tightening 6 bolts in the order shown") +
-     fig(D.hinge_bolts([(1, 5), (3, 4), (6, 2)], "ขอบล่างฝาข้าง · บานพับ 3 จุด ห่างกัน 900 มม."), "ลำดับการขันสลัก ❶–❻ (Tightening order)") +
+     h3("6.3 การถอด / ประกอบฝาข้างขวา / ซ้าย โดยการคลาย / ขันสลักบานพับ 3 จุด ตามลำดับในรูป", "Removing / installing the side gate RH / LH by loosening / tightening the bolts of 3 hinges in the order shown") +
+     M.view("z_hinge_sg", [("c", P["hinge_sg"][0], 40), ("n", P["hinge_sg"][0], 1, 0, -75), ("c", P["hinge_sg"][2], 40), ("n", P["hinge_sg"][2], 2, 0, -75), ("c", P["hinge_sg"][1], 40), ("n", P["hinge_sg"][1], 3, 0, -75)], "บานพับฝาข้าง 3 จุด ห่างกัน 900 มม. ลำดับการขัน ❶–❸ (บานพับละ 2 สลัก)") +
      steps(("เปิดฝาท้าย และถอดสลิงรั้ง (หัวข้อ 4.2)", "Open the tailgate and remove the stays (4.2)."),
            ("ปลดล็อกฝาข้าง แล้วผู้ช่วย 1 คนจับฝาไว้ในแนวตั้ง", "Unlock the side gate and have a helper hold it upright."),
-           ("คลายสลักบานพับตามลำดับ ❻ → ❶ โดยเหลือสลักบานพับกลางไว้หลวม ๆ จนถึงตัวสุดท้าย", "Loosen the hinge bolts in the order ❻ → ❶, leaving the middle hinge bolts loosely in place until last."),
+           ("คลายสลักบานพับตามลำดับ ❸ → ❶ โดยเหลือสลักบานพับกลางไว้หลวม ๆ จนถึงตัวสุดท้าย", "Loosen the hinge bolts in the order ❸ → ❶, leaving the middle hinge bolts loosely in place until last."),
            ("ยกฝาข้างออกจากรางพับพร้อมกันทั้งสองคน และวางบนพื้นเรียบที่มีวัสดุรอง", "Lift the side gate off the folding rail together and lay it on a padded, level surface."),
-           ("การประกอบ: วางฝาบนรางพับ ใส่สลักทุกตัวด้วยมือก่อน แล้วขันตามลำดับ ❶ → ❻", "To install: set the gate on the folding rail, start every bolt by hand, then tighten in the order ❶ → ❻."),
+           ("การประกอบ: วางฝาบนรางพับ ใส่สลักทุกตัวด้วยมือก่อน แล้วขันตามลำดับ ❶ → ❸", "To install: set the gate on the folding rail, start every bolt by hand, then tighten in the order ❶ → ❸."),
            ("ปิดฝา ตรวจว่ากลอนหน้าและกลอนหลังล็อกสนิท และฝาไม่ชนเสามุม", "Close the gate, check the front and rear latches lock fully and the gate clears the corner posts.")) +
      remark(("ทำแบบเดียวกันทั้งฝาข้างขวาและซ้าย · แรงขันดูหัวข้อ 8", "Same procedure for the right and left side gates · torque: see section 8.")))
 
@@ -336,16 +341,16 @@ page("6. การถอด / ประกอบชิ้นส่วน (Removi
      remark(("จำนวนบานพับของ Super Cab / Double Cab ให้ RRS ยืนยันตามแบบผลิต", "Number of hinges on Super Cab / Double Cab to be confirmed by RRS from the production drawing.")))
 
 page("6. การถอด / ประกอบชิ้นส่วน (Removing / installing parts)", band("6. ขั้นตอนการถอด / ประกอบชิ้นส่วนของกระบะ", "Replacing body parts – procedures") + forcab() +
-     h3("6.4 การถอด / ประกอบบังโคลน โดยการคลาย / ขันสลัก 4 จุด ตามลำดับในรูป", "Removing / installing the mudguard by loosening / tightening 4 bolts in the order shown") +
-     fig(D.mudguard(), "บังโคลนและขายึด – ลำดับสลัก ❶–❹ (Mudguard and bracket bolt order)") +
+     h3("6.4 การถอด / ประกอบบังโคลน ที่ขายึด", "Removing / installing the mudguard at its brackets") +
+     M.view("z_mud", [("c", P["mudguard"], 75), ("c", P["mudguard2"], 75)], "บังโคลนและขายึด (Mudguard and bracket) – จากแบบ 3D", "s") +
      steps(("จอดรถบนพื้นเรียบ ดับเครื่องยนต์ และหนุนล้อ", "Park on level ground, stop the engine and chock the wheels."),
-           ("คลายสลักขายึดบังโคลนตามลำดับ ❹ → ❶ ขณะจับบังโคลนไว้", "Loosen the mudguard bracket bolts in the order ❹ → ❶ while holding the mudguard."),
+           ("คลายสลักขายึดบังโคลนทีละตัวแบบไขว้ ขณะจับบังโคลนไว้", "Loosen the mudguard bracket bolts crosswise while holding the mudguard."),
            ("ถอดบังโคลนออก ระวังสายไฟไฟท้ายและสายกล้องที่เดินใกล้ขายึด", "Remove the mudguard, taking care of the tail-lamp and camera wiring near the bracket."),
-           ("การประกอบ: ใส่สลักด้วยมือก่อน ขันตามลำดับ ❶ → ❹ และตรวจระยะห่างระหว่างบังโคลนกับยางตามคู่มือ Ford", "To install: start the bolts by hand, tighten in the order ❶ → ❹ and check the mudguard-to-tyre clearance per the Ford manual.")))
+           ("การประกอบ: ใส่สลักด้วยมือก่อน ขันแบบไขว้ และตรวจระยะห่างระหว่างบังโคลนกับยางตามคู่มือ Ford", "To install: start the bolts by hand, tighten crosswise and check the mudguard-to-tyre clearance per the Ford manual.")))
 
 # ---------------------------------------------------------------- 7 loading
 page("7. การบรรทุกและการผูกรัด (Loading and tying down)", band("7. การบรรทุกและการผูกรัดสินค้า", "Loading and tying down") + forcab() +
-     fig(D.tiedown(), "จุดผูกรัด 8 จุดบนพื้นกระบะ (8 tie-down points)") +
+     M.view("top", [("n", (-1155, 17, 800), 1, -45, 0), ("n", (-1155, 17, -800), 2, 45, 0), ("n", (-519, 17, 800), 3, -45, 0), ("n", (-519, 17, -800), 4, 45, 0), ("n", (132, 17, 800), 5, -45, 0), ("n", (132, 17, -800), 6, 45, 0), ("n", (782, 17, 800), 7, -45, 0), ("n", (782, 17, -800), 8, 45, 0)], "จุดผูกรัด 8 จุดบนพื้นกระบะ (8 tie-down points)", "t2") +
      table(["ควรทำ (Do)", "ไม่ควรทำ (Don't)"], [
          ["กระจายน้ำหนักทั่วพื้น ให้ของหนักอยู่ด้านหน้าและกึ่งกลางกระบะ<br><span class=\"en\">Spread the load, heavy items forward and centred.</span>", "กองของหนักไว้จุดเดียว หรือไว้ท้ายสุดของกระบะ<br><span class=\"en\">Pile heavy items in one spot or at the very rear.</span>"],
          ["รัดสินค้ากับตะขอผ้าใบและจุดผูกรัดของโครง ดึงสายเฉียงลง<br><span class=\"en\">Tie the load to the rope hooks and frame points, pulling down at an angle.</span>", "รัดสินค้ากับฝาข้าง ฝาท้าย หรือตะแกรงกันหัว<br><span class=\"en\">Tie the load to the side gates, tailgate or headboard.</span>"],
@@ -360,7 +365,7 @@ page("8. การดูแลรักษาและค่าแรงขั�
          ["ทุกเดือน<br><span class=\"en\">Monthly</span>", ["หล่อลื่นบานพับ รางพับ กลอนล็อก และตะขอ<span class=\"en-line\">Lubricate hinges, folding rails, latches and hooks</span>", "ตรวจสลิงรั้งฝาท้าย<span class=\"en-line\">Check the tailgate stays</span>"], "ผู้ใช้รถ<br><span class=\"en\">Driver</span>"],
          ["1 เดือน / 1,000 กม. แรก<br><span class=\"en\">First month / 1,000 km</span>", ["ตรวจแรงขันสลักแท่นยึดกับแชสซีส์ และสลักบานพับฝา<span class=\"en-line\">Check mounting and hinge bolt torque</span>"], "RRS"],
          ["ทุก 6 เดือน / 10,000 กม.<br><span class=\"en\">Every 6 months / 10,000 km</span>", ["แรงขันสลักทุกจุด · รอยร้าวที่โครง แท่นยึด ตะแกรงกันหัว · สายไฟ<span class=\"en-line\">All bolt torques · cracks in frame, mounts, headboard · wiring</span>"], "RRS"],
-         ["หลังล้างรถ หรือบรรทุกวัสดุกัดกร่อน<br><span class=\"en\">After washing or corrosive loads</span>", ["ล้างคราบและเศษหินในรูพื้นกันลื่นออก แล้วหล่อลื่นบานพับซ้ำ<span class=\"en-line\">Rinse off, clear stones from the floor holes, re-lubricate the hinges</span>"], "ผู้ใช้รถ<br><span class=\"en\">Driver</span>"]], [27, 55, 18], "care") +
+         ["หลังล้างรถ หรือบรรทุกวัสดุกัดกร่อน<br><span class=\"en\">After washing or corrosive loads</span>", ["ล้างคราบออก และหล่อลื่นบานพับซ้ำ<span class=\"en-line\">Rinse off and re-lubricate the hinges</span>"], "ผู้ใช้รถ<br><span class=\"en\">Driver</span>"]], [27, 55, 18], "care") +
      h3("ค่าแรงขันมาตรฐาน", "Installation torque") +
      table(["จุดขัน (Joint)", "สลัก (Bolt)", "แรงขัน (Torque)"], [
          ["แท่นยึดกระบะกับแชสซีส์ (Body to chassis)", "M12 เกรด 10.9 ขึ้นไป", "95–125 N·m (Ford BEMM)"],
@@ -392,7 +397,7 @@ raw('''<div class="back"><img src="logo_white.png"><h2>บริษัท รุ
 <p>ที่อยู่ ______________________________________________<br>โทรศัพท์ ____________________ · LINE ____________________<br>อีเมล ____________________ · เว็บไซต์ rungruengdump101.com</p>
 <small>คู่มือการใช้งาน กระบะพื้นเรียบคาร์โก้ RRS · Owner Manual – RRS Cargo Flatbed · P/N ____________</small></div>''', "nocrop")
 
-save("booklet.html", "RRS Owner Manual – Cargo Flatbed", extra_css='''
+save("booklet.html", "RRS Owner Manual – Cargo Flatbed", extra_css=M.CSS + '''
 .en{color:#5b6577;font-weight:normal;font-size:.82em}.en-line{display:block;color:#5b6577;font-size:.86em;margin-top:.3mm}
 .sband{background:#0B2A5B;color:#fff;padding:2.6mm 4mm;border-left:4mm solid #00B4F0;margin:0 0 2.5mm}.sband b{display:block;font-size:13pt;line-height:1.3}.sband span{display:block;font-size:9pt;color:#b9d2f5;margin-top:.5mm}
 p.for{font-size:9pt;color:#1257C8;margin:0 0 2.5mm}p.for b{color:#0B2A5B}

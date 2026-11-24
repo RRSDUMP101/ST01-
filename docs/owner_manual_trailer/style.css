@@ -1,0 +1,20 @@
+
+.en{color:#5b6577;font-weight:normal;font-size:.82em}.en-line{display:block;color:#5b6577;font-size:.86em;margin-top:.3mm}
+.sband{background:#0B2A5B;color:#fff;padding:2.6mm 4mm;border-left:4mm solid #00B4F0;margin:0 0 2.5mm}.sband b{display:block;font-size:13pt;line-height:1.3}.sband span{display:block;font-size:9pt;color:#b9d2f5;margin-top:.5mm}
+p.for{font-size:9pt;color:#1257C8;margin:0 0 2.5mm}p.for b{color:#0B2A5B}
+h3{margin:3.2mm 0 1.6mm}h4.sub{color:#0B2A5B;font-size:10.5pt;margin:2.5mm 0 1mm}
+ol.msteps{padding-left:6mm;margin:0 0 2.5mm}ol.msteps li{margin-bottom:1.4mm;line-height:1.4}ol.msteps li::marker{color:#1257C8;font-weight:bold}
+ol.sublist{list-style:none;padding-left:6mm;margin:0 0 3mm}ol.sublist li{margin-bottom:1.6mm}
+.wbox{border:1.2pt solid #D9534F;border-radius:2mm;padding:2mm 3.5mm 1mm;margin:2.5mm 0;background:#FFF8F7}.wbox .wt{color:#B23B37;font-weight:bold;margin-bottom:1mm}
+.wbox ul.terms{margin-bottom:1mm}
+.remark{background:#EAF2FB;border-left:2.5pt solid #1257C8;padding:2mm 3.5mm;margin:2.5mm 0;font-size:9.6pt}.remark b{color:#0B2A5B}.remark p{margin:.6mm 0}
+.figbox{margin:1mm 0 2mm;text-align:center}.figbox svg.dwg{width:100%;max-height:52mm}.figbox.s svg.dwg{max-height:34mm}.figbox.m svg.dwg{max-height:44mm}table.care td{padding:1.1mm 2.2mm;font-size:9pt}table.care ul.vl li{margin-bottom:.4mm}.figbox svg.dwg.small{max-height:44mm}
+.figrow{display:flex;gap:5mm;align-items:flex-end}.figrow .figbox{flex:1}
+.coverfig{position:absolute;top:150mm;left:30mm;right:16mm}.coverfig svg{width:100%;max-height:64mm}
+.cover .ctitle h1{font-size:34pt}.cover .cabs{font-size:10pt;color:#5b6577;margin-top:3mm}
+table.toc td{padding:.75mm 2.2mm;font-size:9.2pt}table.toc tr.grp td{background:#EAF2FB!important;color:#0B2A5B;font-weight:bold}table.toc td.pg{text-align:right;color:#1257C8;font-weight:bold}table.toc td.n{color:#1257C8;font-weight:bold}
+table.plist td{padding:1.4mm 2.5mm}.numdot{display:inline-flex;width:6mm;height:6mm;border-radius:50%;background:#0B2A5B;color:#fff;font-weight:bold;align-items:center;justify-content:center;font-size:9pt}
+.wt-in{color:#B23B37;font-weight:bold}.rm-in{color:#0B2A5B;font-weight:bold}
+figure.ph{margin:0 0 2mm}figure.ph figcaption{font-size:8.2pt;padding:1mm 2.5mm}.phwrap{position:relative}.pin{position:absolute;width:6.5mm;height:6.5mm;border-radius:50%;background:#00B4F0;color:#0B2A5B;border:.8mm solid #fff;font-weight:bold;font-size:9pt;display:flex;align-items:center;justify-content:center;transform:translate(-50%,-50%);box-shadow:0 .4mm 1.2mm rgba(0,0,0,.35)}
+.phrow{display:flex;gap:4mm;position:relative}.figbox.xl svg.dwg{max-height:98mm}.pgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:3mm;margin:3mm 0}.pcard{border:.8pt solid #c9d6ea;border-radius:2mm;padding:2mm;position:relative;text-align:center}.pcard .numdot{position:absolute;left:1.5mm;top:1.5mm}.pcard svg.dwg{width:100%;height:24mm}.pcard p{margin:1mm 0 0;font-size:9pt;line-height:1.3;font-weight:bold;color:#0B2A5B}.pcard .en-line{font-weight:normal}.phrow figure{flex:1}.phgrid{display:grid;grid-template-columns:1fr 1fr;gap:3mm;margin:2mm 0}.phgrid figure.ph{margin:0}
+table.dodont th:first-child{background:#1F9D6B}table.dodont th:last-child{background:#D9534F}

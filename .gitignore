@@ -35,3 +35,5 @@ docs/trailer_booklet/sheet*.png
 docs/owner_manual_flatbed/booklet.html
 docs/owner_manual_flatbed/sheet*.png
 docs/owner_manual_flatbed/__pycache__/
+docs/owner_manual_trailer/booklet.html
+docs/owner_manual_trailer/__pycache__/

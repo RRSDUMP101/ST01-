@@ -1,0 +1,332 @@
+"""คู่มือการใช้งาน (Owner Manual) – หางลากพ่วงตู้ทึบ RRS สำหรับ Ford Ranger Super Duty.
+
+Same layout and voice as ../owner_manual_flatbed. Facts: ZW3D model "หางลาก ford พื้นเรียบ[.Z3" (read for sizes and
+part positions in docs/TRAILER_INSTALL.md), the trailer warranty booklet (../trailer_booklet), work instructions
+WI-PD-63 (trailer brake, 12-pin plug, breakaway) and WI-PD-62 (camera 1/2 switching), Ford BEMM E455418 (03/2026)
+1.13–1.14, 2.3.2, 4.6.12. Drawings are 2D line art until a STEP export of the trailer is available.
+python3 build.py && node pdf.js
+"""
+import sys
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE.parent / "warranty_booklet"))
+from common import *  # noqa: E402,F403
+import diagram as G  # noqa: E402
+import drawings as D  # noqa: E402
+
+set_footer("คู่มือการใช้งาน · หางลากพ่วงตู้ทึบ RRS · Ford Ranger Super Duty")
+B = "____"
+
+
+def band(th, en):
+    return f'<div class="sband"><b>{th}</b><span>{en}</span></div>'
+
+
+def h3(th, en):
+    return f'<h3>{th} <span class="en">({en})</span></h3>'
+
+
+def h4(th, en):
+    return f'<h4 class="sub">{th} <span class="en">({en})</span></h4>'
+
+
+def para(th, en):
+    return f'<p>{th}<span class="en-line">{en}</span></p>'
+
+
+def steps(*items, start=1):
+    return f'<ol class="msteps" start="{start}">' + "".join(f"<li>{t}<span class=\"en-line\">{e}</span></li>" for t, e in items) + "</ol>"
+
+
+def bullets(*items):
+    return '<ul class="terms">' + "".join(f"<li>{t}<span class=\"en-line\">{e}</span></li>" for t, e in items) + "</ul>"
+
+
+def warn(*items, title="ข้อควรระวัง (Warning)"):
+    return f'<div class="wbox"><div class="wt">⚠ {title}</div>' + bullets(*items) + "</div>"
+
+
+def remark(*items):
+    return '<div class="remark"><b>หมายเหตุ (Remark)</b>' + "".join(f"<p>{t}<span class=\"en-line\">{e}</span></p>" for t, e in items) + "</div>"
+
+
+def fig(svg, cap="", k=""):
+    return f'<div class="figbox {k}">{svg}' + (f'<p class="cap">{cap}</p>' if cap else "") + "</div>"
+
+
+def figs(*items, k=""):
+    return '<div class="figrow">' + "".join(fig(s, c, k) for s, c in items) + "</div>"
+
+
+def en(s):
+    return f'<span class="en-line">{s}</span>'
+
+
+# ---------------------------------------------------------------- cover
+raw('''<div class="cover"><div class="stripe"></div>
+<img class="biglogo" src="logo.png">
+<div class="ctitle"><small>OWNER MANUAL</small><h1>คู่มือการใช้งาน</h1>
+<p>หางลากพ่วงตู้ทึบ RRS<br><span style="color:#1257C8">RRS Enclosed Box Trailer</span></p>
+<p class="cabs">ลากด้วย Ford Ranger Super Duty</p></div>
+<div class="coverfig tr">''' + G.side_view() + '''</div>
+<div class="cfoot"><span>รหัสคู่มือ (P/N) ____________</span><span>เลขตัวถังหางลาก (VIN) ____________</span></div></div>''', "nocrop")
+
+# ---------------------------------------------------------------- contents
+TOC = [
+    ("", "วิธีใช้คู่มือเล่มนี้", "How to use this manual", 3), ("", "การรับประกัน", "Warranty", 4),
+    ("", "ส่วนประกอบหางลาก", "Trailer components", 5), ("", "เพื่อการลากจูงอย่างปลอดภัย", "For safe towing", 6),
+    ("1", "ขนาดและน้ำหนัก", "Dimensions and weight", 8), ("1.1", "ขนาด", "Dimensions", 8), ("1.2", "น้ำหนักและพิกัดการลาก", "Weights and towing limits", 9),
+    ("2", "การพ่วงและปลดพ่วง", "Coupling and uncoupling", 10), ("2.1", "การพ่วง", "Coupling", 10),
+    ("2.2", "โซ่นิรภัยและสายเบรกฉุกเฉิน", "Safety chains and breakaway cable", 11), ("2.3", "ปลั๊กไฟ 12 ขา", "12-pin plug", 12),
+    ("2.4", "การปลดพ่วง", "Uncoupling", 13),
+    ("3", "เบรกหางลาก", "Trailer brakes", 14), ("3.1", "ตัวควบคุมเบรก", "Brake controller", 14), ("3.2", "ระบบเบรกฉุกเฉิน (Breakaway)", "Breakaway system", 14),
+    ("4", "ไฟและกล้องมองหลัง", "Lamps and rear camera", 15),
+    ("5", "ประตูตู้", "Box doors", 16), ("5.1", "ประตูข้าง", "Side doors", 16), ("5.2", "ประตูท้ายและประตูหน้า", "Rear and front doors", 17),
+    ("6", "การบรรทุก", "Loading", 18), ("7", "การขับขี่ขณะลากจูง", "Driving with the trailer", 19),
+    ("8", "การดูแลรักษา", "Care and maintenance", 20), ("9", "แก้ปัญหาเบื้องต้น", "Troubleshooting", 21),
+    ("10", "ข้อมูลทางเทคนิค", "Technical data", 22),
+]
+rows = "".join(f'<tr class="{"grp" if "." not in n else ""}"><td class="n">{n}</td><td>{t} <span class="en">({e})</span></td><td class="pg">{p}</td></tr>' for n, t, e, p in TOC)
+page("สารบัญ (Index)", band("สารบัญ", "Index") + f'<table class="toc"><colgroup><col style="width:9%"><col style="width:81%"><col style="width:10%"></colgroup><tbody>{rows}</tbody></table>')
+
+page("วิธีใช้คู่มือ (How to use this manual)", band("วิธีใช้คู่มือเล่มนี้", "How to use this manual") +
+     para("คู่มือเล่มนี้อธิบายการพ่วง การใช้งาน และการดูแลหางลากพ่วงตู้ทึบ RRS ที่ลากด้วย Ford Ranger Super Duty โปรดอ่านก่อนลากครั้งแรก และเก็บไว้ในรถพร้อมสมุดรับประกัน",
+          "This manual explains coupling, use and care of the RRS enclosed box trailer towed by the Ford Ranger Super Duty. Read it before the first tow and keep it in the vehicle with the warranty booklet.") +
+     para("อ่านร่วมกับคู่มือผู้ใช้รถ Ford เรื่องการลากจูง น้ำหนักกดลูกบอล และการตั้งค่าตัวควบคุมเบรก ค่าในคู่มือรถ Ford มีผลเหนือคู่มือเล่มนี้เมื่อค่าต่างกัน",
+          "Read it together with the Ford owner's guide on towing, ball download and brake-controller settings. Where values differ, the Ford owner's guide applies.") +
+     h3("สัญลักษณ์ในคู่มือ", "Symbols used") +
+     table(["สัญลักษณ์", "ความหมาย (Meaning)"], [
+         ['<span class="wt-in">⚠ ข้อควรระวัง (Warning)</span>', "ข้อปฏิบัติที่ถ้าไม่ทำตาม อาจทำให้บาดเจ็บสาหัส เสียชีวิต หรือเกิดความเสียหาย" + en("Failure to follow it may cause serious injury, death or damage.")],
+         ['<span class="rm-in">หมายเหตุ (Remark)</span>', "ข้อมูลเพิ่มเติม" + en("Additional information.")],
+         ['<span class="numdot">1</span>', "ลำดับขั้นตอน หรือชิ้นส่วนในภาพ" + en("Order of the steps, or a part in a drawing.")]], [30, 70]) +
+     para("คำว่า ซ้าย (LH) และ ขวา (RH) ในคู่มือนี้ มองจากท้ายหางลากไปทางหัวลาก", "Left (LH) and right (RH) are as seen from the rear of the trailer looking forward."))
+
+page("การรับประกัน (Warranty)", band("การรับประกัน", "Warranty") +
+     para("เงื่อนไขการรับประกันฉบับเต็มอยู่ในสมุดรับประกันและการบำรุงรักษาหางลากพ่วง RRS หน้านี้สรุปข้อที่ผู้ใช้ต้องปฏิบัติ",
+          "The full terms are in the RRS trailer warranty and maintenance booklet. This page summarises what the user must do.") +
+     steps(("น้ำหนักรวมหางลาก (ATM) ต้องไม่เกินค่าบนป้ายหางลาก พิกัดชุดลาก Ford และน้ำหนักรถลาก + หางลาก (GCM) 8,000 กก. ค่าที่ต่ำที่สุดใช้บังคับ",
+            "The trailer's gross mass (ATM) must not exceed the trailer plate, the Ford towbar rating or the 8,000 kg combination (GCM), whichever is lowest."),
+           ("ใช้ชุดลากของ Ford และลูกบอลขนาดตรงกับหัวต่อพ่วงเท่านั้น", "Use only a Ford towbar and a ball that matches the coupling."),
+           ("เข้ารับการตรวจตามระยะในหัวข้อ 8 และเก็บบันทึกไว้ในสมุดรับประกัน", "Have the periodic checks of section 8 done and keep the records in the warranty booklet."),
+           ("ห้ามตัด เจาะ เชื่อม หรือดัดแปลงโครง คานลาก และจุดยึดเพลา", "Do not cut, drill, weld or modify the frame, drawbar or axle mountings."),
+           ("พบความผิดปกติ ให้หยุดลาก และแจ้ง RRS ภายใน 7 วัน พร้อมสมุดรับประกันและภาพความเสียหาย", "If you find a fault, stop towing and tell RRS within 7 days, with the warranty booklet and photos.")) +
+     remark(("ระยะรับประกันแต่ละชุดชิ้นส่วนดูในสมุดรับประกัน (ค่าที่ RRS ประกาศ)", "Warranty periods for each part group: see the warranty booklet (as published by RRS).")))
+
+page("ส่วนประกอบหางลาก (Trailer components)", band("ส่วนประกอบหางลาก", "Trailer components") +
+     fig(G.side_view(), "ด้านข้าง (Side view) – วาดจากตำแหน่งชิ้นส่วนในแบบ 3D ของ RRS") +
+     '<div class="two2">' + fig(G.rear_view(), "ด้านท้าย (Rear view)", "s") +
+     table(["ชิ้นส่วน (Part)", "หน้าที่ (Function)"], [
+         ["หัวต่อพ่วง · คานลาก" + en("Coupling · drawbar"), "ต่อกับลูกบอลของชุดลาก Ford"],
+         ["คานแชสซีส์" + en("Chassis rails"), "คานยาวคู่ใต้พื้น รับน้ำหนักตู้และสินค้า"],
+         ["ล้อ เพลา บังโคลน" + en("Wheels, axles, fenders"), "2 เพลา รับน้ำหนักและเบรก"],
+         ["ตู้ · หลังคา · รางน้ำ" + en("Box · roof · gutter"), "กันสินค้าและกันน้ำ"],
+         ["ประตูข้าง · ท้าย · หน้า" + en("Side, rear, front doors"), "ข้างละ 4 บาน บานพับบานละ 5 ตัว"],
+         ["กล่องเครื่องมือหน้า" + en("Front tool box"), "เก็บโซ่ สายรัด ลิ่มหนุนล้อ"],
+         ["ไฟ · ป้าย · กล้อง" + en("Lamps · plate · camera"), "ไฟบนหลังคา 4 ดวง ไฟท้าย กล้องมองหลัง"]], [44, 56], "plist") + '</div>')
+
+page("เพื่อการลากจูงอย่างปลอดภัย (For safe towing)", band("เพื่อการลากจูงอย่างปลอดภัย", "For safe towing") +
+     warn(("ห้ามให้คนนั่งหรืออยู่ในตู้ขณะลาก", "Never carry people in the box while towing."),
+          ("ห้ามยืนระหว่างรถลากกับหางลากขณะถอยพ่วงหรือปลดพ่วง", "Never stand between the car and the trailer while reversing to couple or uncoupling."),
+          ("ห้ามปลดพ่วงบนทางลาดโดยไม่หนุนล้อหางลาก", "Never uncouple on a slope without chocking the trailer wheels."),
+          ("ห้ามใส่ลูกบอล Ø50 ในชุดลาก 4.5 ตัน และห้ามตัด เจาะ หรือเชื่อมชุดลากของรถ", "Never fit a Ø50 ball to the 4.5 t towbar, and never cut, drill or weld the vehicle towbar."),
+          ("หางลากสูงและกว้างกว่ารถ ระวังหลังคา สะพาน ป้าย และกิ่งไม้ ใช้กระจกมองข้างสำหรับลากเมื่อมองไม่เห็นท้ายหาง",
+           "The trailer is taller and wider than the car: watch roofs, bridges, signs and branches; fit towing mirrors if you cannot see past it."),
+          title="ข้อควรระวัง (Warning)") +
+     h3("ตรวจเองก่อนลากทุกครั้ง", "Check before every tow") +
+     table(["", "รายการ (Item)", "อ้างอิง"], [
+         ['<span class="numdot">1</span>', "หัวต่อพ่วงล็อกบนลูกบอล ใส่สลักนิรภัยแล้ว" + en("Coupling locked on the ball, safety pin fitted"), "2.1"],
+         ['<span class="numdot">2</span>', "โซ่นิรภัยคล้องไขว้ และสายเบรกฉุกเฉินต่อกับรถ" + en("Chains crossed, breakaway cable attached"), "2.2"],
+         ['<span class="numdot">3</span>', "ปลั๊ก 12 ขาเสียบแน่น ไฟทุกดวงทำงาน" + en("12-pin plug in, all lamps work"), "2.3 · 4"],
+         ['<span class="numdot">4</span>', "ตัวควบคุมเบรกตั้งค่าแล้ว ทดสอบเบรกที่ความเร็วต่ำ" + en("Brake controller set, brakes tested at low speed"), "3"],
+         ['<span class="numdot">5</span>', "ขาตั้งหน้ายกขึ้นสุดและล็อก เก็บลิ่มหนุนล้อ" + en("Jockey wheel fully up and locked, chocks stowed"), "2.1"],
+         ['<span class="numdot">6</span>', "ลมยางและน็อตล้อ" + en("Tyre pressures and wheel nuts"), "8"],
+         ['<span class="numdot">7</span>', "ประตูทุกบานปิดและล็อก สินค้ารัดแน่น" + en("All doors closed and locked, load secured"), "5 · 6"]], [8, 80, 12], "plist"))
+
+page("เพื่อการลากจูงอย่างปลอดภัย (For safe towing)", band("เพื่อการลากจูงอย่างปลอดภัย", "For safe towing") +
+     warn(("หางลากที่บรรทุกท้ายหนักกว่าหน้า (น้ำหนักกดลูกบอลน้อยหรือติดลบ) จะส่ายจนควบคุมไม่ได้ จัดของหนักไว้หน้าแนวเพลาเสมอ (หัวข้อ 6)",
+           "A tail-heavy trailer (low or negative ball download) can sway out of control. Always keep heavy items ahead of the axles (section 6)."),
+          ("ถ้าหางลากส่าย ให้ถอนคันเร่งช้า ๆ ถือพวงมาลัยตรง ห้ามเบรกกะทันหันและห้ามเร่งหนี ถ้าใช้ได้ ให้กดสั่งเบรกหางลากด้วยมือที่ตัวควบคุมเบรกเบา ๆ",
+           "If the trailer sways, ease off the accelerator, hold the wheel straight, do not brake hard or accelerate; if fitted, apply the trailer brakes gently with the controller's manual lever."),
+          ("ห้ามขับขณะประตูตู้เปิดหรือไม่ได้ล็อก", "Never drive with a box door open or unlocked."),
+          title="ข้อควรระวัง – ขณะขับขี่ (Warning – while driving)") +
+     fig(D.load_split(), "ของหนักไว้หน้าแนวเพลา ให้น้ำหนักกดลูกบอลประมาณ 10% ของน้ำหนักรวมหางลาก (Heavy items ahead of the axles, ball download ≈ 10%)"))
+
+# ---------------------------------------------------------------- 1 dimensions
+page("1. ขนาดและน้ำหนัก (Dimensions and weight)", band("1. ขนาดและน้ำหนัก", "Dimensions and weight") + h3("1.1 ขนาด", "Dimensions") +
+     fig(G.side_view(), "ด้านข้าง (Side view)", "s") +
+     table(["รายการ (Item)", "ค่า (Value)"], [
+         ["ความยาวรวม (ถึงหัวคานลาก ไม่รวมหัวต่อ)" + en("Overall length (to drawbar tip, excl. coupling)"), "ประมาณ 7,256 มม."],
+         ["ตัวตู้ ยาว × กว้าง" + en("Box length × width"), "5,700 × 1,806 มม."],
+         ["ความสูงภายในตู้" + en("Inside height"), "ประมาณ 2,247 มม."],
+         ["ความกว้างรวม (ที่บังโคลน)" + en("Overall width (at fenders)"), "ประมาณ 2,394 มม."],
+         ["ความสูงพื้นตู้จากพื้นถนน · ความสูงรวม" + en("Floor height · overall height"), f"{B} · {B} มม."],
+         ["ประตู" + en("Doors"), "ข้างละ 4 บาน · ประตูท้าย · ประตูหน้า"]], [62, 38]) +
+     para("ค่าจากแบบ 3D ของ RRS · ค่าจริงของคันนี้ดูที่ป้ายหางลาก", "Values from the RRS 3D model · see the trailer plate for this trailer."))
+
+page("1. ขนาดและน้ำหนัก (Dimensions and weight)", band("1. ขนาดและน้ำหนัก", "Dimensions and weight") + h3("1.2 น้ำหนักและพิกัดการลาก", "Weights and towing limits") +
+     table(["รายการ (Item)", "ค่า (Value)"], [
+         ["น้ำหนักหางลากเปล่า" + en("Tare mass"), f"{B} กก."], ["น้ำหนักรวมสูงสุด (ATM) ตามป้ายหางลาก" + en("Aggregate trailer mass (ATM)"), f"{B} กก."],
+         ["น้ำหนักบรรทุกสูงสุด" + en("Max. payload"), f"{B} กก."], ["น้ำหนักกดลูกบอล (วันส่งมอบ)" + en("Ball download (at delivery)"), f"{B} กก."]], [62, 38], "care") +
+     h4("พิกัดชุดลากของ Ford", "Ford towbar ratings") +
+     table(["รายการ", "3.5 ตัน", "4.5 ตัน"], [["ชุดลาก (Towbar)", "R1WZ-17D826-A", "RB3Z-17D826-A"], ["ลูกบอล (Ball)", "Ø50 มม.", "Ø70 มม."], ["พิกัดลาก (Towing capacity)", "3,500 กก.", "4,500 กก."]], [36, 32, 32], "care") +
+     warn(("น้ำหนักรถลาก + หางลาก (GCM) ต้องไม่เกิน 8,000 กก. เช่น รถลากบรรทุกเต็ม GVM 4,500 กก. ลากหางลากได้ไม่เกิน 3,500 กก.",
+           "The combination (GCM) must not exceed 8,000 kg: a car loaded to its 4,500 kg GVM may tow no more than 3,500 kg."),
+          ("น้ำหนักกดลูกบอลไม่เกินค่าในคู่มือรถ Ford", "Ball download within the Ford owner's guide value.")) +
+     para("ค่าตาม Ford BEMM E455418 (03/2026) ข้อ 1.13–1.14 · ชั่งน้ำหนักรวมเมื่อไม่แน่ใจ", "Values per Ford BEMM E455418 (03/2026) 1.13–1.14 · weigh the rig when unsure."))
+
+# ---------------------------------------------------------------- 2 coupling
+page("2. การพ่วงและปลดพ่วง (Coupling and uncoupling)", band("2. การพ่วงและปลดพ่วง", "Coupling and uncoupling") + h3("2.1 การพ่วง", "Coupling") +
+     figs((D.coupler("open"), "หัวต่อเปิด (Lever open)"), (D.coupler("locked"), "ล็อกบนลูกบอล + สลักนิรภัย (Locked, pin fitted)"), k="s") +
+     steps(("จอดหางลากบนพื้นเรียบ หนุนล้อ หมุนขาตั้งหน้าให้หัวต่อสูงกว่าลูกบอล และยกคันล็อกหัวต่อขึ้น", "Park the trailer on level ground, chock the wheels, wind the jockey wheel until the coupling is above the ball and lift the coupling lever."),
+           ("ถอยรถให้ลูกบอลอยู่ใต้หัวต่อ โดยมีผู้ให้สัญญาณยืนด้านข้าง ห้ามยืนระหว่างรถ", "Reverse the car until the ball is under the coupling, with a helper signalling from the side – never between the vehicles."),
+           ("หมุนขาตั้งลดหัวต่อลงบนลูกบอลจนสุด กดคันล็อกลง และใส่สลักนิรภัย", "Wind the coupling down fully onto the ball, press the lever down and fit the safety pin."),
+           ("หมุนขาตั้งขึ้นเล็กน้อย ถ้าท้ายรถยกตาม แสดงว่าล็อกแล้ว จากนั้นยกขาตั้งขึ้นสุดและล็อก", "Wind the jockey up slightly: if the car's rear lifts, the coupling is locked. Then wind it fully up and lock it."),
+           ("ต่อโซ่นิรภัย สายเบรกฉุกเฉิน (2.2) และปลั๊ก 12 ขา (2.3) แล้วเก็บลิ่มหนุนล้อ", "Attach the safety chains and breakaway cable (2.2) and the 12-pin plug (2.3), then stow the chocks.")) +
+     figs((D.jockey(True), "ขาตั้งลง รับน้ำหนัก (Down)"), (D.jockey(False), "ขาตั้งขึ้นสุดก่อนลาก (Up before towing)"), k="s"))
+
+page("2. การพ่วงและปลดพ่วง (Coupling and uncoupling)", band("2. การพ่วงและปลดพ่วง", "Coupling and uncoupling") + h3("2.2 โซ่นิรภัยและสายเบรกฉุกเฉิน", "Safety chains and breakaway cable") +
+     fig(D.chains(), "❶ โซ่นิรภัยคล้องไขว้ใต้หัวต่อ · ❷ สายเบรกฉุกเฉินคล้องจุดยึดบนชุดลากของรถ แยกจากโซ่") +
+     steps(("คล้องโซ่นิรภัยทั้งสองเส้นกับจุดคล้องโซ่ของชุดลาก Ford แบบไขว้กันใต้หัวต่อ เพื่อรองรับหัวต่อถ้าหลุดจากลูกบอล", "Hook both safety chains to the Ford towbar chain points, crossed under the coupling so they catch it if it leaves the ball."),
+           ("ปรับความยาวให้โซ่หย่อนพอเลี้ยวได้สุด แต่ไม่ลากพื้น", "Adjust so the chains allow full turns but do not drag on the road."),
+           ("คล้องสายเบรกฉุกเฉินกับจุดยึดบนรถที่แยกจากจุดคล้องโซ่ ห้ามคล้องกับโซ่หรือลูกบอล", "Attach the breakaway cable to a fixed point on the car separate from the chains – never to a chain or the ball.")) +
+     warn(("สายเบรกฉุกเฉินต้องหย่อนพอเลี้ยวได้ แต่สั้นกว่าโซ่ เพื่อให้ดึงสลักก่อนที่โซ่จะตึง", "The breakaway cable must be slack enough for turns but shorter than the chains, so it pulls the pin before the chains go tight.")))
+
+page("2. การพ่วงและปลดพ่วง (Coupling and uncoupling)", band("2. การพ่วงและปลดพ่วง", "Coupling and uncoupling") + h3("2.3 ปลั๊กไฟ 12 ขา", "12-pin plug") +
+     '<div class="two2">' + fig(D.plug12(), "ปลั๊ก 12 ขาแบน (มองหน้าปลั๊ก)", "s") +
+     table(["ขา", "สาย", "หน้าที่ (Function)"], [
+         ["1", "เหลือง", "ไฟเลี้ยวซ้าย (LH turn)"], ["2", "ดำ", "ไฟถอย (Reversing)"], ["3", "ขาว", "กราวด์ (Earth)"], ["4", "เขียว", "ไฟเลี้ยวขวา (RH turn)"],
+         ["5", "น้ำเงิน", "ไปวงจรรีเลย์เบรก – ยืนยันตามแบบ (Brake relay – confirm)"], ["6", "แดง", "ไฟเบรก (Stop)"], ["7", "น้ำตาล", "ไฟหรี่ (Tail)"], ["8–12", "ส้ม ชมพู ขาว เทา ม่วง", f"ตามแบบสายของรถคันนี้ {B}"]], [10, 28, 62], "plist") + '</div>' +
+     steps(("ตรวจหน้าสัมผัสปลั๊กทั้งสองฝั่งให้สะอาดและแห้ง", "Check both plug faces are clean and dry."),
+           ("เสียบปลั๊กจนสุดและล็อกฝาปิด จัดสายให้หย่อนพอเลี้ยวได้ ไม่ลากพื้น", "Push the plug fully home and latch the cover; leave enough slack for turns without dragging."),
+           ("ให้ผู้ช่วยตรวจไฟหรี่ ไฟเบรก ไฟเลี้ยว และไฟถอยทุกดวง (หัวข้อ 4)", "Have a helper check the tail, stop, turn and reversing lamps (section 4).")) +
+     remark(("ตำแหน่งขาบนตัวปลั๊กจริงดูตามเลขที่พิมพ์บนปลั๊ก ภาพนี้แสดงเพื่ออธิบายเท่านั้น", "Use the numbers printed on the plug itself; the drawing is for explanation only."),
+            ("หน้าที่ขา 1–7 จาก WI-PD-63 · ขา 8–12 ให้ RRS ยืนยันตามแบบสาย", "Pins 1–7 from WI-PD-63 · pins 8–12 to be confirmed by RRS from the wiring drawing.")))
+
+page("2. การพ่วงและปลดพ่วง (Coupling and uncoupling)", band("2. การพ่วงและปลดพ่วง", "Coupling and uncoupling") + h3("2.4 การปลดพ่วง", "Uncoupling") +
+     steps(("จอดบนพื้นเรียบและแข็ง เข้าเกียร์ P และดึงเบรกมือรถลาก", "Park on firm, level ground, select P and apply the car's parking brake."),
+           ("หนุนล้อหางลากทั้งสองข้าง หน้าและหลัง", "Chock the trailer wheels on both sides, front and rear."),
+           ("ลดขาตั้งหน้าลงจนแตะพื้นและรับน้ำหนัก", "Lower the jockey wheel until it takes the weight."),
+           ("ถอดปลั๊ก 12 ขา เก็บใส่ที่เก็บ ปลดสายเบรกฉุกเฉินและโซ่นิรภัย", "Unplug and stow the 12-pin plug; unhook the breakaway cable and the chains."),
+           ("ถอดสลักนิรภัย ยกคันล็อก แล้วหมุนขาตั้งยกหัวต่อพ้นลูกบอล", "Remove the safety pin, lift the lever and wind the coupling clear of the ball."),
+           ("เคลื่อนรถออกช้า ๆ ตรวจว่าหางลากอยู่นิ่ง และใส่ฝาครอบลูกบอล", "Drive the car away slowly, check the trailer stays put and refit the ball cover.")) +
+     warn(("ห้ามดึงสลักสายเบรกฉุกเฉินออกขณะจอดเพื่อใช้เป็นเบรกมือ แบตเตอรี่เบรกฉุกเฉินจะหมด", "Do not pull the breakaway pin to hold a parked trailer: it drains the breakaway battery."),
+          ("ห้ามปลดพ่วงบนทางลาด และห้ามทิ้งหางลากโดยไม่หนุนล้อ", "Never uncouple on a slope or leave the trailer without chocks.")))
+
+# ---------------------------------------------------------------- 3 brakes
+page("3. เบรกหางลาก (Trailer brakes)", band("3. เบรกหางลาก", "Trailer brakes") +
+     h3("3.1 ตัวควบคุมเบรก", "Brake controller") +
+     para("เบรกหางลากสั่งงานจากตัวควบคุมเบรกบนรถลาก ผ่านขาสั่งเบรกของปลั๊ก 12 ขา Ford ส่งสัญญาณเบรกพ่วงเป็นสัญญาณพัลส์ ตัวควบคุมเบรกต้องรองรับสัญญาณนี้",
+          "The trailer brakes are applied by the brake controller in the car through the brake-control pin of the 12-pin plug. Ford sends a pulsed signal; the controller must support it.") +
+     steps(("ตั้งค่าแรงเบรก (Gain) ตามคู่มือตัวควบคุมเบรก โดยเริ่มจากค่าต่ำ", "Set the gain as the controller's manual says, starting low."),
+           ("ขับช้า ๆ บนพื้นแห้ง ราว 30 กม./ชม. แล้วกดสั่งเบรกหางลากด้วยมือ หางลากควรหน่วงรถโดยล้อไม่ล็อก", "Drive slowly on a dry road at about 30 km/h and apply the trailer brakes by hand: the trailer should slow the car without locking its wheels."),
+           ("ปรับค่าเพิ่มทีละขั้นจนได้ผลตามข้อ 2 และตั้งใหม่ทุกครั้งที่น้ำหนักบรรทุกเปลี่ยนมาก", "Raise the gain step by step until step 2 is met; reset it whenever the load changes a lot.")) +
+     h3("3.2 ระบบเบรกฉุกเฉิน (Breakaway)", "Breakaway system") +
+     fig(D.breakaway(), "❶ สวิตช์และสลักเบรกฉุกเฉิน · ❷ สายคล้องกับรถ · ❸ แบตเตอรี่สำรองบนหางลาก", "s") +
+     para("ถ้าหางลากหลุดจากรถ สายจะดึงสลักออกจากสวิตช์ และแบตเตอรี่สำรองจะสั่งเบรกหางลากเต็มแรง ก่อนลากทุกครั้งตรวจว่าสลักเสียบสุดและแบตเตอรี่มีไฟ",
+          "If the trailer breaks away, the cable pulls the pin and the trailer battery applies the brakes fully. Before every tow, check the pin is fully in and the battery is charged.") +
+     remark(("รุ่นตัวควบคุมเบรก ชุด breakaway แบตเตอรี่ และวิธีทดสอบ ให้ RRS ระบุตามชุดที่ติดตั้ง (WI-PD-63)", "Brake controller, breakaway kit, battery type and test method to be stated by RRS for the fitted kit (WI-PD-63).")))
+
+# ---------------------------------------------------------------- 4 lamps and camera
+page("4. ไฟและกล้องมองหลัง (Lamps and rear camera)", band("4. ไฟและกล้องมองหลัง", "Lamps and rear camera") +
+     fig(G.rear_view(), "ด้านท้าย: ไฟบนหลังคา 4 ดวง ไฟท้าย ป้ายทะเบียน และกล้องมองหลังกลางท้ายตู้", "s") +
+     steps(("เปิดไฟหรี่ ตรวจไฟหรี่ ไฟบนหลังคา และไฟส่องป้ายทะเบียน", "Switch on the parking lamps: check tail, roof marker and number-plate lamps."),
+           ("เหยียบเบรก ตรวจไฟเบรกทั้งสองข้าง", "Press the brake pedal: check both stop lamps."),
+           ("เปิดไฟเลี้ยวทีละข้าง ไฟต้องกะพริบตรงข้างและพร้อมกับรถ", "Signal each way: the trailer lamp must flash on the correct side, in time with the car."),
+           ("เข้าเกียร์ถอย ไฟถอยหางลากติด และจอแสดงภาพจากกล้องหางลาก", "Select reverse: the trailer reversing lamps light and the screen shows the trailer camera.")) +
+     fig(D.camera_switch(), "กล้อง ❶ บนรถลาก ใช้เมื่อไม่ได้พ่วง · กล้อง ❷ บนหางลาก แสดงเมื่อพ่วงและเข้าเกียร์ถอย", "s") +
+     remark(("ไฟ LED ที่กินกระแสต่ำกว่า 550 mA ต่อวงจร รถจะไม่ตรวจพบหางลาก ต้องใส่ชุดตัวต้านทานฝั่งหางลาก (Ford BEMM 4.6.12) – แจ้ง RRS", "LED lamps drawing under 550 mA per circuit are not detected by the car; a resistor kit is needed on the trailer (Ford BEMM 4.6.12) – contact RRS.")))
+
+# ---------------------------------------------------------------- 5 doors
+page("5. ประตูตู้ (Box doors)", band("5. ประตูตู้", "Box doors") + h3("5.1 ประตูข้าง", "Side doors") +
+     fig(D.doors_top(), "มองจากด้านบน: ประตูข้างข้างละ 4 บาน ❶–❽ เปิดออกด้านนอก", "s") +
+     para("ประตูข้างแต่ละข้างมี 4 บาน บานนอกยึดด้วยบานพับ 5 ตัวที่ขอบบาน และปิดชนเสากลาง ล็อกด้วยกลอนบน–ล่างที่เสากลาง",
+          "Each side has 4 doors. The outer doors hang on 5 hinges on their edge and close against the centre posts, where they lock with top and bottom bolts.") +
+     steps(("จอดหางลากบนพื้นเรียบ ตู้จะไม่บิดและประตูเปิด–ปิดได้คล่อง", "Park the trailer on level ground so the box does not twist and the doors move freely."),
+           ("ปลดมือจับล็อก แล้วเปิดบานออกจนสุด ล็อกบานไว้กับตัวยึดบาน (ถ้ามี) ไม่ปล่อยให้ลมตีบาน", "Release the lock handle and swing the door fully open; hold it with its stay (if fitted) so the wind cannot slam it."),
+           ("การปิด: ปิดบานให้ชนเสากลาง ใส่กลอนบน–ล่าง แล้วกดมือจับล็อกจนสุด ดึงบานเพื่อตรวจว่าล็อกแล้ว", "To close: shut the door against the centre post, engage the top and bottom bolts, press the handle home and pull the door to check.")) +
+     warn(("ห้ามเปิดประตูขณะลมแรงโดยไม่จับบานไว้ บานสูงกว่า 2 ม. และอาจตีกระแทกผู้ใช้", "Do not open a door in strong wind without holding it: the doors are over 2 m tall and can strike you."),
+          ("ประตูไม่ใช่ผนังรับแรงสินค้า รัดหรือกั้นสินค้าไม่ให้พิงประตู", "Doors are not load-bearing walls: tie or brace the load so it does not lean on them.")))
+
+page("5. ประตูตู้ (Box doors)", band("5. ประตูตู้", "Box doors") + h3("5.2 ประตูท้ายและประตูหน้า", "Rear and front doors") +
+     fig(G.rear_view(), "ประตูท้าย 2 บาน พร้อมมือจับล็อก", "s") +
+     steps(("ปลดมือจับล็อกประตูท้าย เปิดบานขวาก่อน แล้วจึงเปิดบานซ้าย", "Release the rear-door lock handles; open the right leaf first, then the left."),
+           ("เปิดบานจนสุดและยึดไว้ ไม่ปล่อยให้บานแกว่งขณะขนของ", "Open each leaf fully and hold it; do not let it swing while loading."),
+           ("การปิด: ปิดบานซ้ายก่อน แล้วบานขวา กดมือจับจนล็อก และตรวจซีลยางว่าแนบสนิท", "To close: shut the left leaf, then the right, press the handles until they lock and check the seal sits tight.")) +
+     para("ประตูหน้า (ด้านหัวลาก) ใช้สำหรับเข้าถึงด้านหน้าตู้ เปิดได้เมื่อหางลากจอดและปลดล็อกแล้วเท่านั้น", "The front door (drawbar end) gives access to the front of the box; open it only when the trailer is parked.") +
+     remark(("ชนิดกลอนและมือจับประตูทุกบาน ให้ RRS ยืนยันตามชุดที่ติดตั้ง (ยังไม่อยู่ในแบบ 3D)", "Door bolt and handle type to be confirmed by RRS for the fitted hardware (not yet in the 3D model)."),
+            ("หล่อลื่นบานพับและกลอนทุกเดือน และทำความสะอาดซีลยางเพื่อกันน้ำรั่ว (หัวข้อ 8)", "Lubricate hinges and bolts monthly and clean the seals to keep water out (section 8).")))
+
+# ---------------------------------------------------------------- 6 loading
+page("6. การบรรทุก (Loading)", band("6. การบรรทุก", "Loading") +
+     fig(D.load_split(), "การกระจายน้ำหนัก (Load distribution)") +
+     table(["ควรทำ (Do)", "ไม่ควรทำ (Don't)"], [
+         ["วางของหนักชิดพื้น อยู่หน้าแนวเพลาเล็กน้อย และกึ่งกลางซ้าย–ขวา" + en("Heavy items low, slightly ahead of the axles, centred left–right"), "กองของหนักไว้ท้ายตู้" + en("Pile heavy items at the rear")],
+         ["ให้น้ำหนักกดลูกบอลประมาณ 10% ของน้ำหนักรวมหางลาก ไม่เกินค่าของ Ford" + en("Ball download about 10% of the trailer mass, within the Ford limit"), "ให้น้ำหนักกดลูกบอลน้อยหรือติดลบ" + en("Low or negative ball download")],
+         ["รัดหรือกั้นสินค้ากับพื้นและโครงตู้" + en("Tie or brace the load to the floor and the box frame"), "ใช้ประตูเป็นที่พิงสินค้า" + en("Lean the load on the doors")],
+         ["ชั่งน้ำหนักรวมเมื่อไม่แน่ใจ" + en("Weigh the rig when unsure"), "บรรทุกบนหลังคา หรือเกินป้ายหางลาก" + en("Load the roof or exceed the trailer plate")]], [50, 50], "dodont") +
+     warn(("ตรวจสายรัดซ้ำหลังลากระยะสั้นครั้งแรก และทุกครั้งที่หยุดพัก", "Re-check the straps after the first short distance and at every stop.")))
+
+# ---------------------------------------------------------------- 7 driving
+page("7. การขับขี่ขณะลากจูง (Driving with the trailer)", band("7. การขับขี่ขณะลากจูง", "Driving with the trailer") +
+     bullets(("ขับช้ากว่าปกติ ความเร็วสูงสุดขณะลาก " + B + " กม./ชม. และไม่เกินที่กฎหมายกำหนด", f"Drive slower than usual; max. towing speed {B} km/h and never above the legal limit."),
+             ("เผื่อระยะเบรกมากกว่าปกติ และเบรกเบา ๆ ล่วงหน้า", "Allow much longer braking distances and brake early and gently."),
+             ("เลี้ยวให้กว้างกว่าปกติ ล้อหางลากจะตัดโค้งด้านใน", "Take corners wider: the trailer wheels cut inside the car's path."),
+             ("ลงเขาใช้เกียร์ต่ำ ห้ามแตะเบรกค้างนาน", "Use a low gear downhill; do not ride the brakes."),
+             ("ถอยหลัง: จับพวงมาลัยด้านล่าง หมุนไปทางที่ต้องการให้ท้ายหางไป มีผู้ให้สัญญาณ", "Reversing: hold the bottom of the wheel and turn it the way you want the trailer to go, with a helper signalling."),
+             ("หยุดพักทุก 1–2 ชม. ตรวจหัวต่อ ล้อ ดุมล้อ (ห้ามร้อนจัด) สายรัด และประตู", "Stop every 1–2 h: check coupling, wheels, hubs (not hot), straps and doors.")) +
+     warn(("หางลากส่าย: ถอนคันเร่งช้า ๆ ถือพวงมาลัยตรง ห้ามเบรกกะทันหัน ถ้าใช้ได้ให้สั่งเบรกหางลากด้วยมือเบา ๆ จนหางนิ่ง แล้วจอดตรวจการบรรทุก",
+           "If the trailer sways: ease off, hold the wheel straight, never brake hard; if fitted, apply the trailer brakes gently by hand until it settles, then stop and check the load."),
+          ("ลมด้านข้างแรงมีผลกับตู้สูงมาก ลดความเร็วเมื่อมีลมแรงหรือถูกรถใหญ่แซง", "The tall box is very sensitive to crosswinds: slow down in strong wind or when passed by large vehicles.")))
+
+# ---------------------------------------------------------------- 8 care
+page("8. การดูแลรักษา (Care and maintenance)", band("8. การดูแลรักษา", "Care and maintenance") +
+     table(["ระยะ (Interval)", "รายการ (Item)", "ผู้ทำ (By)"], [
+         ["ก่อนลากทุกครั้ง" + en("Before every tow"), ["หัวต่อ สลัก โซ่ สายเบรกฉุกเฉิน" + en("Coupling, pin, chains, breakaway"), "ไฟทุกดวง · ลมยางและสภาพยาง" + en("All lamps · tyre pressures"), "ประตูล็อก · ขาตั้งยกขึ้น" + en("Doors locked · jockey up")], "ผู้ใช้" + en("User")],
+         ["50 กม. แรก และทุกครั้งที่ถอดล้อ" + en("First 50 km and after wheel removal"), ["ขันน็อตล้อซ้ำตามแรงขัน " + B + " N·m" + en("Re-torque the wheel nuts")], "ผู้ใช้ / RRS"],
+         ["ทุกเดือน" + en("Monthly"), ["หล่อลื่นหัวต่อ บานพับ กลอนประตู ขาตั้ง" + en("Lubricate coupling, hinges, door bolts, jockey"), "ทำความสะอาดซีลประตูและรางน้ำหลังคา" + en("Clean door seals and roof gutter"), "ชาร์จหรือตรวจแบตเตอรี่เบรกฉุกเฉิน" + en("Check / charge the breakaway battery")], "ผู้ใช้" + en("User")],
+         ["1 เดือน / 1,000 กม. แรก" + en("First 1 month / 1,000 km"), ["น็อตล้อ ลูกปืนล้อ เบรก แหนบ หัวต่อ ไฟ ซีลประตู" + en("Wheel nuts, bearings, brakes, springs, coupling, lamps, seals")], "RRS"],
+         ["ทุก 6 เดือน / 10,000 กม." + en("Every 6 months / 10,000 km"), ["รอยร้าวที่คานลาก คานแชสซีส์ หูแหนบ เสามุม" + en("Cracks in drawbar, rails, spring hangers, corner posts"), "ปรับตั้งเบรก · ความหลวมลูกปืนล้อ · สายไฟ" + en("Brake adjustment · bearing play · wiring")], "RRS"],
+         ["ทุก 12 เดือน / 20,000 กม." + en("Every 12 months / 20,000 km"), ["อัดจารบีลูกปืนล้อ เปลี่ยนซีลดุม ตรวจผ้าเบรก สลับยาง" + en("Repack bearings, renew hub seals, check linings, rotate tyres")], "RRS"],
+         ["หลังลุยน้ำ ล้าง หรือขนวัสดุกัดกร่อน" + en("After water, washing, corrosive loads"), ["ล้างใต้หาง ตรวจลูกปืนล้อหลังล้อจมน้ำ ห้ามฉีดน้ำแรงดันสูงเข้าดุมล้อและซีล" + en("Rinse underneath; check bearings after immersion; no pressure washer on hubs and seals")], "ผู้ใช้" + en("User")]], [25, 57, 18], "care") +
+     remark((f"แรงขันน็อตล้อ {B} N·m · ลมยาง {B} psi · จารบีลูกปืนล้อ ชนิด {B}", "Wheel-nut torque, tyre pressure and bearing grease: values to be stated by RRS.")))
+
+# ---------------------------------------------------------------- 9 troubleshooting
+page("9. แก้ปัญหาเบื้องต้น (Troubleshooting)", band("9. แก้ปัญหาเบื้องต้น", "Troubleshooting") +
+     para("ตรวจตามตารางก่อนติดต่อ RRS ถ้าทำแล้วไม่หาย ให้หยุดลากและแจ้ง RRS ไม่ถอดซ่อมเอง", "Check the table before calling RRS. If the fault stays, stop towing and contact RRS; do not dismantle parts yourself.") +
+     table(["อาการ (Symptom)", "สาเหตุที่พบบ่อย (Likely cause)", "สิ่งที่ทำได้เอง (What you can do)"], [
+         ["หางส่ายขณะลาก", "น้ำหนักกดลูกบอลน้อย · ลมยางไม่เท่ากัน · เร็วเกินไป", "ลดความเร็ว จัดของหนักไปข้างหน้า เติมลมยาง"],
+         ["ไฟหางลากไม่ติดบางดวง", "ปลั๊กหลวมหรือสกปรก · หลอดขาด · LED กินกระแสต่ำ", "เสียบปลั๊กใหม่ ทำความสะอาดขั้ว แจ้ง RRS ตรวจชุดตัวต้านทาน"],
+         ["จอไม่แสดงกล้องหางลากเมื่อถอย", "ปลั๊กหลวม · ไฟถอยหางลากไม่ติด", "เสียบปลั๊กใหม่ ตรวจไฟถอย แจ้ง RRS"],
+         ["เบรกหางลากไม่ทำงานหรือดึงข้าง", "ตัวควบคุมเบรกไม่ได้ตั้งค่า · สายหลวม · ผ้าเบรกสึก", "ตรวจการตั้งค่า (3.1) แจ้ง RRS ปรับตั้งเบรก"],
+         ["ดุมล้อร้อนจัดหรือมีกลิ่นไหม้", "ลูกปืนขาดจารบี · เบรกติด", "หยุดลาก ปล่อยให้เย็น ห้ามราดน้ำ แจ้ง RRS"],
+         ["มีเสียงกุกกักที่หัวต่อ", "หัวต่อไม่ล็อกสุด · ลูกบอลผิดขนาด", "หยุดลาก ตรวจล็อกและขนาดลูกบอล หล่อลื่นหัวต่อ"],
+         ["น้ำรั่วเข้าตู้", "ซีลประตูเสื่อมหรือมีเศษติด · รางน้ำตัน", "ทำความสะอาดซีลและรางน้ำ แจ้ง RRS ถ้ายังรั่ว"],
+         ["ประตูปิดไม่สนิท", "บานพับหรือกลอนฝืด · จอดบนพื้นเอียง", "หล่อลื่น จอดบนพื้นเรียบแล้วลองใหม่"]], [24, 38, 38]))
+
+# ---------------------------------------------------------------- 10 technical data
+page("10. ข้อมูลทางเทคนิค (Technical data)", band("10. ข้อมูลทางเทคนิค", "Technical data") +
+     table(["รายการ (Item)", "ค่า (Value)"], [
+         ["ความยาวรวม · ตัวตู้ ยาว × กว้าง" + en("Overall length · box L × W"), "~7,256 · 5,700 × 1,806 มม."],
+         ["ความสูงภายใน · ความกว้างรวม" + en("Inside height · overall width"), "~2,247 · ~2,394 มม."],
+         ["คานแชสซีส์ · คานขวาง" + en("Chassis rails · cross members"), "คานคู่ ห่างศูนย์ 1,714 มม. · คานขวาง 9 ตัว ระยะ 600 มม."],
+         ["พื้น" + en("Floor"), "เหล็กลาย (ตีนไก่)"],
+         ["ประตู · บานพับ" + en("Doors · hinges"), "ข้างละ 4 บาน · ประตูท้าย · ประตูหน้า · บานพับบานนอก 5 ตัว ระยะ 466 มม."],
+         ["เพลา · ช่วงล่าง · ยาง" + en("Axles · suspension · tyres"), f"2 เพลา · {B} · {B}"],
+         ["เบรก" + en("Brakes"), f"เบรกไฟฟ้าสั่งจากตัวควบคุมเบรก + ระบบ breakaway · {B}"],
+         ["ปลั๊ก · ไฟ" + en("Plug · lamps"), "12 ขาแบน · ไฟบนหลังคา 4 ดวง · LED ≥ 550 mA ต่อวงจร"],
+         ["กล้อง" + en("Camera"), "กล้องมองหลัง Ford N1WJ-19H391-A กลางท้ายตู้"],
+         ["ชุดลากที่ใช้ได้" + en("Towbar"), "Ford 3.5 ตัน (Ø50) / 4.5 ตัน (Ø70)"]], [40, 60]) +
+     remark(("ค่าจากแบบ 3D และเอกสาร RRS · ค่าที่เป็น ____ ให้ RRS ระบุก่อนพิมพ์", "Values from the RRS 3D model and documents · blanks to be filled by RRS before printing.")))
+
+# ---------------------------------------------------------------- back cover
+raw('''<div class="back"><img src="logo_white.png"><h2>บริษัท รุ่งเรืองกระบะดั้มพ์ 101</h2>
+<p>ที่อยู่ ______________________________________________<br>โทรศัพท์ ____________________ · LINE ____________________<br>อีเมล ____________________ · เว็บไซต์ rungruengdump101.com</p>
+<small>คู่มือการใช้งาน หางลากพ่วงตู้ทึบ RRS · Owner Manual – RRS Enclosed Box Trailer · P/N ____________</small></div>''', "nocrop")
+
+save("booklet.html", "RRS Owner Manual – Box Trailer", extra_css=open(HERE / "style.css", encoding="utf-8").read() + '''
+.coverfig.tr{top:160mm;left:20mm;right:16mm}.coverfig.tr svg{width:100%;max-height:60mm}
+svg.diagram{width:100%;display:block}.figbox svg.diagram{max-height:60mm}.figbox.s svg.diagram{max-height:52mm}
+.two2{display:flex;gap:5mm;align-items:flex-start}.two2>.figbox{flex:0 0 40%}.two2>table{flex:1}
+.figbox svg.dwg{max-height:46mm}.figbox.s svg.dwg{max-height:34mm}
+''')

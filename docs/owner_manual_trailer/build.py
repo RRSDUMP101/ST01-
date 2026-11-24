@@ -12,8 +12,9 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent / "warranty_booklet"))
 from common import *  # noqa: E402,F403
-import diagram as G  # noqa: E402
 import drawings as D  # noqa: E402
+import model as M  # noqa: E402
+P = M.PT
 
 set_footer("คู่มือการใช้งาน · หางลากพ่วงตู้ทึบ RRS · Ford Ranger Super Duty")
 B = "____"
@@ -69,7 +70,7 @@ raw('''<div class="cover"><div class="stripe"></div>
 <div class="ctitle"><small>OWNER MANUAL</small><h1>คู่มือการใช้งาน</h1>
 <p>หางลากพ่วงตู้ทึบ RRS<br><span style="color:#1257C8">RRS Enclosed Box Trailer</span></p>
 <p class="cabs">ลากด้วย Ford Ranger Super Duty</p></div>
-<div class="coverfig tr">''' + G.side_view() + '''</div>
+<div class="coverfig tr">''' + M.view("t_rear") + '''</div>
 <div class="cfoot"><span>รหัสคู่มือ (P/N) ____________</span><span>เลขตัวถังหางลาก (VIN) ____________</span></div></div>''', "nocrop")
 
 # ---------------------------------------------------------------- contents
@@ -114,16 +115,18 @@ page("การรับประกัน (Warranty)", band("การรับ
      remark(("ระยะรับประกันแต่ละชุดชิ้นส่วนดูในสมุดรับประกัน (ค่าที่ RRS ประกาศ)", "Warranty periods for each part group: see the warranty booklet (as published by RRS).")))
 
 page("ส่วนประกอบหางลาก (Trailer components)", band("ส่วนประกอบหางลาก", "Trailer components") +
-     fig(G.side_view(), "ด้านข้าง (Side view) – วาดจากตำแหน่งชิ้นส่วนในแบบ 3D ของ RRS") +
-     '<div class="two2">' + fig(G.rear_view(), "ด้านท้าย (Rear view)", "s") +
-     table(["ชิ้นส่วน (Part)", "หน้าที่ (Function)"], [
-         ["หัวต่อพ่วง · คานลาก" + en("Coupling · drawbar"), "ต่อกับลูกบอลของชุดลาก Ford"],
-         ["คานแชสซีส์" + en("Chassis rails"), "คานยาวคู่ใต้พื้น รับน้ำหนักตู้และสินค้า"],
-         ["ล้อ เพลา บังโคลน" + en("Wheels, axles, fenders"), "2 เพลา รับน้ำหนักและเบรก"],
-         ["ตู้ · หลังคา · รางน้ำ" + en("Box · roof · gutter"), "กันสินค้าและกันน้ำ"],
-         ["ประตูข้าง · ท้าย · หน้า" + en("Side, rear, front doors"), "ข้างละ 4 บาน บานพับบานละ 5 ตัว"],
-         ["กล่องเครื่องมือหน้า" + en("Front tool box"), "เก็บโซ่ สายรัด ลิ่มหนุนล้อ"],
-         ["ไฟ · ป้าย · กล้อง" + en("Lamps · plate · camera"), "ไฟบนหลังคา 4 ดวง ไฟท้าย กล้องมองหลัง"]], [44, 56], "plist") + '</div>')
+     '<div class="side2 w">' + M.view("t_rear", [("n", P["hitch"], 1, 0, -90), ("n", P["wheel"], 2, -60, 90), ("n", P["fender"], 3, 80, 60), ("n", P["door"], 4, 70, -60),
+                       ("n", P["lockbar"], 5, 70, 40), ("n", P["hinge"], 6, 80, -40), ("n", P["roof"], 7, 0, -70), ("n", P["lamp"], 8, -40, 80),
+                       ("n", P["rear"], 9, -90, -30)], "ภาพจากแบบ 3D ของ RRS (มองจากด้านท้ายขวา)", "") + '<div>' + table(["#", "ชิ้นส่วน (Part)", "หน้าที่ (Function)"], [
+         ['<span class="numdot">1</span>', "คานลาก · แผ่นยึดหัวต่อพ่วง" + en("Drawbar · coupling plate"), "ต่อกับลูกบอลของชุดลาก Ford"],
+         ['<span class="numdot">2</span>', "ล้อและเพลา (2 เพลา)" + en("Wheels and axles (tandem)"), "รับน้ำหนักและเบรก"],
+         ['<span class="numdot">3</span>', "บังโคลน" + en("Fenders"), "กันโคลนและหินกระเด็น"],
+         ['<span class="numdot">4</span>', "ประตูข้าง ข้างละ 4 บาน" + en("Side doors, 4 per side"), "เปิดออกด้านนอก"],
+         ['<span class="numdot">5</span>', "คานล็อกประตูและมือจับ" + en("Door locking bar and handle"), "ล็อกบานกับขอบตู้บน–ล่าง"],
+         ['<span class="numdot">6</span>', "บานพับประตู" + en("Door hinges"), "บานละ 5 ตัว"],
+         ['<span class="numdot">7</span>', "หลังคา · รางน้ำ" + en("Roof · gutter"), "กันน้ำ ห้ามบรรทุกบนหลังคา"],
+         ['<span class="numdot">8</span>', "ไฟท้าย · ป้ายทะเบียน" + en("Tail lamps · number plate"), "ผ่านปลั๊ก 12 ขา"],
+         ['<span class="numdot">9</span>', "ประตูท้าย" + en("Rear doors"), "บานคู่ บานพับสองฝั่ง"]], [7, 48, 45], "plist") + '</div></div>')
 
 page("เพื่อการลากจูงอย่างปลอดภัย (For safe towing)", band("เพื่อการลากจูงอย่างปลอดภัย", "For safe towing") +
      warn(("ห้ามให้คนนั่งหรืออยู่ในตู้ขณะลาก", "Never carry people in the box while towing."),
@@ -154,7 +157,7 @@ page("เพื่อการลากจูงอย่างปลอดภ�
 
 # ---------------------------------------------------------------- 1 dimensions
 page("1. ขนาดและน้ำหนัก (Dimensions and weight)", band("1. ขนาดและน้ำหนัก", "Dimensions and weight") + h3("1.1 ขนาด", "Dimensions") +
-     fig(G.side_view(), "ด้านข้าง (Side view)", "s") +
+     M.view("t_side", [], "ด้านข้าง (Side view) – จากแบบ 3D", "m") +
      table(["รายการ (Item)", "ค่า (Value)"], [
          ["ความยาวรวม (ถึงหัวคานลาก ไม่รวมหัวต่อ)" + en("Overall length (to drawbar tip, excl. coupling)"), "ประมาณ 7,256 มม."],
          ["ตัวตู้ ยาว × กว้าง" + en("Box length × width"), "5,700 × 1,806 มม."],
@@ -229,27 +232,26 @@ page("3. เบรกหางลาก (Trailer brakes)", band("3. เบรก
 
 # ---------------------------------------------------------------- 4 lamps and camera
 page("4. ไฟและกล้องมองหลัง (Lamps and rear camera)", band("4. ไฟและกล้องมองหลัง", "Lamps and rear camera") +
-     fig(G.rear_view(), "ด้านท้าย: ไฟบนหลังคา 4 ดวง ไฟท้าย ป้ายทะเบียน และกล้องมองหลังกลางท้ายตู้", "s") +
-     steps(("เปิดไฟหรี่ ตรวจไฟหรี่ ไฟบนหลังคา และไฟส่องป้ายทะเบียน", "Switch on the parking lamps: check tail, roof marker and number-plate lamps."),
+     '<div class="side2">' + M.view("tz_rear", [("c", P["lamp"], 60), ("c", (720, 2880, 560), 60), ("c", P["plate"], 70)], "ด้านท้าย: ไฟท้าย ป้ายทะเบียน (วงประ) และไฟบนหลังคา – จากแบบ 3D", "") + '<div>' + steps(("เปิดไฟหรี่ ตรวจไฟหรี่ ไฟบนหลังคา และไฟส่องป้ายทะเบียน", "Switch on the parking lamps: check tail, roof marker and number-plate lamps."),
            ("เหยียบเบรก ตรวจไฟเบรกทั้งสองข้าง", "Press the brake pedal: check both stop lamps."),
            ("เปิดไฟเลี้ยวทีละข้าง ไฟต้องกะพริบตรงข้างและพร้อมกับรถ", "Signal each way: the trailer lamp must flash on the correct side, in time with the car."),
-           ("เข้าเกียร์ถอย ไฟถอยหางลากติด และจอแสดงภาพจากกล้องหางลาก", "Select reverse: the trailer reversing lamps light and the screen shows the trailer camera.")) +
-     fig(D.camera_switch(), "กล้อง ❶ บนรถลาก ใช้เมื่อไม่ได้พ่วง · กล้อง ❷ บนหางลาก แสดงเมื่อพ่วงและเข้าเกียร์ถอย", "s") +
+           ("เข้าเกียร์ถอย ไฟถอยหางลากติด และจอแสดงภาพจากกล้องหางลาก", "Select reverse: the trailer reversing lamps light and the screen shows the trailer camera.")) + '</div></div>' +
+     fig(D.camera_switch(), "กล้อง ❶ บนรถลาก ใช้เมื่อไม่ได้พ่วง · กล้อง ❷ บนหางลาก แสดงเมื่อพ่วงและเข้าเกียร์ถอย", "xs") +
      remark(("ไฟ LED ที่กินกระแสต่ำกว่า 550 mA ต่อวงจร รถจะไม่ตรวจพบหางลาก ต้องใส่ชุดตัวต้านทานฝั่งหางลาก (Ford BEMM 4.6.12) – แจ้ง RRS", "LED lamps drawing under 550 mA per circuit are not detected by the car; a resistor kit is needed on the trailer (Ford BEMM 4.6.12) – contact RRS.")))
 
 # ---------------------------------------------------------------- 5 doors
 page("5. ประตูตู้ (Box doors)", band("5. ประตูตู้", "Box doors") + h3("5.1 ประตูข้าง", "Side doors") +
-     fig(D.doors_top(), "มองจากด้านบน: ประตูข้างข้างละ 4 บาน ❶–❽ เปิดออกด้านนอก", "s") +
-     para("ประตูข้างแต่ละข้างมี 4 บาน บานนอกยึดด้วยบานพับ 5 ตัวที่ขอบบาน และปิดชนเสากลาง ล็อกด้วยกลอนบน–ล่างที่เสากลาง",
-          "Each side has 4 doors. The outer doors hang on 5 hinges on their edge and close against the centre posts, where they lock with top and bottom bolts.") +
+     '<div class="side2">' + M.view("tz_door", [("c", P["lockbar"], 70), ("n", P["lockbar"], 1, -110, 60), ("c", (-930, -870, 2790), 55), ("n", (-930, -870, 2790), 2, -110, 0), ("c", (-930, -870, 870), 55), ("n", (-930, -870, 870), 2, -110, 0)], "❶ มือจับคานล็อก · ❷ ลูกเบี้ยวล็อกบน–ล่าง", "box") + '<div>' + para("ประตูข้างแต่ละบานล็อกด้วยคานล็อกแนวตั้งแบบตู้คอนเทนเนอร์ หมุนด้วยมือจับกลางบาน ลูกเบี้ยวที่ปลายคานบน–ล่างจะเข้าล็อกกับตัวรับที่ขอบตู้",
+          "Each side door locks with container-style vertical locking bars, turned by the handle at mid-height; cams at the top and bottom engage keepers on the box frame.") +
      steps(("จอดหางลากบนพื้นเรียบ ตู้จะไม่บิดและประตูเปิด–ปิดได้คล่อง", "Park the trailer on level ground so the box does not twist and the doors move freely."),
-           ("ปลดมือจับล็อก แล้วเปิดบานออกจนสุด ล็อกบานไว้กับตัวยึดบาน (ถ้ามี) ไม่ปล่อยให้ลมตีบาน", "Release the lock handle and swing the door fully open; hold it with its stay (if fitted) so the wind cannot slam it."),
-           ("การปิด: ปิดบานให้ชนเสากลาง ใส่กลอนบน–ล่าง แล้วกดมือจับล็อกจนสุด ดึงบานเพื่อตรวจว่าล็อกแล้ว", "To close: shut the door against the centre post, engage the top and bottom bolts, press the handle home and pull the door to check.")) +
+           ("ยกมือจับ ❶ ออกจากตัวล็อกมือจับ แล้วหมุนคานล็อกออกจนลูกเบี้ยว ❷ บน–ล่างหลุดจากตัวรับ", "Lift handle ❶ out of its retainer and turn the locking bar until cams ❷ leave their keepers."),
+           ("เปิดบานออกจนสุด และยึดบานไว้ ไม่ปล่อยให้ลมตีบาน", "Swing the door fully open and hold it so the wind cannot slam it."),
+           ("การปิด: ปิดบานให้สนิท หมุนมือจับกลับให้ลูกเบี้ยวเข้าตัวรับทั้งบน–ล่าง แล้วกดมือจับลงในตัวล็อก ดึงบานเพื่อตรวจว่าล็อกแล้ว", "To close: shut the door, turn the handle back so both cams enter their keepers, press the handle into its retainer and pull the door to check.")) + '</div></div>' +
      warn(("ห้ามเปิดประตูขณะลมแรงโดยไม่จับบานไว้ บานสูงกว่า 2 ม. และอาจตีกระแทกผู้ใช้", "Do not open a door in strong wind without holding it: the doors are over 2 m tall and can strike you."),
           ("ประตูไม่ใช่ผนังรับแรงสินค้า รัดหรือกั้นสินค้าไม่ให้พิงประตู", "Doors are not load-bearing walls: tie or brace the load so it does not lean on them.")))
 
 page("5. ประตูตู้ (Box doors)", band("5. ประตูตู้", "Box doors") + h3("5.2 ประตูท้ายและประตูหน้า", "Rear and front doors") +
-     fig(G.rear_view(), "ประตูท้าย 2 บาน พร้อมมือจับล็อก", "s") +
+     M.view("tz_rear", [("c", (-905, 2880, 1900), 70), ("c", (905, 2880, 1900), 70)], "ประตูท้าย: บานพับสองฝั่ง (วงประ) – บานประตูยังไม่อยู่ในแบบ 3D", "t") +
      steps(("ปลดมือจับล็อกประตูท้าย เปิดบานขวาก่อน แล้วจึงเปิดบานซ้าย", "Release the rear-door lock handles; open the right leaf first, then the left."),
            ("เปิดบานจนสุดและยึดไว้ ไม่ปล่อยให้บานแกว่งขณะขนของ", "Open each leaf fully and hold it; do not let it swing while loading."),
            ("การปิด: ปิดบานซ้ายก่อน แล้วบานขวา กดมือจับจนล็อก และตรวจซีลยางว่าแนบสนิท", "To close: shut the left leaf, then the right, press the handles until they lock and check the seal sits tight.")) +
@@ -324,9 +326,9 @@ raw('''<div class="back"><img src="logo_white.png"><h2>บริษัท รุ
 <p>ที่อยู่ ______________________________________________<br>โทรศัพท์ ____________________ · LINE ____________________<br>อีเมล ____________________ · เว็บไซต์ rungruengdump101.com</p>
 <small>คู่มือการใช้งาน หางลากพ่วงตู้ทึบ RRS · Owner Manual – RRS Enclosed Box Trailer · P/N ____________</small></div>''', "nocrop")
 
-save("booklet.html", "RRS Owner Manual – Box Trailer", extra_css=open(HERE / "style.css", encoding="utf-8").read() + '''
+save("booklet.html", "RRS Owner Manual – Box Trailer", extra_css=M.CSS + open(HERE / "style.css", encoding="utf-8").read() + '''
 .coverfig.tr{top:160mm;left:20mm;right:16mm}.coverfig.tr svg{width:100%;max-height:60mm}
 svg.diagram{width:100%;display:block}.figbox svg.diagram{max-height:60mm}.figbox.s svg.diagram{max-height:52mm}
 .two2{display:flex;gap:5mm;align-items:flex-start}.two2>.figbox{flex:0 0 40%}.two2>table{flex:1}
-.figbox svg.dwg{max-height:46mm}.figbox.s svg.dwg{max-height:34mm}
+.figbox svg.dwg{max-height:46mm}.figbox.s svg.dwg{max-height:34mm}.figbox.xs svg.dwg{max-height:24mm}
 ''')

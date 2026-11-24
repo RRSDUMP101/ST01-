@@ -168,3 +168,33 @@ def camera_switch():
          f'<path d="M160 128 L230 128" stroke="{INK}" stroke-width="3"/>', _t(195, 150, "ปลั๊ก", 11, color=INK),
          f'<rect x="40" y="76" width="56" height="34" rx="3" fill="#fff" stroke="{INK}" stroke-width="2"/>', _t(68, 98, "จอ", 12, color=INK)]
     return _svg("".join(g), "0 10 540 170")
+
+
+def ba_unit():
+    """Front of the breakaway unit (as fitted by RRS): pull pin ❶, TEST button ❷, battery lamps ❸."""
+    g = [f'<rect x="20" y="20" width="300" height="230" rx="16" fill="{FILL}" stroke="{INK}" stroke-width="3"/>',
+         f'<rect x="38" y="38" width="264" height="194" rx="8" fill="#fff" stroke="{INK}" stroke-width="1.6"/>',
+         f'<circle cx="62" cy="62" r="17" fill="#3a3f47" stroke="{INK}" stroke-width="2"/>', _num(1, 62, 104 - 6),
+         _t(180, 72, "Break-Away", 15, color=INK),
+         f'<circle cx="262" cy="116" r="22" fill="#fff" stroke="{GREEN}" stroke-width="4"/>', _t(262, 121, "TEST", 11, color=GREEN), _num(2, 262, 156),
+         f'<rect x="232" y="168" width="30" height="58" rx="15" fill="#fff" stroke="{INK}" stroke-width="2"/>'] + \
+        [f'<circle cx="247" cy="{y}" r="6" fill="#fff" stroke="{INK}" stroke-width="1.6"/>' for y in (182, 197, 212)] + \
+        [_t(222, y + 4, s, 10, anchor="end", color=INK, bold=False) for y, s in ((182, "Fully Charged"), (197, "Recharge!"), (212, "Charging"))] + \
+        [_num(3, 290, 197)] + \
+        [_t(56, y, s, 10, anchor="start", color=INK, bold=False) for y, s in ((150, "White .... Ground"), (166, "Blue ...... Brakes"), (182, "Black ..... Battery"))]
+    return _svg("".join(g), "10 10 320 250")
+
+
+def toolbox():
+    """Front tool box on the drawbar: key lock ❶, draw latch ❷, lid hinged at the back."""
+    g = [f'<path d="M30 90 L470 90 L440 60 L60 60 Z" fill="{LIGHT}" stroke="{INK}" stroke-width="2.4"/>',
+         f'<rect x="30" y="90" width="440" height="110" fill="{FILL}" stroke="{INK}" stroke-width="2.6"/>',
+         f'<line x1="30" y1="104" x2="470" y2="104" stroke="{INK}" stroke-width="1.6"/>']
+    for x in range(50, 460, 26):  # tread-plate pattern
+        for y in (122, 150, 178):
+            g.append(f'<path d="M{x} {y} l10 -6" stroke="#9aa6b6" stroke-width="2"/>')
+    g += [f'<circle cx="80" cy="128" r="12" fill="#fff" stroke="{RED}" stroke-width="4"/>', f'<line x1="80" y1="122" x2="80" y2="134" stroke="{INK}" stroke-width="2"/>',
+          f'<rect x="390" y="110" width="22" height="34" rx="3" fill="#fff" stroke="{INK}" stroke-width="2"/>',
+          f'<path d="M392 144 L410 144 L401 160 Z" fill="#fff" stroke="{RED}" stroke-width="3"/>',
+          _num(1, 80, 170), _num(2, 401, 182), _arrow("M250 52 L250 18")]
+    return _svg("".join(g), "20 5 460 205")

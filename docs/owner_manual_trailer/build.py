@@ -82,11 +82,11 @@ TOC = [
     ("2.2", "โซ่นิรภัยและสายเบรกฉุกเฉิน", "Safety chains and breakaway cable", 11), ("2.3", "ปลั๊กไฟ 12 ขา", "12-pin plug", 12),
     ("2.4", "การปลดพ่วง", "Uncoupling", 13),
     ("3", "เบรกหางลาก", "Trailer brakes", 14), ("3.1", "ตัวควบคุมเบรก", "Brake controller", 14), ("3.2", "ระบบเบรกฉุกเฉิน (Breakaway)", "Breakaway system", 14),
-    ("4", "ไฟและกล้องมองหลัง", "Lamps and rear camera", 15),
-    ("5", "ประตูตู้", "Box doors", 16), ("5.1", "ประตูข้าง", "Side doors", 16), ("5.2", "ประตูท้ายและประตูหน้า", "Rear and front doors", 17),
-    ("6", "การบรรทุก", "Loading", 18), ("7", "การขับขี่ขณะลากจูง", "Driving with the trailer", 19),
-    ("8", "การดูแลรักษา", "Care and maintenance", 20), ("9", "แก้ปัญหาเบื้องต้น", "Troubleshooting", 21),
-    ("10", "ข้อมูลทางเทคนิค", "Technical data", 22),
+    ("4", "ไฟและกล้องมองหลัง", "Lamps and rear camera", 16),
+    ("5", "ประตูตู้", "Box doors", 17), ("5.1", "ประตูข้าง", "Side doors", 17), ("5.2", "ประตูท้ายและประตูหน้า", "Rear and front doors", 18), ("5.3", "กล่องเครื่องมือหน้า", "Front tool box", 19),
+    ("6", "การบรรทุก", "Loading", 20), ("7", "การขับขี่ขณะลากจูง", "Driving with the trailer", 21),
+    ("8", "การดูแลรักษา", "Care and maintenance", 22), ("9", "แก้ปัญหาเบื้องต้น", "Troubleshooting", 23),
+    ("10", "ข้อมูลทางเทคนิค", "Technical data", 24),
 ]
 rows = "".join(f'<tr class="{"grp" if "." not in n else ""}"><td class="n">{n}</td><td>{t} <span class="en">({e})</span></td><td class="pg">{p}</td></tr>' for n, t, e, p in TOC)
 page("สารบัญ (Index)", band("สารบัญ", "Index") + f'<table class="toc"><colgroup><col style="width:9%"><col style="width:81%"><col style="width:10%"></colgroup><tbody>{rows}</tbody></table>')
@@ -225,10 +225,22 @@ page("3. เบรกหางลาก (Trailer brakes)", band("3. เบรก
            ("ขับช้า ๆ บนพื้นแห้ง ราว 30 กม./ชม. แล้วกดสั่งเบรกหางลากด้วยมือ หางลากควรหน่วงรถโดยล้อไม่ล็อก", "Drive slowly on a dry road at about 30 km/h and apply the trailer brakes by hand: the trailer should slow the car without locking its wheels."),
            ("ปรับค่าเพิ่มทีละขั้นจนได้ผลตามข้อ 2 และตั้งใหม่ทุกครั้งที่น้ำหนักบรรทุกเปลี่ยนมาก", "Raise the gain step by step until step 2 is met; reset it whenever the load changes a lot.")) +
      h3("3.2 ระบบเบรกฉุกเฉิน (Breakaway)", "Breakaway system") +
-     fig(D.breakaway(), "❶ สวิตช์และสลักเบรกฉุกเฉิน · ❷ สายคล้องกับรถ · ❸ แบตเตอรี่สำรองบนหางลาก", "s") +
-     para("ถ้าหางลากหลุดจากรถ สายจะดึงสลักออกจากสวิตช์ และแบตเตอรี่สำรองจะสั่งเบรกหางลากเต็มแรง ก่อนลากทุกครั้งตรวจว่าสลักเสียบสุดและแบตเตอรี่มีไฟ",
-          "If the trailer breaks away, the cable pulls the pin and the trailer battery applies the brakes fully. Before every tow, check the pin is fully in and the battery is charged.") +
-     remark(("รุ่นตัวควบคุมเบรก ชุด breakaway แบตเตอรี่ และวิธีทดสอบ ให้ RRS ระบุตามชุดที่ติดตั้ง (WI-PD-63)", "Brake controller, breakaway kit, battery type and test method to be stated by RRS for the fitted kit (WI-PD-63).")))
+     para("ถ้าหางลากหลุดจากรถ สายคล้องจะดึงสลัก ❶ ออกจากกล่องเบรกฉุกเฉิน และแบตเตอรี่ในชุดจะสั่งเบรกหางลากเต็มแรง ไฟสถานะ ❸ บอกระดับแบตเตอรี่ แบตเตอรี่ต้องได้รับการดูแล ตรวจ และชาร์จให้พอก่อนเดินทางทุกครั้ง",
+          "If the trailer breaks away, the cable pulls pin ❶ out of the breakaway unit and its battery applies the trailer brakes fully. Lamps ❸ show the battery state. The battery must be maintained, checked and sufficiently charged before every trip.") +
+     fig(D.ba_unit(), "กล่องเบรกฉุกเฉิน: ❶ สลักดึง · ❷ ปุ่มทดสอบ · ❸ ไฟสถานะแบตเตอรี่", "s"))
+
+page("3. เบรกหางลาก (Trailer brakes)", band("3. เบรกหางลาก", "Trailer brakes") +
+     h4("ตรวจก่อนลากทุกครั้ง", "Check before every tow") +
+     steps(("กดปุ่ม TEST ❷ ค้างไว้ แล้วอ่านไฟสถานะ ❸", "Press and hold TEST ❷ and read lamps ❸."),
+           ("ตรวจว่าสลัก ❶ เสียบสุด และสายคล้องกับจุดยึดบนรถแล้ว (2.2)", "Check pin ❶ is fully home and the cable is attached to the car (2.2).")) +
+     table(["ไฟสถานะ (Lamp)", "ความหมาย (Meaning)", "สิ่งที่ต้องทำ (Action)"], [
+         ["Fully Charged", "แบตเตอรี่เต็ม" + en("Battery full"), "ลากได้" + en("Ready to tow")],
+         ["Recharge!", "แบตเตอรี่อ่อน" + en("Battery low"), "ห้ามลาก ชาร์จหรือแจ้ง RRS" + en("Do not tow; charge it or contact RRS")],
+         ["Charging", "กำลังชาร์จ" + en("Charging"), "รอจนขึ้น Fully Charged" + en("Wait for Fully Charged")]], [26, 34, 40], "care") +
+     warn(("ห้ามลากถ้าไฟแสดง Recharge! หรือไฟไม่ติดเมื่อกด TEST", "Do not tow if Recharge! shows or no lamp lights when TEST is pressed."),
+          ("ถ้าสลักหลุดโดยไม่ตั้งใจ ให้เสียบกลับทันที เบรกจะค้างและแบตเตอรี่จะหมด", "If the pin is pulled by accident, refit it at once: the brakes stay on and the battery drains.")) +
+     remark(("สีสายของกล่อง (สำหรับช่าง): ขาว = กราวด์ · น้ำเงิน = เบรก · ดำ = แบตเตอรี่", "Unit wire colours (for technicians): white = earth · blue = brakes · black = battery."),
+            ("ข้อมูลจากกล่องเบรกฉุกเฉินที่ RRS ติดตั้ง (วิดีโอ 1000008383) · รุ่นและวิธีชาร์จให้ RRS ระบุ", "From the breakaway unit fitted by RRS (video 1000008383) · model and charging method to be stated by RRS.")))
 
 # ---------------------------------------------------------------- 4 lamps and camera
 page("4. ไฟและกล้องมองหลัง (Lamps and rear camera)", band("4. ไฟและกล้องมองหลัง", "Lamps and rear camera") +
@@ -251,13 +263,24 @@ page("5. ประตูตู้ (Box doors)", band("5. ประตูตู�
           ("ประตูไม่ใช่ผนังรับแรงสินค้า รัดหรือกั้นสินค้าไม่ให้พิงประตู", "Doors are not load-bearing walls: tie or brace the load so it does not lean on them.")))
 
 page("5. ประตูตู้ (Box doors)", band("5. ประตูตู้", "Box doors") + h3("5.2 ประตูท้ายและประตูหน้า", "Rear and front doors") +
-     M.view("tz_rear", [("c", (-905, 2880, 1900), 70), ("c", (905, 2880, 1900), 70)], "ประตูท้าย: บานพับสองฝั่ง (วงประ) – บานประตูยังไม่อยู่ในแบบ 3D", "t") +
-     steps(("ปลดมือจับล็อกประตูท้าย เปิดบานขวาก่อน แล้วจึงเปิดบานซ้าย", "Release the rear-door lock handles; open the right leaf first, then the left."),
+     M.view("tz_rear", [("c", (-905, 2880, 1900), 70), ("c", (905, 2880, 1900), 70)], "ประตูท้าย: บานพับสองฝั่ง (วงประ) – บานประตูยังไม่อยู่ในแบบ 3D", "t2") +
+     steps(("ยกมือจับคานล็อกออกจากตัวล็อกมือจับ แล้วหมุนคานล็อกให้ลูกเบี้ยวบน–ล่างหลุดจากตัวรับ เริ่มจากบานที่ปิดทับ", "Lift each locking-bar handle out of its retainer and turn the bar until the top and bottom cams leave their keepers, starting with the overlapping leaf."),
            ("เปิดบานจนสุดและยึดไว้ ไม่ปล่อยให้บานแกว่งขณะขนของ", "Open each leaf fully and hold it; do not let it swing while loading."),
-           ("การปิด: ปิดบานซ้ายก่อน แล้วบานขวา กดมือจับจนล็อก และตรวจซีลยางว่าแนบสนิท", "To close: shut the left leaf, then the right, press the handles until they lock and check the seal sits tight.")) +
+           ("การปิด: ปิดบานแรก หมุนคานล็อกให้ลูกเบี้ยวเข้าตัวรับ กดมือจับลงในตัวล็อก แล้วปิดบานที่สองแบบเดียวกัน ตรวจซีลยางว่าแนบสนิท", "To close: shut the first leaf, turn its bars so the cams engage, press the handles into their retainers, then do the same with the second leaf and check the seal sits tight.")) +
      para("ประตูหน้า (ด้านหัวลาก) ใช้สำหรับเข้าถึงด้านหน้าตู้ เปิดได้เมื่อหางลากจอดและปลดล็อกแล้วเท่านั้น", "The front door (drawbar end) gives access to the front of the box; open it only when the trailer is parked.") +
-     remark(("ชนิดกลอนและมือจับประตูทุกบาน ให้ RRS ยืนยันตามชุดที่ติดตั้ง (ยังไม่อยู่ในแบบ 3D)", "Door bolt and handle type to be confirmed by RRS for the fitted hardware (not yet in the 3D model)."),
+     remark(("ประตูท้ายใช้คานล็อกแบบเดียวกับประตูข้าง (วิดีโอ 1000008381) · บานประตูท้ายยังไม่อยู่ในแบบ 3D", "The rear doors use the same locking bars as the side doors (video 1000008381) · rear door leaves are not yet in the 3D model."),
             ("หล่อลื่นบานพับและกลอนทุกเดือน และทำความสะอาดซีลยางเพื่อกันน้ำรั่ว (หัวข้อ 8)", "Lubricate hinges and bolts monthly and clean the seals to keep water out (section 8).")))
+
+page("5. ประตูตู้ (Box doors)", band("5. ประตูตู้และกล่องเครื่องมือ", "Box doors and tool box") + h3("5.3 กล่องเครื่องมือหน้า", "Front tool box") +
+     para("กล่องเครื่องมืออะลูมิเนียมลายกันลื่นบนคานลาก สำหรับเก็บโซ่ สายรัด ลิ่มหนุนล้อ และอุปกรณ์ลากจูง ฝาเปิดขึ้นด้านบน ล็อกด้วยกุญแจ ❶ และมือจับสลักล็อก ❷",
+          "Tread-plate aluminium tool box on the drawbar for chains, straps, wheel chocks and towing gear. The lid lifts up and is secured by key lock ❶ and draw latch ❷.") +
+     fig(D.toolbox(), "❶ กุญแจล็อก · ❷ มือจับสลักล็อก · ฝาเปิดขึ้น", "s") +
+     steps(("ไขกุญแจ ❶ เพื่อปลดล็อก", "Unlock key lock ❶."),
+           ("ดึงมือจับสลัก ❷ ออก แล้วยกฝาขึ้น", "Pull out draw-latch handle ❷ and lift the lid."),
+           ("การปิด: ปิดฝาให้สนิท เกี่ยวสลัก ❷ แล้วกดมือจับจนล็อก และไขกุญแจ ❶", "To close: shut the lid, hook latch ❷, press its handle home and lock ❶.")) +
+     warn(("ปิดและล็อกฝากล่องก่อนลากทุกครั้ง ของในกล่องที่หลุดออกมาอาจตกลงถนน", "Close and lock the lid before every tow; loose items could fall onto the road."),
+          ("ห้ามนั่งหรือยืนบนกล่องเครื่องมือ", "Do not sit or stand on the tool box.")) +
+     remark(("ข้อมูลจากกล่องเครื่องมือที่ RRS ติดตั้ง (วิดีโอ 1000008385)", "From the tool box fitted by RRS (video 1000008385).")))
 
 # ---------------------------------------------------------------- 6 loading
 page("6. การบรรทุก (Loading)", band("6. การบรรทุก", "Loading") +

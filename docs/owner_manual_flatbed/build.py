@@ -17,7 +17,7 @@ P = M.PT
 
 set_footer("คู่มือการใช้งาน · กระบะพื้นเรียบคาร์โก้ RRS · Ford Ranger Super Duty")
 B = "____"
-ALL = ("Single Cab", "Super Cab", "Double Cab")
+ALL = ("Single Cab",)
 
 
 def band(th, en):
@@ -70,7 +70,7 @@ raw('''<div class="cover"><div class="stripe"></div>
 <img class="biglogo" src="logo.png">
 <div class="ctitle"><small>OWNER MANUAL</small><h1>คู่มือการใช้งาน</h1>
 <p>กระบะพื้นเรียบคาร์โก้ RRS เปิด 3 ทาง<br><span style="color:#1257C8">RRS Cargo Flatbed · 3-way opening</span></p>
-<p class="cabs">Single Cab · Super Cab · Double Cab<br>สำหรับ Ford Ranger Super Duty</p></div>
+<p class="cabs">Single Cab<br>สำหรับ Ford Ranger Super Duty</p></div>
 <div class="coverfig">''' + M.view("iso") + '''</div>
 <div class="cfoot"><span>รหัสคู่มือ (P/N) ____________</span><span>Serial No. กระบะ ____________</span></div></div>''', "nocrop")
 
@@ -89,10 +89,10 @@ TOC = [
     ("4", "การปรับตั้งกลอนล็อก", "Adjusting the latch", 17),
     ("5", "การถอด / ประกอบชิ้นส่วนของกระบะ", "Removing / installing body parts", 18),
     ("5.1", "ตะแกรงกันหัว", "Headboard", 18), ("5.2", "ฝาท้าย", "Tailgate", 19), ("5.3", "ฝาข้างขวา / ซ้าย", "Side gate RH / LH", 20),
-    ("5.4", "บังโคลน", "Mudguard", 22), ("5.5", "คอกเสริม", "Add-on rack", 23),
-    ("6", "การบรรทุกและการผูกรัดสินค้า", "Loading and tying down", 26),
-    ("7", "การดูแลรักษาและค่าแรงขัน", "Care, maintenance and torque values", 27),
-    ("8", "ข้อมูลสำหรับศูนย์บริการ", "Service-centre data", 28),
+    ("5.4", "บังโคลน", "Mudguard", 21), ("5.5", "คอกเสริม", "Add-on rack", 22),
+    ("6", "การบรรทุกและการผูกรัดสินค้า", "Loading and tying down", 25),
+    ("7", "การดูแลรักษาและค่าแรงขัน", "Care, maintenance and torque values", 26),
+    ("8", "ข้อมูลสำหรับศูนย์บริการ", "Service-centre data", 27),
 ]
 rows = "".join(f'<tr class="{"grp" if "." not in n else ""}"><td class="n">{n}</td><td>{t} <span class="en">({e})</span></td><td class="pg">{p}</td></tr>' for n, t, e, p in TOC)
 page("สารบัญ (Index)", band("สารบัญ", "Index") + f'<table class="toc"><colgroup><col style="width:9%"><col style="width:81%"><col style="width:10%"></colgroup><tbody>{rows}</tbody></table>')
@@ -102,9 +102,7 @@ page("วิธีใช้คู่มือ (How to use this manual)", band("�
           "This manual explains how to use, look after and remove or install the parts of the RRS 3-way-opening cargo flatbed fitted to the Ford Ranger Super Duty. Read it before use and keep it in the vehicle with the warranty booklet.") +
      h3("รุ่นที่ใช้คู่มือเล่มนี้", "Models covered") +
      table(["รุ่นเก๋ง (Cab)", "ความยาวพื้นกระบะ (Floor length)", "การเปิด (Opening)"], [
-         ["Single Cab", "2,669 มม. (กระบะ 2.60 ม.)", "เปิด 3 ทาง (3-way)"], ["Super Cab", "ไม่เกิน 2,190 มม.", "เปิด 3 ทาง (3-way)"],
-         ["Double Cab", "ไม่เกิน 1,890 มม.", "เปิด 3 ทาง (3-way)"]], [30, 40, 30]) +
-     para("หัวข้อที่ใช้กับบางรุ่นเท่านั้น จะระบุ <b>สำหรับ (For)</b> ไว้ใต้หัวข้อ", "Where a topic applies to some models only, it is marked <b>For</b> under the heading.") +
+         ["Single Cab", "2,669 มม. (กระบะ 2.60 ม.)", "เปิด 3 ทาง (3-way)"]], [30, 40, 30]) +
      h3("สัญลักษณ์ในคู่มือ", "Symbols used") +
      table(["สัญลักษณ์", "ความหมาย (Meaning)"], [
          ['<span class="wt-in">⚠ ข้อควรระวัง (Warning)</span>', "ข้อปฏิบัติที่ถ้าไม่ทำตาม อาจทำให้บาดเจ็บสาหัสหรือเสียชีวิต หรือกระบะเสียหาย<span class=\"en-line\">Failure to follow it may cause serious injury, death or damage to the body.</span>"],
@@ -193,14 +191,12 @@ page("1. ขนาดและน้ำหนัก (Dimensions and weight)", ba
      table(["รายการ (Item)", "ค่า (Value)"], [["ความยาวพื้น × ความกว้างพื้น (Floor L × W)", "2,669 × 1,874 มม."], ["ความกว้างโครงหลัก (Main frame width)", "1,962 มม."],
                                              ["ความยาวรวม (Overall length)", "2,801 มม."], ["ความสูงฝาข้าง (Side gate height)", f"{B} มม."]], [60, 40]))
 
-page("1. ขนาดและน้ำหนัก (Dimensions and weight)", band("1. ขนาดและน้ำหนัก", "Dimensions and weight") + forcab("Super Cab", "Double Cab") +
-     '<div class="figrow">' + fig(D.top_view("≤ 2,190", note="Super Cab"), "Super Cab") + fig(D.top_view("≤ 1,890", note="Double Cab"), "Double Cab") + "</div>" +
+page("1. ขนาดและน้ำหนัก (Dimensions and weight)", band("1. ขนาดและน้ำหนัก", "Dimensions and weight") + forcab() +
+     M.view("side", [], "กระบะพื้นเรียบคาร์โก้ Single Cab – มองจากด้านข้าง (side view) จากแบบ 3D", "m") +
      h3("1.2 น้ำหนัก", "Weight") +
      table(["รุ่น (Model)", "น้ำหนักกระบะ (Body weight)", "น้ำหนักบรรทุกสูงสุด (Max. payload)"], [
-         ["กระบะพื้นเรียบคาร์โก้ Single Cab", f"{B} กก.", "2,000 กก."], ["กระบะพื้นเรียบคาร์โก้ Super Cab", f"{B} กก.", "2,000 กก."],
-         ["กระบะพื้นเรียบคาร์โก้ Double Cab", f"{B} กก.", "2,000 กก."]], [44, 28, 28]) +
-     remark(("น้ำหนักบรรทุกที่ใช้ได้จริงของรถแต่ละคันอาจต่ำกว่า 2,000 กก. ตามน้ำหนักรถที่ชั่งจริง ดูบัตรรับประกัน", "The actual payload of each vehicle may be below 2,000 kg depending on its weighed mass; see the warranty card."),
-            ("ความยาวพื้นของ Super Cab และ Double Cab กำหนดตามคู่มือ Ford BEMM", "Floor lengths for Super Cab and Double Cab follow the Ford BEMM.")))
+         ["กระบะพื้นเรียบคาร์โก้ Single Cab", f"{B} กก.", "2,000 กก."]], [44, 28, 28]) +
+     remark(("น้ำหนักบรรทุกที่ใช้ได้จริงของรถแต่ละคันอาจต่ำกว่า 2,000 กก. ตามน้ำหนักรถที่ชั่งจริง ดูบัตรรับประกัน", "The actual payload of each vehicle may be below 2,000 kg depending on its weighed mass; see the warranty card.")))
 
 # ---------------------------------------------------------------- 2 tailgate
 page("2. ฝาท้าย (Tailgate)", band("2. ฝาท้ายกระบะ สามารถล็อก / ปลดล็อก และเปิด / ปิดได้โดยปฏิบัติตามขั้นตอนต่อไปนี้", "The tailgate can be locked / unlocked and opened / closed by the following procedures") + forcab() +
@@ -289,13 +285,6 @@ page("5. การถอด / ประกอบชิ้นส่วน (Removi
            ("การประกอบ: วางฝาบนรางพับ ใส่สลักทุกตัวด้วยมือก่อน แล้วขันตามลำดับ ❶ → ❸", "To install: set the gate on the folding rail, start every bolt by hand, then tighten in the order ❶ → ❸."),
            ("ปิดฝา ตรวจว่ากลอนหน้าและกลอนหลังล็อกสนิท และฝาไม่ชนเสามุม", "Close the gate, check the front and rear latches lock fully and the gate clears the corner posts.")) +
      remark(("ทำแบบเดียวกันทั้งฝาข้างขวาและซ้าย · แรงขันดูหัวข้อ 7", "Same procedure for the right and left side gates · torque: see section 7.")))
-
-page("5. การถอด / ประกอบชิ้นส่วน (Removing / installing parts)", band("5. ขั้นตอนการถอด / ประกอบชิ้นส่วนของกระบะ", "Replacing body parts – procedures") + forcab("Super Cab", "Double Cab") +
-     h3("5.3 (ต่อ) ฝาข้างขวา / ซ้าย ของกระบะ Super Cab และ Double Cab", "(cont.) Side gate RH / LH, Super Cab and Double Cab") +
-     para(f"ฝาข้างของกระบะที่สั้นกว่า มีบานพับ {B} จุด ใช้ขั้นตอนเดียวกับหัวข้อ 5.3 โดยขันสลักไขว้จากบานพับหน้าไปบานพับหลังตามลำดับในรูป",
-          f"The side gate of the shorter bodies has {B} hinges; use the procedure of 5.3, tightening crosswise from the front hinge to the rear hinge in the order shown.") +
-     fig(D.hinge_bolts([(1, 3), (4, 2)], "ขอบล่างฝาข้าง · บานพับ 2 จุด (ตัวอย่าง)"), "ลำดับการขันสลัก ❶–❹") +
-     remark(("จำนวนบานพับของ Super Cab / Double Cab ให้ RRS ยืนยันตามแบบผลิต", "Number of hinges on Super Cab / Double Cab to be confirmed by RRS from the production drawing.")))
 
 page("5. การถอด / ประกอบชิ้นส่วน (Removing / installing parts)", band("5. ขั้นตอนการถอด / ประกอบชิ้นส่วนของกระบะ", "Replacing body parts – procedures") + forcab() +
      h3("5.4 การถอด / ประกอบบังโคลน ที่ขายึด", "Removing / installing the mudguard at its brackets") +

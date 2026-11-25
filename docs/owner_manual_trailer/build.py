@@ -225,14 +225,14 @@ page("3. เบรกหางลาก (Trailer brakes)", band("3. เบรก
            ("ขับช้า ๆ บนพื้นแห้ง ราว 30 กม./ชม. แล้วกดสั่งเบรกหางลากด้วยมือ หางลากควรหน่วงรถโดยล้อไม่ล็อก", "Drive slowly on a dry road at about 30 km/h and apply the trailer brakes by hand: the trailer should slow the car without locking its wheels."),
            ("ปรับค่าเพิ่มทีละขั้นจนได้ผลตามข้อ 2 และตั้งใหม่ทุกครั้งที่น้ำหนักบรรทุกเปลี่ยนมาก", "Raise the gain step by step until step 2 is met; reset it whenever the load changes a lot.")) +
      h3("3.2 ระบบเบรกฉุกเฉิน (Breakaway)", "Breakaway system") +
-     para("ถ้าหางลากหลุดจากรถ สายคล้องจะดึงสลัก ❶ ออกจากกล่องเบรกฉุกเฉิน และแบตเตอรี่ในชุดจะสั่งเบรกหางลากเต็มแรง ไฟสถานะ ❸ บอกระดับแบตเตอรี่ แบตเตอรี่ต้องได้รับการดูแล ตรวจ และชาร์จให้พอก่อนเดินทางทุกครั้ง",
-          "If the trailer breaks away, the cable pulls pin ❶ out of the breakaway unit and its battery applies the trailer brakes fully. Lamps ❸ show the battery state. The battery must be maintained, checked and sufficiently charged before every trip.") +
-     fig(D.ba_unit(), "กล่องเบรกฉุกเฉิน: ❶ สลักดึง · ❷ ปุ่มทดสอบ · ❸ ไฟสถานะแบตเตอรี่", "s"))
+     para("ถ้าหางลากหลุดจากรถ สายคล้องจะดึงสลักออกจากสวิตช์เบรกฉุกเฉิน (ภาพหัวข้อ 2.2) และแบตเตอรี่ในชุดจะสั่งเบรกหางลากเต็มแรง กล่องเบรกฉุกเฉินมีปุ่มทดสอบ ❷ และไฟสถานะ ❸ บอกระดับแบตเตอรี่ แบตเตอรี่ต้องได้รับการดูแล ตรวจ และชาร์จให้พอก่อนเดินทางทุกครั้ง",
+          "If the trailer breaks away, the cable pulls the pin out of the breakaway switch (drawing in 2.2) and the battery applies the trailer brakes fully. The breakaway unit has test button ❷ and lamps ❸ showing the battery state. The battery must be maintained, checked and sufficiently charged before every trip.") +
+     fig(D.ba_unit(), "กล่องเบรกฉุกเฉิน: ❶ สวิตช์ไฟในตู้ · ❷ ปุ่มทดสอบ · ❸ ไฟสถานะแบตเตอรี่", "s"))
 
 page("3. เบรกหางลาก (Trailer brakes)", band("3. เบรกหางลาก", "Trailer brakes") +
      h4("ตรวจก่อนลากทุกครั้ง", "Check before every tow") +
      steps(("กดปุ่ม TEST ❷ ค้างไว้ แล้วอ่านไฟสถานะ ❸", "Press and hold TEST ❷ and read lamps ❸."),
-           ("ตรวจว่าสลัก ❶ เสียบสุด และสายคล้องกับจุดยึดบนรถแล้ว (2.2)", "Check pin ❶ is fully home and the cable is attached to the car (2.2).")) +
+           ("ตรวจว่าสลักเบรกฉุกเฉินเสียบสุด และสายคล้องกับจุดยึดบนรถแล้ว (2.2)", "Check the breakaway pin is fully home and the cable is attached to the car (2.2).")) +
      table(["ไฟสถานะ (Lamp)", "ความหมาย (Meaning)", "สิ่งที่ต้องทำ (Action)"], [
          ["Fully Charged", "แบตเตอรี่เต็ม" + en("Battery full"), "ลากได้" + en("Ready to tow")],
          ["Recharge!", "แบตเตอรี่อ่อน" + en("Battery low"), "ห้ามลาก ชาร์จหรือแจ้ง RRS" + en("Do not tow; charge it or contact RRS")],
@@ -244,10 +244,14 @@ page("3. เบรกหางลาก (Trailer brakes)", band("3. เบรก
 
 # ---------------------------------------------------------------- 4 lamps and camera
 page("4. ไฟและกล้องมองหลัง (Lamps and rear camera)", band("4. ไฟและกล้องมองหลัง", "Lamps and rear camera") +
-     '<div class="side2">' + M.view("tz_rear", [("c", P["lamp"], 60), ("c", (720, 2880, 560), 60), ("c", P["plate"], 70)], "ด้านท้าย: ไฟท้าย ป้ายทะเบียน (วงประ) และไฟบนหลังคา – จากแบบ 3D", "") + '<div>' + steps(("เปิดไฟหรี่ ตรวจไฟหรี่ ไฟบนหลังคา และไฟส่องป้ายทะเบียน", "Switch on the parking lamps: check tail, roof marker and number-plate lamps."),
+     '<div class="side2 n">' + M.view("tz_rear", [("c", P["lamp"], 60), ("c", (720, 2880, 560), 60), ("c", P["plate"], 70)], "ด้านท้าย: ไฟท้าย ป้ายทะเบียน (วงประ) และไฟบนหลังคา – จากแบบ 3D", "") + '<div>' + steps(("เปิดไฟหรี่ ตรวจไฟหรี่ ไฟบนหลังคา และไฟส่องป้ายทะเบียน", "Switch on the parking lamps: check tail, roof marker and number-plate lamps."),
            ("เหยียบเบรก ตรวจไฟเบรกทั้งสองข้าง", "Press the brake pedal: check both stop lamps."),
            ("เปิดไฟเลี้ยวทีละข้าง ไฟต้องกะพริบตรงข้างและพร้อมกับรถ", "Signal each way: the trailer lamp must flash on the correct side, in time with the car."),
            ("เข้าเกียร์ถอย ไฟถอยหางลากติด และจอแสดงภาพจากกล้องหางลาก", "Select reverse: the trailer reversing lamps light and the screen shows the trailer camera.")) + '</div></div>' +
+     h4("ไฟในตู้", "Interior lamps") +
+     para("ไฟในตู้ 2 ดวง เปิด–ปิดด้วยปุ่มสีดำบนกล่องเบรกฉุกเฉิน (หมายเลข ❶ ในภาพหัวข้อ 3.2) ปิดไฟทุกครั้งหลังใช้งาน",
+          "The 2 interior lamps are switched on and off by the black knob on the breakaway unit (❶ in the drawing in 3.2). Switch them off after use.") +
+     h4("กล้องมองหลัง", "Rear camera") +
      fig(D.camera_switch(), "กล้อง ❶ บนรถลาก ใช้เมื่อไม่ได้พ่วง · กล้อง ❷ บนหางลาก แสดงเมื่อพ่วงและเข้าเกียร์ถอย", "xs") +
      remark(("ไฟ LED ที่กินกระแสต่ำกว่า 550 mA ต่อวงจร รถจะไม่ตรวจพบหางลาก ต้องใส่ชุดตัวต้านทานฝั่งหางลาก (Ford BEMM 4.6.12) – แจ้ง RRS", "LED lamps drawing under 550 mA per circuit are not detected by the car; a resistor kit is needed on the trailer (Ford BEMM 4.6.12) – contact RRS.")))
 

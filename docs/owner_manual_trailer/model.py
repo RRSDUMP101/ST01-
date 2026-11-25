@@ -68,6 +68,6 @@ CSS = '''
 .mv{margin:1mm 0 2mm;text-align:center}.mvin{position:relative;display:inline-block;width:100%}.mvin img{width:100%;display:block}
 .mvin svg.ov{position:absolute;left:0;top:0;width:100%;height:100%}
 .mv.s .mvin{width:72%}.mv.m .mvin{width:62%}.mv.xxs .mvin{width:38%}.mv.t .mvin{width:30%}.mv.t2 .mvin{width:26%}.mv.h .mvin{width:46%}.mv.h2 .mvin{width:40%}.side2{display:flex;gap:5mm;align-items:flex-start}.side2>.mv{flex:0 0 40%}.side2>div:last-child{flex:1}.mv.xs .mvin{width:55%}.mv.l .mvin{width:88%}
-.coverfig .mvin{width:auto}.coverfig .mvin img{max-height:56mm;width:auto;margin:0 auto}.side2.w>.mv{flex:0 0 46%}.mvrow{display:flex;gap:4mm;align-items:flex-end}.mvrow .mv{flex:1}
+.coverfig .mvin{width:auto}.coverfig .mvin img{max-height:56mm;width:auto;margin:0 auto}.side2.w>.mv{flex:0 0 46%}.side2.n>.mv{flex:0 0 25%}.mvrow{display:flex;gap:4mm;align-items:flex-end}.mvrow .mv{flex:1}
 .mv.box .mvin{border:1.2pt solid #111;border-radius:3mm;overflow:hidden}
 '''

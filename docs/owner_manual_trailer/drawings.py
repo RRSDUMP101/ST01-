@@ -171,7 +171,7 @@ def camera_switch():
 
 
 def ba_unit():
-    """Front of the breakaway unit (as fitted by RRS): pull pin ❶, TEST button ❷, battery lamps ❸."""
+    """Front of the breakaway unit (as fitted by RRS): interior-lamp switch ❶, TEST button ❷, battery lamps ❸."""
     g = [f'<rect x="20" y="20" width="300" height="230" rx="16" fill="{FILL}" stroke="{INK}" stroke-width="3"/>',
          f'<rect x="38" y="38" width="264" height="194" rx="8" fill="#fff" stroke="{INK}" stroke-width="1.6"/>',
          f'<circle cx="62" cy="62" r="17" fill="#3a3f47" stroke="{INK}" stroke-width="2"/>', _num(1, 62, 104 - 6),

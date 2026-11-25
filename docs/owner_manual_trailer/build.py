@@ -83,10 +83,10 @@ TOC = [
     ("2.4", "การปลดพ่วง", "Uncoupling", 13),
     ("3", "เบรกหางลาก", "Trailer brakes", 14), ("3.1", "ตัวควบคุมเบรก", "Brake controller", 14), ("3.2", "ระบบเบรกฉุกเฉิน (Breakaway)", "Breakaway system", 14),
     ("4", "ไฟและกล้องมองหลัง", "Lamps and rear camera", 16),
-    ("5", "ประตูตู้", "Box doors", 17), ("5.1", "ประตูข้าง", "Side doors", 17), ("5.2", "ประตูท้ายและประตูหน้า", "Rear and front doors", 18), ("5.3", "กล่องเครื่องมือหน้า", "Front tool box", 19),
-    ("6", "การบรรทุก", "Loading", 20), ("7", "การขับขี่ขณะลากจูง", "Driving with the trailer", 21),
-    ("8", "การดูแลรักษา", "Care and maintenance", 22), ("9", "แก้ปัญหาเบื้องต้น", "Troubleshooting", 23),
-    ("10", "ข้อมูลทางเทคนิค", "Technical data", 24),
+    ("5", "ประตูตู้", "Box doors", 17), ("5.1", "ประตูข้าง", "Side doors", 17), ("5.2", "ประตูท้ายและประตูหน้า", "Rear and front doors", 18), ("5.3", "กล่องเครื่องมือหน้า", "Front tool box", 19), ("5.4", "ระบบภายในกล่องเครื่องมือ", "Inside the tool box", 20),
+    ("6", "การบรรทุก", "Loading", 21), ("7", "การขับขี่ขณะลากจูง", "Driving with the trailer", 22),
+    ("8", "การดูแลรักษา", "Care and maintenance", 23), ("9", "แก้ปัญหาเบื้องต้น", "Troubleshooting", 24),
+    ("10", "ข้อมูลทางเทคนิค", "Technical data", 25),
 ]
 rows = "".join(f'<tr class="{"grp" if "." not in n else ""}"><td class="n">{n}</td><td>{t} <span class="en">({e})</span></td><td class="pg">{p}</td></tr>' for n, t, e, p in TOC)
 page("สารบัญ (Index)", band("สารบัญ", "Index") + f'<table class="toc"><colgroup><col style="width:9%"><col style="width:81%"><col style="width:10%"></colgroup><tbody>{rows}</tbody></table>')
@@ -180,39 +180,43 @@ page("1. ขนาดและน้ำหนัก (Dimensions and weight)", ba
 
 # ---------------------------------------------------------------- 2 coupling
 page("2. การพ่วงและปลดพ่วง (Coupling and uncoupling)", band("2. การพ่วงและปลดพ่วง", "Coupling and uncoupling") + h3("2.1 การพ่วง", "Coupling") +
-     figs((D.coupler("open"), "หัวต่อเปิด (Lever open)"), (D.coupler("locked"), "ล็อกบนลูกบอล + สลักนิรภัย (Locked, pin fitted)"), k="s") +
-     steps(("จอดหางลากบนพื้นเรียบ หนุนล้อ หมุนขาตั้งหน้าให้หัวต่อสูงกว่าลูกบอล และยกคันล็อกหัวต่อขึ้น", "Park the trailer on level ground, chock the wheels, wind the jockey wheel until the coupling is above the ball and lift the coupling lever."),
+     para("คานบอลเสียบในช่องรับของชุดลาก Ford และยึดด้วยสลักกับกิ๊บล็อก หัวต่อพ่วงเป็นแบบคันโยก (มือจับสีดำ) มีตัวบอกสถานะล็อก ขาตั้งหน้าเป็นแบบมือหมุน ยึดกับคานลากด้วยตัวรัดและลูกบิดสีแดง",
+          "The ball mount slides into the Ford towbar receiver and is held by a hitch pin and clip. The coupling has a hand lever (black handle) with a lock indicator. The jockey wheel is wound by a crank and clamped to the drawbar by a red hand knob.") +
+     figs((D.coupler("open"), "หัวต่อเปิด (Lever open)"), (D.coupler("locked"), "ล็อกบนลูกบอล · ตัวบอกสถานะสีเขียว · สลักคานบอล (Locked, indicator green)"), k="s") +
+     steps(("ตรวจคานบอล: เสียบสุดในช่องรับของชุดลาก ใส่สลักและกิ๊บล็อกแล้ว ลูกบอลขนาดตรงกับหัวต่อ ไม่สึก ไม่มีรอยร้าว", "Check the ball mount: fully in the receiver with pin and clip fitted; ball size matches the coupling, not worn or cracked."),
+           ("จอดหางลากบนพื้นเรียบ หนุนล้อ หมุนขาตั้งหน้าให้หัวต่อสูงกว่าลูกบอล และยกมือจับหัวต่อขึ้น", "Park the trailer on level ground, chock the wheels, wind the jockey wheel until the coupling is above the ball and lift the coupling handle."),
            ("ถอยรถให้ลูกบอลอยู่ใต้หัวต่อ โดยมีผู้ให้สัญญาณยืนด้านข้าง ห้ามยืนระหว่างรถ", "Reverse the car until the ball is under the coupling, with a helper signalling from the side – never between the vehicles."),
-           ("หมุนขาตั้งลดหัวต่อลงบนลูกบอลจนสุด กดคันล็อกลง และใส่สลักนิรภัย", "Wind the coupling down fully onto the ball, press the lever down and fit the safety pin."),
-           ("หมุนขาตั้งขึ้นเล็กน้อย ถ้าท้ายรถยกตาม แสดงว่าล็อกแล้ว จากนั้นยกขาตั้งขึ้นสุดและล็อก", "Wind the jockey up slightly: if the car's rear lifts, the coupling is locked. Then wind it fully up and lock it."),
-           ("ต่อโซ่นิรภัย สายเบรกฉุกเฉิน (2.2) และปลั๊ก 12 ขา (2.3) แล้วเก็บลิ่มหนุนล้อ", "Attach the safety chains and breakaway cable (2.2) and the 12-pin plug (2.3), then stow the chocks.")) +
-     figs((D.jockey(True), "ขาตั้งลง รับน้ำหนัก (Down)"), (D.jockey(False), "ขาตั้งขึ้นสุดก่อนลาก (Up before towing)"), k="s"))
+           ("หมุนขาตั้งลดหัวต่อลงบนลูกบอลจนสุด กดมือจับลงจนล็อก ตัวบอกสถานะต้องเป็นสีเขียว แล้วใส่สลักนิรภัย (ถ้ามี)", "Wind the coupling fully onto the ball and press the handle down until it locks: the indicator must show green. Fit the safety pin (if fitted)."),
+           ("หมุนขาตั้งขึ้นเล็กน้อย ถ้าท้ายรถยกตาม แสดงว่าล็อกแล้ว จากนั้นยกขาตั้งขึ้นสุด คลายลูกบิดแดง ดึงขาตั้งขึ้นให้พ้นพื้น หมุนล้อขาตั้งไปทางท้าย แล้วขันลูกบิดแดงให้แน่น", "Wind the jockey up slightly: if the car's rear lifts, the coupling is locked. Then wind it fully up, loosen the red knob, raise the jockey clear of the road, turn its wheel to the rear and tighten the knob."),
+           ("ต่อโซ่นิรภัย สายเบรกฉุกเฉิน (2.2) และปลั๊ก 12 ขา (2.3) แล้วเก็บลิ่มหนุนล้อ", "Attach the safety chains and breakaway cable (2.2) and the 12-pin plug (2.3), then stow the chocks.")))
 
 page("2. การพ่วงและปลดพ่วง (Coupling and uncoupling)", band("2. การพ่วงและปลดพ่วง", "Coupling and uncoupling") + h3("2.2 โซ่นิรภัยและสายเบรกฉุกเฉิน", "Safety chains and breakaway cable") +
      fig(D.chains(), "❶ โซ่นิรภัยคล้องไขว้ใต้หัวต่อ · ❷ สายเบรกฉุกเฉินคล้องจุดยึดบนชุดลากของรถ แยกจากโซ่") +
      steps(("คล้องโซ่นิรภัยทั้งสองเส้นกับจุดคล้องโซ่ของชุดลาก Ford แบบไขว้กันใต้หัวต่อ เพื่อรองรับหัวต่อถ้าหลุดจากลูกบอล", "Hook both safety chains to the Ford towbar chain points, crossed under the coupling so they catch it if it leaves the ball."),
            ("ปรับความยาวให้โซ่หย่อนพอเลี้ยวได้สุด แต่ไม่ลากพื้น", "Adjust so the chains allow full turns but do not drag on the road."),
-           ("คล้องสายเบรกฉุกเฉินกับจุดยึดบนรถที่แยกจากจุดคล้องโซ่ ห้ามคล้องกับโซ่หรือลูกบอล", "Attach the breakaway cable to a fixed point on the car separate from the chains – never to a chain or the ball.")) +
+           ("คล้องสายเบรกฉุกเฉิน (สายขดสีน้ำเงิน) กับจุดยึดบนรถที่แยกจากจุดคล้องโซ่ ห้ามคล้องกับโซ่หรือลูกบอล", "Attach the breakaway cable (blue coiled cable) to a fixed point on the car separate from the chains – never to a chain or the ball.")) +
      warn(("สายเบรกฉุกเฉินต้องหย่อนพอเลี้ยวได้ แต่สั้นกว่าโซ่ เพื่อให้ดึงสลักก่อนที่โซ่จะตึง", "The breakaway cable must be slack enough for turns but shorter than the chains, so it pulls the pin before the chains go tight.")))
 
 page("2. การพ่วงและปลดพ่วง (Coupling and uncoupling)", band("2. การพ่วงและปลดพ่วง", "Coupling and uncoupling") + h3("2.3 ปลั๊กไฟ 12 ขา", "12-pin plug") +
-     '<div class="two2">' + fig(D.plug12(), "ปลั๊ก 12 ขาแบน (มองหน้าปลั๊ก)", "s") +
+     '<div class="two2">' + fig(D.plug12(), "ปลั๊ก 12 ขาแบน (ภาพอธิบาย – ดูเลขบนปลั๊กจริง)", "s") +
      table(["ขา", "สาย", "หน้าที่ (Function)"], [
          ["1", "เหลือง", "ไฟเลี้ยวซ้าย (LH turn)"], ["2", "ดำ", "ไฟถอย (Reversing)"], ["3", "ขาว", "กราวด์ (Earth)"], ["4", "เขียว", "ไฟเลี้ยวขวา (RH turn)"],
-         ["5", "น้ำเงิน", "ไปวงจรรีเลย์เบรก – ยืนยันตามแบบ (Brake relay – confirm)"], ["6", "แดง", "ไฟเบรก (Stop)"], ["7", "น้ำตาล", "ไฟหรี่ (Tail)"], ["8–12", "ส้ม ชมพู ขาว เทา ม่วง", f"ตามแบบสายของรถคันนี้ {B}"]], [10, 28, 62], "plist") + '</div>' +
+         ["5", "น้ำเงิน", "ไปวงจรรีเลย์เบรก – ยืนยันตามแบบ (Brake relay – confirm)"], ["6", "แดง", "ไฟเบรก (Stop)"], ["7", "น้ำตาล", "ไฟหรี่ (Tail)"], ["8–12", "ส้ม ชมพู ขาว เทา ม่วง", f"ตามแบบสายของรถคันนี้ {B}"]], [10, 28, 62], "plist care") + '</div>' +
      steps(("ตรวจหน้าสัมผัสปลั๊กทั้งสองฝั่งให้สะอาดและแห้ง", "Check both plug faces are clean and dry."),
-           ("เสียบปลั๊กจนสุดและล็อกฝาปิด จัดสายให้หย่อนพอเลี้ยวได้ ไม่ลากพื้น", "Push the plug fully home and latch the cover; leave enough slack for turns without dragging."),
+           ("เสียบปลั๊กไฟ (สายขดสีดำ) จนสุดและล็อกฝาปิด จัดสายให้หย่อนพอเลี้ยวได้ ไม่ลากพื้น", "Push the lighting plug (black coiled cable) fully home and latch the cover; leave enough slack for turns without dragging."),
+           ("เสียบปลั๊ก Anderson สีเทา (สายชาร์จแบตเตอรี่หางลาก) จนล็อก", "Plug in the grey Anderson charging lead until it locks."),
            ("ให้ผู้ช่วยตรวจไฟหรี่ ไฟเบรก ไฟเลี้ยว และไฟถอยทุกดวง (หัวข้อ 4)", "Have a helper check the tail, stop, turn and reversing lamps (section 4).")) +
-     remark(("ตำแหน่งขาบนตัวปลั๊กจริงดูตามเลขที่พิมพ์บนปลั๊ก ภาพนี้แสดงเพื่ออธิบายเท่านั้น", "Use the numbers printed on the plug itself; the drawing is for explanation only."),
-            ("หน้าที่ขา 1–7 จาก WI-PD-63 · ขา 8–12 ให้ RRS ยืนยันตามแบบสาย", "Pins 1–7 from WI-PD-63 · pins 8–12 to be confirmed by RRS from the wiring drawing.")))
+     remark(("หน้าที่ขา 1–7 จาก WI-PD-63 · ขา 8–12 ให้ RRS ยืนยันตามแบบสาย", "Pins 1–7 from WI-PD-63 · pins 8–12 to be confirmed by RRS from the wiring drawing."),
+            ("ในวิดีโอหางลากของ RRS เต้ารับฝั่งรถเป็นแบบกลม ให้ RRS ยืนยันชนิดปลั๊ก (12 ขาแบน หรือ 7 ขากลม) และหน้าที่ปลั๊ก Anderson ของรุ่นนี้", "In the RRS trailer video the car socket is round: RRS to confirm the plug type (12-pin flat or 7-pin round) and the Anderson lead for this model.")))
 
 page("2. การพ่วงและปลดพ่วง (Coupling and uncoupling)", band("2. การพ่วงและปลดพ่วง", "Coupling and uncoupling") + h3("2.4 การปลดพ่วง", "Uncoupling") +
      steps(("จอดบนพื้นเรียบและแข็ง เข้าเกียร์ P และดึงเบรกมือรถลาก", "Park on firm, level ground, select P and apply the car's parking brake."),
            ("หนุนล้อหางลากทั้งสองข้าง หน้าและหลัง", "Chock the trailer wheels on both sides, front and rear."),
            ("ลดขาตั้งหน้าลงจนแตะพื้นและรับน้ำหนัก", "Lower the jockey wheel until it takes the weight."),
-           ("ถอดปลั๊ก 12 ขา เก็บใส่ที่เก็บ ปลดสายเบรกฉุกเฉินและโซ่นิรภัย", "Unplug and stow the 12-pin plug; unhook the breakaway cable and the chains."),
+           ("ถอดปลั๊กไฟและปลั๊ก Anderson เก็บใส่ที่เก็บ ปลดสายเบรกฉุกเฉินและโซ่นิรภัย", "Unplug and stow the lighting plug and the Anderson lead; unhook the breakaway cable and the chains."),
            ("ถอดสลักนิรภัย ยกคันล็อก แล้วหมุนขาตั้งยกหัวต่อพ้นลูกบอล", "Remove the safety pin, lift the lever and wind the coupling clear of the ball."),
            ("เคลื่อนรถออกช้า ๆ ตรวจว่าหางลากอยู่นิ่ง และใส่ฝาครอบลูกบอล", "Drive the car away slowly, check the trailer stays put and refit the ball cover.")) +
+     figs((D.jockey(True), "ขาตั้งลง รับน้ำหนัก (Down)"), (D.jockey(False), "ขาตั้งขึ้นสุดก่อนลาก (Up before towing)"), k="xs") +
      warn(("ห้ามดึงสลักสายเบรกฉุกเฉินออกขณะจอดเพื่อใช้เป็นเบรกมือ แบตเตอรี่เบรกฉุกเฉินจะหมด", "Do not pull the breakaway pin to hold a parked trailer: it drains the breakaway battery."),
           ("ห้ามปลดพ่วงบนทางลาด และห้ามทิ้งหางลากโดยไม่หนุนล้อ", "Never uncouple on a slope or leave the trailer without chocks.")))
 
@@ -285,6 +289,19 @@ page("5. ประตูตู้ (Box doors)", band("5. ประตูตู�
      warn(("ปิดและล็อกฝากล่องก่อนลากทุกครั้ง ของในกล่องที่หลุดออกมาอาจตกลงถนน", "Close and lock the lid before every tow; loose items could fall onto the road."),
           ("ห้ามนั่งหรือยืนบนกล่องเครื่องมือ", "Do not sit or stand on the tool box.")) +
      remark(("ข้อมูลจากกล่องเครื่องมือที่ RRS ติดตั้ง (วิดีโอ 1000008385)", "From the tool box fitted by RRS (video 1000008385).")))
+
+page("5. ประตูตู้ (Box doors)", band("5. ประตูตู้และกล่องเครื่องมือ", "Box doors and tool box") + h3("5.4 ระบบภายในกล่องเครื่องมือ", "Inside the tool box") +
+     table(["#", "อุปกรณ์ (Item)", "การใช้งาน (Use)"], [
+         ['<span class="numdot">1</span>', "แผงสวิตช์ 4 ช่อง พร้อมฟิวส์" + en("4-way switch panel with fuses"), f"เปิด–ปิดวงจรไฟฟ้าของหางลากตามป้ายที่สวิตช์ {B}" + en("Switches the trailer circuits as labelled")],
+         ['<span class="numdot">2</span>', "สวิตช์ตัดไฟหลัก (กุญแจแดง)" + en("Main isolator (red key)"), "ตัดไฟจากแบตเตอรี่ทั้งหมด" + en("Disconnects the battery")],
+         ['<span class="numdot">3</span>', "แบตเตอรี่หางลาก ยึดด้วยตัวรัด" + en("Trailer battery with hold-down"), "จ่ายไฟให้ระบบในกล่อง ชาร์จจากรถผ่านปลั๊ก Anderson (2.3)" + en("Powers the box circuits; charged from the car via the Anderson lead (2.3)")],
+         ['<span class="numdot">4</span>', "ลิ่มหนุนล้อ 2 ตัว (แถบสะท้อนแสง)" + en("2 wheel chocks with reflectors"), "หนุนล้อทุกครั้งที่จอดหรือพ่วง / ปลดพ่วง (2.1 · 2.4)" + en("Chock the wheels when parked, coupling or uncoupling")],
+         ['<span class="numdot">5</span>', "สายรัดก๊อกแก๊ก" + en("Ratchet straps"), "รัดสินค้า (หัวข้อ 6)" + en("Securing the load (section 6)")],
+         ['<span class="numdot">6</span>', "ไฟส่องสว่าง LED ข้างกล่อง" + en("LED work lamp on the box"), "ส่องสว่างตอนพ่วงหรือขนของตอนกลางคืน" + en("Light for coupling or loading at night")]], [7, 40, 53], "plist care") +
+     '<div class="two2">' + fig(D.toolbox_inside(), "มองจากด้านบนเมื่อเปิดฝา – จากวิดีโอหางลากของ RRS · หน้าที่สวิตช์และขนาดแบตเตอรี่ให้ RRS ระบุ", "") + '<div>' + steps(("ก่อนใช้ระบบไฟในกล่อง ให้เปิดสวิตช์ตัดไฟหลัก ❷", "Before using the box circuits, switch on main isolator ❷."),
+           ("เปิดเฉพาะสวิตช์ ❶ ที่ต้องใช้ และปิดทุกตัวหลังใช้งาน", "Switch on only the switches ❶ you need and switch them all off after use."),
+           ("เมื่อจอดหางลากไว้นาน ให้ปิดสวิตช์ตัดไฟหลัก ❷ เพื่อไม่ให้แบตเตอรี่หมด", "When the trailer is parked for a long time, switch off isolator ❷ so the battery does not run flat.")) + '</div></div>' +
+     warn(("ปิดสวิตช์ตัดไฟหลัก ❷ ก่อนเปลี่ยนฟิวส์ (ใช้ขนาดเดิม) และห้ามวางของทับแผงสวิตช์และขั้วแบตเตอรี่", "Switch off isolator ❷ before changing a fuse (same rating only); keep items off the switch panel and battery terminals.")))
 
 # ---------------------------------------------------------------- 6 loading
 page("6. การบรรทุก (Loading)", band("6. การบรรทุก", "Loading") +

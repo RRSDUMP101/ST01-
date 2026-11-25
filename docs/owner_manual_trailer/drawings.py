@@ -42,6 +42,7 @@ def coupler(state="locked"):
     """Side view of the coupling head on the tow ball; locked / open lever."""
     g = []
     g.append(f'<rect x="20" y="170" width="140" height="26" fill="{LIGHT}" stroke="{INK}" stroke-width="2.4"/>')  # tow bar tongue
+    g.append(f'<circle cx="44" cy="183" r="6" fill="#fff" stroke="{INK}" stroke-width="2"/><path d="M44 177 Q30 160 44 150" fill="none" stroke="{INK}" stroke-width="1.6"/>')  # hitch pin + clip
     g.append(f'<rect x="96" y="140" width="16" height="32" fill="#fff" stroke="{INK}" stroke-width="2.2"/>')  # ball neck
     g.append(f'<circle cx="104" cy="128" r="22" fill="#fff" stroke="{INK}" stroke-width="2.4"/>')  # ball
     # coupling head
@@ -51,6 +52,7 @@ def coupler(state="locked"):
         g.append(f'<path d="M120 92 L230 70 L236 80 L128 100 Z" fill="#fff" stroke="{INK}" stroke-width="2.2"/>')
         g.append(f'<circle cx="250" cy="98" r="6" fill="#fff" stroke="{INK}" stroke-width="2"/><path d="M250 92 L250 70" stroke="{INK}" stroke-width="2"/>')  # safety pin
         g.append(_dash(104, 120, 40))
+        g.append(f'<circle cx="170" cy="100" r="6" fill="{GREEN}" stroke="{INK}" stroke-width="1.4"/>')  # lock indicator
     else:
         g.append(f'<path d="M120 92 L190 30 L198 38 L130 100 Z" fill="#fff" stroke="{INK}" stroke-width="2.2"/>')
         g.append(_arrow("M215 70 Q215 34 186 22"))
@@ -198,3 +200,31 @@ def toolbox():
           f'<path d="M392 144 L410 144 L401 160 Z" fill="#fff" stroke="{RED}" stroke-width="3"/>',
           _num(1, 80, 170), _num(2, 401, 182), _arrow("M250 52 L250 18")]
     return _svg("".join(g), "20 5 460 205")
+
+
+def toolbox_inside():
+    """Inside the front tool box (lid open, seen from above): switch panel ❶, main isolator ❷, battery ❸,
+    wheel chocks ❹, ratchet straps ❺; LED work lamp ❻ on the outside of the box."""
+    g = [f'<rect x="20" y="30" width="520" height="190" rx="6" fill="{FILL}" stroke="{INK}" stroke-width="3"/>',
+         f'<rect x="34" y="44" width="492" height="162" fill="#fff" stroke="{INK}" stroke-width="1.6"/>']
+    # battery with hold-down
+    g += [f'<rect x="46" y="60" width="96" height="70" rx="4" fill="{LIGHT}" stroke="{INK}" stroke-width="2.2"/>',
+          f'<rect x="54" y="66" width="22" height="12" fill="{RED}" stroke="{INK}" stroke-width="1.4"/><rect x="112" y="66" width="22" height="12" fill="#fff" stroke="{INK}" stroke-width="1.4"/>',
+          f'<line x1="46" y1="96" x2="142" y2="96" stroke="{INK}" stroke-width="3"/>', _num(3, 94, 150)]
+    # switch panel + isolator
+    g += [f'<rect x="160" y="52" width="110" height="80" rx="4" fill="#fff" stroke="{INK}" stroke-width="2.2"/>']
+    for i in range(4):
+        x = 172 + i * 22
+        g.append(f'<circle cx="{x + 6}" cy="66" r="4" fill="#fff" stroke="{INK}" stroke-width="1.4"/>')
+        g.append(f'<rect x="{x}" y="78" width="13" height="24" rx="2" fill="{LIGHT}" stroke="{INK}" stroke-width="1.6"/>')
+    g += [f'<rect x="248" y="108" width="16" height="16" rx="2" fill="#fff" stroke="{RED}" stroke-width="3"/>', _num(1, 200, 150), _num(2, 256, 150)]
+    # wheel chocks
+    for x in (300, 360):
+        g += [f'<path d="M{x} 190 L{x} 120 L{x + 50} 190 Z" fill="{LIGHT}" stroke="{INK}" stroke-width="2.2"/>',
+              f'<line x1="{x + 8}" y1="150" x2="{x + 28}" y2="178" stroke="#F2C94C" stroke-width="5"/>']
+    g.append(_num(4, 356, 104))
+    # straps
+    g += [f'<ellipse cx="470" cy="150" rx="40" ry="28" fill="#fff" stroke="{INK}" stroke-width="2.2"/>', f'<ellipse cx="470" cy="150" rx="22" ry="14" fill="#fff" stroke="{INK}" stroke-width="1.6"/>', _num(5, 470, 104)]
+    # LED work lamp outside
+    g += [f'<rect x="545" y="90" width="26" height="30" rx="3" fill="#fff" stroke="{INK}" stroke-width="2.2"/>', _num(6, 558, 140)]
+    return _svg("".join(g), "10 20 575 210")

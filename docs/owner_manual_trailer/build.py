@@ -12,7 +12,6 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent / "warranty_booklet"))
 from common import *  # noqa: E402,F403
-import drawings as D  # noqa: E402
 import model as M  # noqa: E402
 P = M.PT
 
@@ -153,7 +152,7 @@ page("เพื่อการลากจูงอย่างปลอดภ�
            "If the trailer sways, ease off the accelerator, hold the wheel straight, do not brake hard or accelerate; if fitted, apply the trailer brakes gently with the controller's manual lever."),
           ("ห้ามขับขณะประตูตู้เปิดหรือไม่ได้ล็อก", "Never drive with a box door open or unlocked."),
           title="ข้อควรระวัง – ขณะขับขี่ (Warning – while driving)") +
-     fig(D.load_split(), "ของหนักไว้หน้าแนวเพลา ให้น้ำหนักกดลูกบอลประมาณ 10% ของน้ำหนักรวมหางลาก (Heavy items ahead of the axles, ball download ≈ 10%)"))
+     M.view("t_load", [("t", (0, -1100, 1250), "หนัก (Heavy)", 0, 0), ("t", (0, 100, 1000), "กลาง", 0, 0), ("t", (0, 1600, 1100), "เบา (Light)", 0, 0), ("a", (0, -4330, 900), (0, -4330, 520))], "ของหนักไว้หน้าแนวเพลา ให้น้ำหนักกดลูกบอลประมาณ 10% ของน้ำหนักรวมหางลาก (Heavy items ahead of the axles, ball download ≈ 10%)", "m"))
 
 # ---------------------------------------------------------------- 1 dimensions
 page("1. ขนาดและน้ำหนัก (Dimensions and weight)", band("1. ขนาดและน้ำหนัก", "Dimensions and weight") + h3("1.1 ขนาด", "Dimensions") +
@@ -182,7 +181,9 @@ page("1. ขนาดและน้ำหนัก (Dimensions and weight)", ba
 page("2. การพ่วงและปลดพ่วง (Coupling and uncoupling)", band("2. การพ่วงและปลดพ่วง", "Coupling and uncoupling") + h3("2.1 การพ่วง", "Coupling") +
      para("คานบอลเสียบในช่องรับของชุดลาก Ford และยึดด้วยสลักกับกิ๊บล็อก หัวต่อพ่วงเป็นแบบคันโยก (มือจับสีดำ) มีตัวบอกสถานะล็อก ขาตั้งหน้าเป็นแบบมือหมุน ยึดกับคานลากด้วยตัวรัดและลูกบิดสีแดง",
           "The ball mount slides into the Ford towbar receiver and is held by a hitch pin and clip. The coupling has a hand lever (black handle) with a lock indicator. The jockey wheel is wound by a crank and clamped to the drawbar by a red hand knob.") +
-     figs((D.coupler("open"), "หัวต่อเปิด (Lever open)"), (D.coupler("locked"), "ล็อกบนลูกบอล · ตัวบอกสถานะสีเขียว · สลักคานบอล (Locked, indicator green)"), k="s") +
+     M.row(M.view("p_ballmount", [("n", (-300, -58, -88), 1, -40, 60), ("n", (-300, 56, -88), 2, 30, -60), ("n", (0, 0, 25), 3, 50, -40)], "คานบอล: ❶ สลัก · ❷ กิ๊บล็อก · ❸ ลูกบอล"),
+           M.view("p_cpl_open", [("a", (265, 0, 80), (214, 0, 205))], "ยกมือจับ – หัวต่อเปิด (Open)"),
+           M.view("p_cpl_locked", [("c", (150, 0, 70), 30), ("n", (150, 0, 70), 4, 0, -70)], "กดลงจนล็อก ❹ ตัวบอกสถานะเขียว (Locked)")) +
      steps(("ตรวจคานบอล: เสียบสุดในช่องรับของชุดลาก ใส่สลักและกิ๊บล็อกแล้ว ลูกบอลขนาดตรงกับหัวต่อ ไม่สึก ไม่มีรอยร้าว", "Check the ball mount: fully in the receiver with pin and clip fitted; ball size matches the coupling, not worn or cracked."),
            ("จอดหางลากบนพื้นเรียบ หนุนล้อ หมุนขาตั้งหน้าให้หัวต่อสูงกว่าลูกบอล และยกมือจับหัวต่อขึ้น", "Park the trailer on level ground, chock the wheels, wind the jockey wheel until the coupling is above the ball and lift the coupling handle."),
            ("ถอยรถให้ลูกบอลอยู่ใต้หัวต่อ โดยมีผู้ให้สัญญาณยืนด้านข้าง ห้ามยืนระหว่างรถ", "Reverse the car until the ball is under the coupling, with a helper signalling from the side – never between the vehicles."),
@@ -191,14 +192,14 @@ page("2. การพ่วงและปลดพ่วง (Coupling and uncou
            ("ต่อโซ่นิรภัย สายเบรกฉุกเฉิน (2.2) และปลั๊ก 12 ขา (2.3) แล้วเก็บลิ่มหนุนล้อ", "Attach the safety chains and breakaway cable (2.2) and the 12-pin plug (2.3), then stow the chocks.")))
 
 page("2. การพ่วงและปลดพ่วง (Coupling and uncoupling)", band("2. การพ่วงและปลดพ่วง", "Coupling and uncoupling") + h3("2.2 โซ่นิรภัยและสายเบรกฉุกเฉิน", "Safety chains and breakaway cable") +
-     fig(D.chains(), "❶ โซ่นิรภัยคล้องไขว้ใต้หัวต่อ · ❷ สายเบรกฉุกเฉินคล้องจุดยึดบนชุดลากของรถ แยกจากโซ่") +
+     M.view("p_chains", [("n", (180, 0, -60), 1, 0, 70), ("n", (300, 40, 30), 2, 60, -60)], "❶ โซ่นิรภัยคล้องไขว้ใต้หัวต่อ · ❷ สายเบรกฉุกเฉินคล้องจุดยึดบนชุดลากของรถ แยกจากโซ่") +
      steps(("คล้องโซ่นิรภัยทั้งสองเส้นกับจุดคล้องโซ่ของชุดลาก Ford แบบไขว้กันใต้หัวต่อ เพื่อรองรับหัวต่อถ้าหลุดจากลูกบอล", "Hook both safety chains to the Ford towbar chain points, crossed under the coupling so they catch it if it leaves the ball."),
            ("ปรับความยาวให้โซ่หย่อนพอเลี้ยวได้สุด แต่ไม่ลากพื้น", "Adjust so the chains allow full turns but do not drag on the road."),
            ("คล้องสายเบรกฉุกเฉิน (สายขดสีน้ำเงิน) กับจุดยึดบนรถที่แยกจากจุดคล้องโซ่ ห้ามคล้องกับโซ่หรือลูกบอล", "Attach the breakaway cable (blue coiled cable) to a fixed point on the car separate from the chains – never to a chain or the ball.")) +
      warn(("สายเบรกฉุกเฉินต้องหย่อนพอเลี้ยวได้ แต่สั้นกว่าโซ่ เพื่อให้ดึงสลักก่อนที่โซ่จะตึง", "The breakaway cable must be slack enough for turns but shorter than the chains, so it pulls the pin before the chains go tight.")))
 
 page("2. การพ่วงและปลดพ่วง (Coupling and uncoupling)", band("2. การพ่วงและปลดพ่วง", "Coupling and uncoupling") + h3("2.3 ปลั๊กไฟ 12 ขา", "12-pin plug") +
-     '<div class="two2">' + fig(D.plug12(), "ปลั๊ก 12 ขาแบน (ภาพอธิบาย – ดูเลขบนปลั๊กจริง)", "s") +
+     '<div class="two2">' + M.view("p_plug12", [("t", (-17.0, -22.5, 2), "1", 0, 0), ("t", (0.0, -26.8, 2), "2", 0, 0), ("t", (17.0, -22.5, 2), "3", 0, 0), ("t", (21.2, -5.5, 2), "4", 0, 0), ("t", (17.0, 11.5, 2), "5", 0, 0), ("t", (0.0, 15.8, 2), "6", 0, 0), ("t", (-17.0, 11.5, 2), "7", 0, 0), ("t", (-21.2, -5.5, 2), "8", 0, 0), ("t", (-9.4, -13.2, 2), "9", 0, 0), ("t", (9.4, -13.2, 2), "10", 0, 0), ("t", (9.4, 2.2, 2), "11", 0, 0), ("t", (-9.4, 2.2, 2), "12", 0, 0)], "ปลั๊ก 12 ขาแบน (ภาพอธิบาย – ดูเลขบนปลั๊กจริง)") +
      table(["ขา", "สาย", "หน้าที่ (Function)"], [
          ["1", "เหลือง", "ไฟเลี้ยวซ้าย (LH turn)"], ["2", "ดำ", "ไฟถอย (Reversing)"], ["3", "ขาว", "กราวด์ (Earth)"], ["4", "เขียว", "ไฟเลี้ยวขวา (RH turn)"],
          ["5", "น้ำเงิน", "ไปวงจรรีเลย์เบรก – ยืนยันตามแบบ (Brake relay – confirm)"], ["6", "แดง", "ไฟเบรก (Stop)"], ["7", "น้ำตาล", "ไฟหรี่ (Tail)"], ["8–12", "ส้ม ชมพู ขาว เทา ม่วง", f"ตามแบบสายของรถคันนี้ {B}"]], [10, 28, 62], "plist care") + '</div>' +
@@ -216,7 +217,8 @@ page("2. การพ่วงและปลดพ่วง (Coupling and uncou
            ("ถอดปลั๊กไฟและปลั๊ก Anderson เก็บใส่ที่เก็บ ปลดสายเบรกฉุกเฉินและโซ่นิรภัย", "Unplug and stow the lighting plug and the Anderson lead; unhook the breakaway cable and the chains."),
            ("ถอดสลักนิรภัย ยกคันล็อก แล้วหมุนขาตั้งยกหัวต่อพ้นลูกบอล", "Remove the safety pin, lift the lever and wind the coupling clear of the ball."),
            ("เคลื่อนรถออกช้า ๆ ตรวจว่าหางลากอยู่นิ่ง และใส่ฝาครอบลูกบอล", "Drive the car away slowly, check the trailer stays put and refit the ball cover.")) +
-     figs((D.jockey(True), "ขาตั้งลง รับน้ำหนัก (Down)"), (D.jockey(False), "ขาตั้งขึ้นสุดก่อนลาก (Up before towing)"), k="xs") +
+     M.row(M.view("p_jockey_down", [("n", (0, 102, 360), 1, 70, 0), ("n", (110, 0, 620), 2, 70, -20)], "ขาตั้งลง: ❶ ลูกบิดแดง · ❷ มือหมุน (Down)", "t"),
+           M.view("p_jockey_up", [("a", (150, 0, 300), (150, 0, 560))], "ยกขึ้นสุดก่อนลาก (Up before towing)", "t")) +
      warn(("ห้ามดึงสลักสายเบรกฉุกเฉินออกขณะจอดเพื่อใช้เป็นเบรกมือ แบตเตอรี่เบรกฉุกเฉินจะหมด", "Do not pull the breakaway pin to hold a parked trailer: it drains the breakaway battery."),
           ("ห้ามปลดพ่วงบนทางลาด และห้ามทิ้งหางลากโดยไม่หนุนล้อ", "Never uncouple on a slope or leave the trailer without chocks.")))
 
@@ -231,7 +233,7 @@ page("3. เบรกหางลาก (Trailer brakes)", band("3. เบรก
      h3("3.2 ระบบเบรกฉุกเฉิน (Breakaway)", "Breakaway system") +
      para("ถ้าหางลากหลุดจากรถ สายคล้องจะดึงสลักออกจากสวิตช์เบรกฉุกเฉิน (ภาพหัวข้อ 2.2) และแบตเตอรี่ในชุดจะสั่งเบรกหางลากเต็มแรง กล่องเบรกฉุกเฉินมีปุ่มทดสอบ ❷ และไฟสถานะ ❸ บอกระดับแบตเตอรี่ แบตเตอรี่ต้องได้รับการดูแล ตรวจ และชาร์จให้พอก่อนเดินทางทุกครั้ง",
           "If the trailer breaks away, the cable pulls the pin out of the breakaway switch (drawing in 2.2) and the battery applies the trailer brakes fully. The breakaway unit has test button ❷ and lamps ❸ showing the battery state. The battery must be maintained, checked and sufficiently charged before every trip.") +
-     fig(D.ba_unit(), "กล่องเบรกฉุกเฉิน: ❶ สวิตช์ไฟในตู้ · ❷ ปุ่มทดสอบ · ❸ ไฟสถานะแบตเตอรี่", "s"))
+     M.view("p_ba_unit", [("n", (44, -26, 200), 1, -60, -40), ("n", (250, -10, 150), 2, 70, -30), ("n", (247, -12, 62), 3, 70, 0), ("t", (130, -2, 120), "Fully Charged · Recharge! · Charging", 0, 60)], "กล่องเบรกฉุกเฉิน: ❶ สวิตช์ไฟในตู้ · ❷ ปุ่มทดสอบ · ❸ ไฟสถานะแบตเตอรี่", "h"))
 
 page("3. เบรกหางลาก (Trailer brakes)", band("3. เบรกหางลาก", "Trailer brakes") +
      h4("ตรวจก่อนลากทุกครั้ง", "Check before every tow") +
@@ -248,7 +250,7 @@ page("3. เบรกหางลาก (Trailer brakes)", band("3. เบรก
 
 # ---------------------------------------------------------------- 4 lamps and camera
 page("4. ไฟและกล้องมองหลัง (Lamps and rear camera)", band("4. ไฟและกล้องมองหลัง", "Lamps and rear camera") +
-     '<div class="side2 n">' + M.view("tz_rear", [("c", P["lamp"], 60), ("c", (720, 2880, 560), 60), ("c", P["plate"], 70)], "ด้านท้าย: ไฟท้าย ป้ายทะเบียน (วงประ) และไฟบนหลังคา – จากแบบ 3D", "") + '<div>' + steps(("เปิดไฟหรี่ ตรวจไฟหรี่ ไฟบนหลังคา และไฟส่องป้ายทะเบียน", "Switch on the parking lamps: check tail, roof marker and number-plate lamps."),
+     '<div class="side2 n">' + M.view("tz_rear", [("c", P["lamp"], 60), ("c", (720, 2880, 560), 60), ("c", P["plate"], 70), ("c", (0, 2886, 2940), 70), ("n", (0, 2886, 2940), 2, 110, 40)], "ด้านท้าย: ไฟท้าย ป้ายทะเบียน (วงประ) และไฟบนหลังคา – จากแบบ 3D", "") + '<div>' + steps(("เปิดไฟหรี่ ตรวจไฟหรี่ ไฟบนหลังคา และไฟส่องป้ายทะเบียน", "Switch on the parking lamps: check tail, roof marker and number-plate lamps."),
            ("เหยียบเบรก ตรวจไฟเบรกทั้งสองข้าง", "Press the brake pedal: check both stop lamps."),
            ("เปิดไฟเลี้ยวทีละข้าง ไฟต้องกะพริบตรงข้างและพร้อมกับรถ", "Signal each way: the trailer lamp must flash on the correct side, in time with the car."),
            ("เข้าเกียร์ถอย ไฟถอยหางลากติด และจอแสดงภาพจากกล้องหางลาก", "Select reverse: the trailer reversing lamps light and the screen shows the trailer camera.")) + '</div></div>' +
@@ -256,7 +258,7 @@ page("4. ไฟและกล้องมองหลัง (Lamps and rear cam
      para("ไฟในตู้ 2 ดวง เปิด–ปิดด้วยปุ่มสีดำบนกล่องเบรกฉุกเฉิน (หมายเลข ❶ ในภาพหัวข้อ 3.2) ปิดไฟทุกครั้งหลังใช้งาน",
           "The 2 interior lamps are switched on and off by the black knob on the breakaway unit (❶ in the drawing in 3.2). Switch them off after use.") +
      h4("กล้องมองหลัง", "Rear camera") +
-     fig(D.camera_switch(), "กล้อง ❶ บนรถลาก ใช้เมื่อไม่ได้พ่วง · กล้อง ❷ บนหางลาก แสดงเมื่อพ่วงและเข้าเกียร์ถอย", "xs") +
+     para("กล้อง ❷ บนหางลาก (กลางท้ายตู้ ดูวงประในภาพบน) แสดงบนจอเมื่อพ่วงและเข้าเกียร์ถอย · กล้อง ❶ บนรถลากใช้เมื่อไม่ได้พ่วง", "Trailer camera ❷ (top centre of the rear, circled above) shows on the screen when coupled and in reverse · car camera ❶ is used when not towing.") +
      remark(("ไฟ LED ที่กินกระแสต่ำกว่า 550 mA ต่อวงจร รถจะไม่ตรวจพบหางลาก ต้องใส่ชุดตัวต้านทานฝั่งหางลาก (Ford BEMM 4.6.12) – แจ้ง RRS", "LED lamps drawing under 550 mA per circuit are not detected by the car; a resistor kit is needed on the trailer (Ford BEMM 4.6.12) – contact RRS.")))
 
 # ---------------------------------------------------------------- 5 doors
@@ -282,7 +284,7 @@ page("5. ประตูตู้ (Box doors)", band("5. ประตูตู�
 page("5. ประตูตู้ (Box doors)", band("5. ประตูตู้และกล่องเครื่องมือ", "Box doors and tool box") + h3("5.3 กล่องเครื่องมือหน้า", "Front tool box") +
      para("กล่องเครื่องมืออะลูมิเนียมลายกันลื่นบนคานลาก สำหรับเก็บโซ่ สายรัด ลิ่มหนุนล้อ และอุปกรณ์ลากจูง ฝาเปิดขึ้นด้านบน ล็อกด้วยกุญแจ ❶ และมือจับสลักล็อก ❷",
           "Tread-plate aluminium tool box on the drawbar for chains, straps, wheel chocks and towing gear. The lid lifts up and is secured by key lock ❶ and draw latch ❷.") +
-     fig(D.toolbox(), "❶ กุญแจล็อก · ❷ มือจับสลักล็อก · ฝาเปิดขึ้น", "s") +
+     M.view("p_toolbox", [("c", (110, -9, 280), 40), ("n", (110, -9, 280), 1, -60, 50), ("c", (970, -12, 230), 50), ("n", (970, -12, 230), 2, 60, 50)], "❶ กุญแจล็อก · ❷ มือจับสลักล็อก · ฝาเปิดขึ้น", "h2") +
      steps(("ไขกุญแจ ❶ เพื่อปลดล็อก", "Unlock key lock ❶."),
            ("ดึงมือจับสลัก ❷ ออก แล้วยกฝาขึ้น", "Pull out draw-latch handle ❷ and lift the lid."),
            ("การปิด: ปิดฝาให้สนิท เกี่ยวสลัก ❷ แล้วกดมือจับจนล็อก และไขกุญแจ ❶", "To close: shut the lid, hook latch ❷, press its handle home and lock ❶.")) +
@@ -292,20 +294,20 @@ page("5. ประตูตู้ (Box doors)", band("5. ประตูตู�
 
 page("5. ประตูตู้ (Box doors)", band("5. ประตูตู้และกล่องเครื่องมือ", "Box doors and tool box") + h3("5.4 ระบบภายในกล่องเครื่องมือ", "Inside the tool box") +
      table(["#", "อุปกรณ์ (Item)", "การใช้งาน (Use)"], [
-         ['<span class="numdot">1</span>', "แผงสวิตช์ 4 ช่อง พร้อมฟิวส์" + en("4-way switch panel with fuses"), f"เปิด–ปิดวงจรไฟฟ้าของหางลากตามป้ายที่สวิตช์ {B}" + en("Switches the trailer circuits as labelled")],
+         ['<span class="numdot">1</span>', "แผงสวิตช์ 4 ช่อง พร้อมฟิวส์" + en("4-way switch panel with fuses"), f"เปิด–ปิดวงจรไฟฟ้าตามป้ายที่สวิตช์ (RRS ระบุ) {B}" + en("Switches the trailer circuits as labelled")],
          ['<span class="numdot">2</span>', "สวิตช์ตัดไฟหลัก (กุญแจแดง)" + en("Main isolator (red key)"), "ตัดไฟจากแบตเตอรี่ทั้งหมด" + en("Disconnects the battery")],
          ['<span class="numdot">3</span>', "แบตเตอรี่หางลาก ยึดด้วยตัวรัด" + en("Trailer battery with hold-down"), "จ่ายไฟให้ระบบในกล่อง ชาร์จจากรถผ่านปลั๊ก Anderson (2.3)" + en("Powers the box circuits; charged from the car via the Anderson lead (2.3)")],
          ['<span class="numdot">4</span>', "ลิ่มหนุนล้อ 2 ตัว (แถบสะท้อนแสง)" + en("2 wheel chocks with reflectors"), "หนุนล้อทุกครั้งที่จอดหรือพ่วง / ปลดพ่วง (2.1 · 2.4)" + en("Chock the wheels when parked, coupling or uncoupling")],
          ['<span class="numdot">5</span>', "สายรัดก๊อกแก๊ก" + en("Ratchet straps"), "รัดสินค้า (หัวข้อ 6)" + en("Securing the load (section 6)")],
          ['<span class="numdot">6</span>', "ไฟส่องสว่าง LED ข้างกล่อง" + en("LED work lamp on the box"), "ส่องสว่างตอนพ่วงหรือขนของตอนกลางคืน" + en("Light for coupling or loading at night")]], [7, 40, 53], "plist care") +
-     '<div class="two2">' + fig(D.toolbox_inside(), "มองจากด้านบนเมื่อเปิดฝา – จากวิดีโอหางลากของ RRS · หน้าที่สวิตช์และขนาดแบตเตอรี่ให้ RRS ระบุ", "") + '<div>' + steps(("ก่อนใช้ระบบไฟในกล่อง ให้เปิดสวิตช์ตัดไฟหลัก ❷", "Before using the box circuits, switch on main isolator ❷."),
+     '<div class="two2">' + M.view("p_toolbox_open", [("n", (400, 364, 310), 1, 0, -70), ("n", (472, 360, 232), 2, 60, -50), ("n", (145, 125, 202), 3, -50, 60), ("n", (640, 170, 90), 4, 0, 70), ("n", (960, 200, 82), 5, 60, 60), ("n", (-13, 195, 235), 6, -50, 40)], "เปิดฝา มองจากด้านบน (จากวิดีโอ RRS)") + '<div>' + steps(("ก่อนใช้ระบบไฟในกล่อง ให้เปิดสวิตช์ตัดไฟหลัก ❷", "Before using the box circuits, switch on main isolator ❷."),
            ("เปิดเฉพาะสวิตช์ ❶ ที่ต้องใช้ และปิดทุกตัวหลังใช้งาน", "Switch on only the switches ❶ you need and switch them all off after use."),
-           ("เมื่อจอดหางลากไว้นาน ให้ปิดสวิตช์ตัดไฟหลัก ❷ เพื่อไม่ให้แบตเตอรี่หมด", "When the trailer is parked for a long time, switch off isolator ❷ so the battery does not run flat.")) + '</div></div>' +
+           ("จอดนาน ให้ปิดสวิตช์ตัดไฟหลัก ❷ กันแบตเตอรี่หมด", "When parked for long, switch off isolator ❷.")) + '</div></div>' +
      warn(("ปิดสวิตช์ตัดไฟหลัก ❷ ก่อนเปลี่ยนฟิวส์ (ใช้ขนาดเดิม) และห้ามวางของทับแผงสวิตช์และขั้วแบตเตอรี่", "Switch off isolator ❷ before changing a fuse (same rating only); keep items off the switch panel and battery terminals.")))
 
 # ---------------------------------------------------------------- 6 loading
 page("6. การบรรทุก (Loading)", band("6. การบรรทุก", "Loading") +
-     fig(D.load_split(), "การกระจายน้ำหนัก (Load distribution)") +
+     M.view("t_load", [("t", (0, -1100, 1250), "หนัก (Heavy)", 0, 0), ("t", (0, 100, 1000), "กลาง", 0, 0), ("t", (0, 1600, 1100), "เบา (Light)", 0, 0), ("a", (0, -4330, 900), (0, -4330, 520))], "การกระจายน้ำหนัก (Load distribution)", "m") +
      table(["ควรทำ (Do)", "ไม่ควรทำ (Don't)"], [
          ["วางของหนักชิดพื้น อยู่หน้าแนวเพลาเล็กน้อย และกึ่งกลางซ้าย–ขวา" + en("Heavy items low, slightly ahead of the axles, centred left–right"), "กองของหนักไว้ท้ายตู้" + en("Pile heavy items at the rear")],
          ["ให้น้ำหนักกดลูกบอลประมาณ 10% ของน้ำหนักรวมหางลาก ไม่เกินค่าของ Ford" + en("Ball download about 10% of the trailer mass, within the Ford limit"), "ให้น้ำหนักกดลูกบอลน้อยหรือติดลบ" + en("Low or negative ball download")],
@@ -373,6 +375,6 @@ raw('''<div class="back"><img src="logo_white.png"><h2>บริษัท รุ
 save("booklet.html", "RRS Owner Manual – Box Trailer", extra_css=M.CSS + open(HERE / "style.css", encoding="utf-8").read() + '''
 .coverfig.tr{top:160mm;left:20mm;right:16mm}.coverfig.tr svg{width:100%;max-height:60mm}
 svg.diagram{width:100%;display:block}.figbox svg.diagram{max-height:60mm}.figbox.s svg.diagram{max-height:52mm}
-.two2{display:flex;gap:5mm;align-items:flex-start}.two2>.figbox{flex:0 0 40%}.two2>table{flex:1}
+.two2{display:flex;gap:5mm;align-items:flex-start}.two2>.figbox{flex:0 0 40%}.two2>.mv{flex:0 0 32%}.two2>table{flex:1}
 .figbox svg.dwg{max-height:46mm}.figbox.s svg.dwg{max-height:34mm}.figbox.xs svg.dwg{max-height:24mm}
 ''')

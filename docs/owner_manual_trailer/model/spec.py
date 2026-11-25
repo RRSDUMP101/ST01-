@@ -18,3 +18,5 @@ C = dict(
 )
 VIEWS += [dict(name=k, dir=d, up=UP, keep=near(c), crop=c, defl=.4) for k, (c, d) in C.items()]
 for v in VIEWS: v["sw"] = None
+# cut-away side view with three load blocks (trailer_load.brep = trailer.brep + boxes, see README)
+VIEWS += [dict(name="t_load", dir=(-1, 0, 0), up=UP, keep=lambda i, b: IN(b) and not (b[3] < -860 and b[5] > 700))]

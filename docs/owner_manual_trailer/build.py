@@ -192,7 +192,7 @@ page("2. การพ่วงและปลดพ่วง (Coupling and uncou
            ("ต่อโซ่นิรภัย สายเบรกฉุกเฉิน (2.2) และปลั๊ก 12 ขา (2.3) แล้วเก็บลิ่มหนุนล้อ", "Attach the safety chains and breakaway cable (2.2) and the 12-pin plug (2.3), then stow the chocks.")))
 
 page("2. การพ่วงและปลดพ่วง (Coupling and uncoupling)", band("2. การพ่วงและปลดพ่วง", "Coupling and uncoupling") + h3("2.2 โซ่นิรภัยและสายเบรกฉุกเฉิน", "Safety chains and breakaway cable") +
-     M.view("p_chains", [("n", (180, 0, -60), 1, 0, 70), ("n", (300, 40, 30), 2, 40, 150), ("n", (550, 80, 102), 3, 80, 40)], "❶ โซ่นิรภัยคล้องไขว้ใต้หัวต่อ · ❷ สายเบรกฉุกเฉิน (สายขดสีแดง) · ❸ สวิตช์เบรกฉุกเฉินบนคานลาก") +
+     M.view("p_chains", [("n", (180, 0, -60), 1, 0, 70), ("n", (300, 40, 30), 2, 40, 150), ("n", (550, 80, 102), 3, 80, 40)], "❶ โซ่นิรภัยคล้องไขว้ใต้หัวต่อ · ❷ สายเบรกฉุกเฉิน (สายขดสีแดง) · ❸ สวิตช์เบรกฉุกเฉิน (กล่องดำ สลักห่วง) ข้างหัวต่อ") +
      steps(("คล้องโซ่นิรภัยทั้งสองเส้นกับจุดคล้องโซ่ของชุดลาก Ford แบบไขว้กันใต้หัวต่อ เพื่อรองรับหัวต่อถ้าหลุดจากลูกบอล", "Hook both safety chains to the Ford towbar chain points, crossed under the coupling so they catch it if it leaves the ball."),
            ("ปรับความยาวให้โซ่หย่อนพอเลี้ยวได้สุด แต่ไม่ลากพื้น", "Adjust so the chains allow full turns but do not drag on the road."),
            ("ตรวจว่าสลักห่วงเสียบสุดในสวิตช์ ❸ (กล่องดำข้างคานลากหลังหัวต่อ) แล้วเกี่ยวตะขอปลายสายขดสีแดง ❷ กับจุดยึดบนชุดลากของรถที่แยกจากจุดคล้องโซ่ ห้ามคล้องกับโซ่หรือลูกบอล", "Check the ring pin is fully home in switch ❸ (black box on the drawbar behind the coupling), then clip the hook of red coiled cable ❷ to a fixed point on the car's towbar separate from the chains – never to a chain or the ball.")) +
@@ -352,7 +352,7 @@ page("8. การดูแลรักษา (Care and maintenance)", band("8. 
          ["50 กม. แรก และทุกครั้งที่ถอดล้อ" + en("First 50 km and after wheel removal"), ["ขันน็อตล้อซ้ำตามแรงขัน " + B + " N·m" + en("Re-torque the wheel nuts")], "ผู้ใช้ / RRS"],
          ["ทุกเดือน" + en("Monthly"), ["หล่อลื่นหัวต่อ บานพับ กลอนประตู ขาตั้ง" + en("Lubricate coupling, hinges, door bolts, jockey"), "ทำความสะอาดซีลประตูและรางน้ำหลังคา" + en("Clean door seals and roof gutter"), "ชาร์จหรือตรวจแบตเตอรี่เบรกฉุกเฉิน" + en("Check / charge the breakaway battery")], "ผู้ใช้" + en("User")],
          ["1 เดือน / 1,000 กม. แรก" + en("First 1 month / 1,000 km"), ["น็อตล้อ ลูกปืนล้อ เบรก แหนบ หัวต่อ ไฟ ซีลประตู" + en("Wheel nuts, bearings, brakes, springs, coupling, lamps, seals")], "RRS"],
-         ["ทุก 6 เดือน / 10,000 กม." + en("Every 6 months / 10,000 km"), ["รอยร้าวที่คานลาก คานแชสซีส์ หูแหนบ เสามุม" + en("Cracks in drawbar, rails, spring hangers, corner posts"), "ความแน่นโบลต์ยึดหัวต่อ (เกรด 8.8) และสวิตช์เบรกฉุกเฉิน" + en("Coupling bolts (grade 8.8) and breakaway switch tight"), "ปรับตั้งเบรก · ความหลวมลูกปืนล้อ · สายไฟ" + en("Brake adjustment · bearing play · wiring")], "RRS"],
+         ["ทุก 6 เดือน / 10,000 กม." + en("Every 6 months / 10,000 km"), ["รอยร้าวที่คานลาก คานแชสซีส์ หูแหนบ เสามุม" + en("Cracks in drawbar, rails, spring hangers, corner posts"), "โบลต์ยึดหัวต่อ 130 ± 5 N·m · สวิตช์เบรกฉุกเฉิน" + en("Coupling bolts 130 ± 5 N·m · breakaway switch"), "ปรับตั้งเบรก · ความหลวมลูกปืนล้อ · สายไฟ" + en("Brake adjustment · bearing play · wiring")], "RRS"],
          ["ทุก 12 เดือน / 20,000 กม." + en("Every 12 months / 20,000 km"), ["อัดจารบีลูกปืนล้อ เปลี่ยนซีลดุม ตรวจผ้าเบรก สลับยาง" + en("Repack bearings, renew hub seals, check linings, rotate tyres")], "RRS"],
          ["หลังลุยน้ำ ล้าง หรือขนวัสดุกัดกร่อน" + en("After water, washing, corrosive loads"), ["ล้างใต้หาง ตรวจลูกปืนล้อหลังล้อจมน้ำ ห้ามฉีดน้ำแรงดันสูงเข้าดุมล้อและซีล" + en("Rinse underneath; check bearings after immersion; no pressure washer on hubs and seals")], "ผู้ใช้" + en("User")]], [25, 57, 18], "care") +
      remark((f"แรงขันน็อตล้อ {B} N·m · ลมยาง {B} psi · จารบีลูกปืนล้อ ชนิด {B}", "Wheel-nut torque, tyre pressure and bearing grease: values to be stated by RRS.")))
@@ -375,14 +375,14 @@ page("10. ข้อมูลทางเทคนิค (Technical data)", band(
      table(["รายการ (Item)", "ค่า (Value)"], [
          ["ความยาวรวม · ตัวตู้ ยาว × กว้าง" + en("Overall length · box L × W"), "~7,256 · 5,700 × 1,806 มม."],
          ["ความสูงภายใน · ความกว้างรวม" + en("Inside height · overall width"), "~2,247 · ~2,394 มม."],
-         ["คานแชสซีส์ · คานขวาง" + en("Chassis rails · cross members"), "คานคู่ ห่างศูนย์ 1,714 มม. · คานขวาง 9 ตัว ระยะ 600 มม."],
-         ["พื้น" + en("Floor"), "เหล็กลาย (ตีนไก่)"],
+         ["คานแชสซีส์ · คานขวาง · พื้น" + en("Chassis rails · cross members · floor"), "คานคู่ ห่างศูนย์ 1,714 มม. · คานขวาง 9 ตัว ระยะ 600 มม. · พื้นเหล็กลาย"],
          ["ประตู · บานพับ" + en("Doors · hinges"), "ข้างละ 4 บาน · ประตูท้าย · ประตูหน้า · บานพับบานนอก 5 ตัว ระยะ 466 มม."],
          ["เพลา · ช่วงล่าง · ยาง" + en("Axles · suspension · tyres"), f"2 เพลา · {B} · {B}"],
          ["เบรก" + en("Brakes"), f"เบรกไฟฟ้าสั่งจากตัวควบคุมเบรก + ระบบ breakaway · {B}"],
          ["ปลั๊ก · ไฟ" + en("Plug · lamps"), "12 ขาแบน · ไฟบนหลังคา 4 ดวง · LED ≥ 550 mA ต่อวงจร"],
          ["กล้อง" + en("Camera"), "กล้องมองหลัง Ford N1WJ-19H391-A กลางท้ายตู้"],
-         ["ชุดลากที่ใช้ได้" + en("Towbar"), "Ford 3.5 ตัน (Ø50) / 4.5 ตัน (Ø70)"]], [40, 60]) +
+         ["ชุดลากที่ใช้ได้" + en("Towbar"), "Ford 3.5 ตัน (Ø50) / 4.5 ตัน (Ø70)"],
+         ["แรงขันโบลต์ยึดหัวต่อ" + en("Coupling bolt torque"), "130 ± 5 N·m (โบลต์ KEA เกรด 8.8)"]], [40, 60]) +
      remark(("ค่าจากแบบ 3D และเอกสาร RRS · ค่าที่เป็น ____ ให้ RRS ระบุก่อนพิมพ์", "Values from the RRS 3D model and documents · blanks to be filled by RRS before printing.")))
 
 # ---------------------------------------------------------------- back cover

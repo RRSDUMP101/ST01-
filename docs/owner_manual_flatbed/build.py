@@ -386,7 +386,11 @@ raw('''<div class="back"><img src="logo_white.png"><h2>บริษัท รุ
 <small>คู่มือการใช้งาน กระบะพื้นเรียบคาร์โก้ RRS · Owner Manual – RRS Cargo Flatbed · P/N ____________</small></div>''', "nocrop")
 
 A5 = '@page{size:148mm 210mm;margin:0}.page{width:185mm;height:262.5mm}'   # design page at A5 ratio; pdf.js prints it at 80 % = 148 x 210 mm
-save("booklet.html", "RRS Owner Manual – Cargo Flatbed", extra_css=M.CSS + A5 + '''
+if __import__("os").environ.get("BLEED"):   # print-shop version: 3 mm bleed (3.75 mm design) round every page, edge colours run into it
+    A5 = ('@page{size:154mm 216mm;margin:0}.page{width:192.5mm;height:270mm;border:3.75mm solid transparent;overflow:visible}'
+          '.stripe{top:-3.75mm;bottom:-3.75mm;left:-3.75mm;width:17.75mm}.cfoot{bottom:-3.75mm;right:-3.75mm;height:23.75mm;padding-bottom:3.75mm}'
+          '.back{inset:-3.75mm;padding-top:65.75mm;border-bottom-width:17.75mm}.tab{right:-3.75mm;width:11.75mm;padding-right:3.75mm}')
+save("booklet.html", "RRS Owner Manual – Cargo Flatbed", extra_css=M.CSS + A5 + '.tab{display:none}' + '''
 .en{color:#5b6577;font-weight:normal;font-size:.82em}.en-line{display:block;color:#5b6577;font-size:.86em;margin-top:.3mm}
 .sband{background:#0B2A5B;color:#fff;padding:2.6mm 4mm;border-left:4mm solid #00B4F0;margin:0 0 2.5mm}.sband b{display:block;font-size:13pt;line-height:1.3}.sband span{display:block;font-size:9pt;color:#b9d2f5;margin-top:.5mm}
 p.for{font-size:9pt;color:#1257C8;margin:0 0 2.5mm}p.for b{color:#0B2A5B}

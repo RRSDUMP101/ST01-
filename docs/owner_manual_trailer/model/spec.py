@@ -1,4 +1,4 @@
-IN = lambda b: -1500 <= b[0] and b[3] <= 1500 and -4700 <= b[1] and b[4] <= 3300 and -500 <= b[2] and b[5] <= 3300
+IN = lambda b: -1500 <= b[0] and b[3] <= 1500 and -4700 <= b[1] and b[4] <= 3700 and -500 <= b[2] and b[5] <= 3800
 keep = lambda i, b: IN(b)
 UP = (0, 0, 1)
 VIEWS = [

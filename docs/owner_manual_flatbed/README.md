@@ -72,3 +72,4 @@ node pdf.js
 - `python3 ../impose_a4.py <A5.pdf> <A4.pdf>` → `RRS-Owner-Manual-Cargo-Flatbed-A4-imposed.pdf` A4 แนวนอน 14 หน้า (7 แผ่น) เรียงแบบเย็บมุงหลังคา
 - สั่งพิมพ์: สองหน้า พลิกด้านสั้น (flip on short edge) ขนาดจริง 100 % (ไม่ fit to page) → เรียงแผ่น พับครึ่ง เย็บลวดกลางสันพับ 2 จุด
 - ไม่มีระยะตัดตก (bleed) – ถ้าส่งโรงพิมพ์ที่ตัดขอบ ให้แจ้งเพื่อเพิ่ม 3 มม.
+- ส่งโรงพิมพ์: `BLEED=1 python3 build.py && BLEED=1 node pdf.js` → `*-bleed-raw.pdf` (A5 + ตัดตก 3 มม.) แล้ว `python3 ../cropmarks.py <raw> <*-A5-print-bleed.pdf>` → แผ่น 174 × 236 มม. มีเส้นตัด TrimBox/BleedBox (แถบสีปก ท้ายปก ยืดเข้าระยะตัดตก) จากนั้น build ปกติอีกครั้ง

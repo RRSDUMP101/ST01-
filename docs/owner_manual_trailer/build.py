@@ -390,6 +390,10 @@ raw('''<div class="back"><img src="logo_white.png"><h2>บริษัท รุ
 <small>คู่มือการใช้งาน หางลากพ่วงตู้ทึบ RRS · Owner Manual – RRS Enclosed Box Trailer · P/N ____________</small></div>''', "nocrop")
 
 A5 = '@page{size:148mm 210mm;margin:0}.page{width:185mm;height:262.5mm}'   # design page at A5 ratio; pdf.js prints it at 80 % = 148 x 210 mm
+if __import__("os").environ.get("BLEED"):   # print-shop version: 3 mm bleed (3.75 mm design) round every page, edge colours run into it
+    A5 = ('@page{size:154mm 216mm;margin:0}.page{width:192.5mm;height:270mm;border:3.75mm solid transparent;overflow:visible}'
+          '.stripe{top:-3.75mm;bottom:-3.75mm;left:-3.75mm;width:17.75mm}.cfoot{bottom:-3.75mm;right:-3.75mm;height:23.75mm;padding-bottom:3.75mm}'
+          '.back{inset:-3.75mm;padding-top:65.75mm;border-bottom-width:17.75mm}.tab{right:-3.75mm;width:11.75mm;padding-right:3.75mm}')
 save("booklet.html", "RRS Owner Manual – Box Trailer", extra_css=M.CSS + A5 + '.tab{display:none}' + open(HERE / "style.css", encoding="utf-8").read() + '''
 .coverfig.tr{top:146mm;left:18mm;right:8mm}.coverfig.tr .mvin img{max-height:86mm}.coverfig.tr svg{width:100%;max-height:60mm}
 svg.diagram{width:100%;display:block}.figbox svg.diagram{max-height:60mm}.figbox.s svg.diagram{max-height:52mm}

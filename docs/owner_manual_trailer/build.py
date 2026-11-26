@@ -390,7 +390,7 @@ raw('''<div class="back"><img src="logo_white.png"><h2>บริษัท รุ
 <small>คู่มือการใช้งาน หางลากพ่วงตู้ทึบ RRS · Owner Manual – RRS Enclosed Box Trailer · P/N ____________</small></div>''', "nocrop")
 
 save("booklet.html", "RRS Owner Manual – Box Trailer", extra_css=M.CSS + '.tab{display:none}' + open(HERE / "style.css", encoding="utf-8").read() + '''
-.coverfig.tr{top:160mm;left:20mm;right:16mm}.coverfig.tr svg{width:100%;max-height:60mm}
+.coverfig.tr{top:141mm;left:18mm;right:8mm}.coverfig.tr .mvin img{max-height:70mm}.coverfig.tr svg{width:100%;max-height:60mm}
 svg.diagram{width:100%;display:block}.figbox svg.diagram{max-height:60mm}.figbox.s svg.diagram{max-height:52mm}
 .two2{display:flex;gap:5mm;align-items:flex-start}.two2>.figbox{flex:0 0 40%}.two2>.mv{flex:0 0 32%}.two2>table{flex:1}
 .figbox svg.dwg{max-height:46mm}.figbox.s svg.dwg{max-height:34mm}.figbox.xs svg.dwg{max-height:24mm}

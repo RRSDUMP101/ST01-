@@ -126,17 +126,18 @@ def toolbox(open_=True):
         latch += [box(x, -10, H - 70, 40, 10, 60, 3), box(x + 8, -16, H - 120, 24, 6, 60, 2)]
         if not open_:
             latch.append(box(x + 4, -12, H + 2, 32, 8, 10, 2))                    # keeper on the lid
-    lamp = box(-24, 150, 190, 22, 90, 90, 6)                                 # LED work lamp on the end wall
-    parts = [shell, lid, plate, lamp] + valve + latch
-    if open_:
-        parts += [box(20, 40, 12, 250, 170, 190, 6), box(40, 50, 202, 60, 40, 16, 3), box(190, 50, 202, 60, 40, 16, 3),   # battery + terminals
-                  box(10, 120, 140, 290, 20, 12, 2),                                                                     # hold-down strap
-                  box(300, D - 40, 200, 200, 26, 150, 4)]                                                                # switch-panel plate
-        parts += [box(318 + i * 42, D - 56, 285, 28, 16, 46, 3) for i in range(4)]                                       # rocker switches
-        parts += [cyl((332 + i * 42, D - 40, 260), (0, -1, 0), 8, 14) for i in range(4)]                                # fuse holders
-        parts += [box(455, D - 60, 215, 34, 20, 34, 3)]                                                                  # main isolator (red key)
-        parts += [wedge(560, 60, 12, 160, 220, 150), wedge(740, 60, 12, 160, 220, 150)]                                 # wheel chocks
-        parts += [cut(cyl((960, 200, 12), (0, 0, 1), 110, 70), cyl((960, 200, 0), (0, 0, 1), 50, 100))]                  # strap roll
+    parts = [shell, lid, plate] + valve + latch
+    if open_:   # layout seen in RRS videos 1000008495 / 1000008498 / 1000008501
+        W = D - 12                                                                                                       # inner face of the back wall
+        parts += [box(30, 70, 12, 250, 170, 190, 6)]                                                                     # battery (Amaron GO 12 V)
+        parts += [cyl((70, 200, 202), (0, 0, 1), 26, 34), cyl((70, 200, 236), (0, 0, 1), 18, 14)]                        # + terminal, red cover
+        parts += [cyl((240, 200, 202), (0, 0, 1), 14, 26)]                                                               # - terminal
+        parts += [cyl((155, 52, 12), (0, 0, 1), 6, 215), box(140, 52, 202, 30, 180, 10), cyl((155, 52, 150), (0, -1, 0), 16, 4)]  # J-bolt hold-down
+        parts += [box(310, W - 55, 140, 200, 55, 170, 8), box(322, W - 59, 152, 176, 4, 146),                        # Break-Away unit on the back wall
+                  cyl((350, W - 58, 270), (0, -1, 0), 12, 18), cyl((480, W - 58, 250), (0, -1, 0), 14, 6)]
+        parts += [box(540, W - 70, 150, 230, 70, 140, 6)] + [box(552 + 18 * k, W - 76, 160, 8, 6, 120) for k in range(12)]   # black control box (ribbed)
+        parts += [tor((400 + 90 * k, W - 70, 100), (1, 0, 0), 26, 7) for k in range(5)]                                   # wiring harness and plugs
+        parts += [box(330 + 120 * k, W - 95, 70, 40, 26, 30, 3) for k in range(4)]
     return parts
 
 

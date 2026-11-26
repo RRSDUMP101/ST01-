@@ -83,9 +83,9 @@ TOC = [
     ("3", "เบรกหางลาก", "Trailer brakes", 14), ("3.1", "ตัวควบคุมเบรก", "Brake controller", 14), ("3.2", "ระบบเบรกฉุกเฉิน (Breakaway)", "Breakaway system", 14), ("3.3", "วาล์วล็อกเบรก", "Brake lock valve", 16),
     ("4", "ไฟและกล้องมองหลัง", "Lamps and rear camera", 17),
     ("5", "ประตูตู้", "Box doors", 18), ("5.1", "ประตูข้าง", "Side doors", 18), ("5.2", "ประตูท้ายและประตูหน้า", "Rear and front doors", 19), ("5.3", "กล่องเครื่องมือหน้า", "Front tool box", 20), ("5.4", "ระบบภายในกล่องเครื่องมือ", "Inside the tool box", 21),
-    ("6", "การบรรทุก", "Loading", 22), ("7", "การขับขี่ขณะลากจูง", "Driving with the trailer", 23),
-    ("8", "การดูแลรักษา", "Care and maintenance", 24), ("9", "แก้ปัญหาเบื้องต้น", "Troubleshooting", 25),
-    ("10", "ข้อมูลทางเทคนิค", "Technical data", 26),
+    ("6", "การบรรทุก", "Loading", 23), ("7", "การขับขี่ขณะลากจูง", "Driving with the trailer", 24),
+    ("8", "การดูแลรักษา", "Care and maintenance", 25), ("9", "แก้ปัญหาเบื้องต้น", "Troubleshooting", 26),
+    ("10", "ข้อมูลทางเทคนิค", "Technical data", 27),
 ]
 rows = "".join(f'<tr class="{"grp" if "." not in n else ""}"><td class="n">{n}</td><td>{t} <span class="en">({e})</span></td><td class="pg">{p}</td></tr>' for n, t, e, p in TOC)
 page("สารบัญ (Index)", band("สารบัญ", "Index") + f'<table class="toc"><colgroup><col style="width:9%"><col style="width:81%"><col style="width:10%"></colgroup><tbody>{rows}</tbody></table>')
@@ -302,17 +302,26 @@ page("5. ประตูตู้ (Box doors)", band("5. ประตูตู�
      remark(("ข้อมูลจากกล่องเครื่องมือที่ RRS ติดตั้ง (วิดีโอ 1000008385, 1000008495, 1000008501)", "From the tool box fitted by RRS (videos 1000008385, 1000008495, 1000008501).")))
 
 page("5. ประตูตู้ (Box doors)", band("5. ประตูตู้และกล่องเครื่องมือ", "Box doors and tool box") + h3("5.4 ระบบภายในกล่องเครื่องมือ", "Inside the tool box") +
-     table(["#", "อุปกรณ์ (Item)", "การใช้งาน (Use)"], [
-         ['<span class="numdot">1</span>', "แผงสวิตช์ 4 ช่อง พร้อมฟิวส์" + en("4-way switch panel with fuses"), f"เปิด–ปิดวงจรไฟฟ้าตามป้ายที่สวิตช์ (RRS ระบุ) {B}" + en("Switches the trailer circuits as labelled")],
-         ['<span class="numdot">2</span>', "สวิตช์ตัดไฟหลัก (กุญแจแดง)" + en("Main isolator (red key)"), "ตัดไฟจากแบตเตอรี่ทั้งหมด" + en("Disconnects the battery")],
-         ['<span class="numdot">3</span>', "แบตเตอรี่หางลาก ยึดด้วยตัวรัด" + en("Trailer battery with hold-down"), "จ่ายไฟให้ระบบในกล่อง ชาร์จจากรถผ่านสายขดสีเขียว (2.3)" + en("Powers the box circuits; charged from the car via the green coiled lead (2.3)")],
-         ['<span class="numdot">4</span>', "ลิ่มหนุนล้อ 2 ตัว (แถบสะท้อนแสง)" + en("2 wheel chocks with reflectors"), "หนุนล้อทุกครั้งที่จอดหรือพ่วง / ปลดพ่วง (2.1 · 2.4)" + en("Chock the wheels when parked, coupling or uncoupling")],
-         ['<span class="numdot">5</span>', "สายรัดก๊อกแก๊ก" + en("Ratchet straps"), "รัดสินค้า (หัวข้อ 6)" + en("Securing the load (section 6)")],
-         ['<span class="numdot">6</span>', "ไฟส่องสว่าง LED ข้างกล่อง" + en("LED work lamp on the box"), "ส่องสว่างตอนพ่วงหรือขนของตอนกลางคืน" + en("Light for coupling or loading at night")]], [7, 40, 53], "plist care") +
-     '<div class="two2">' + M.view("p_toolbox_open", [("n", (400, 364, 310), 1, 0, -70), ("n", (472, 360, 232), 2, 60, -50), ("n", (145, 125, 202), 3, -50, 60), ("n", (640, 170, 90), 4, 0, 70), ("n", (960, 200, 82), 5, 60, 60), ("n", (-13, 195, 235), 6, -50, 40)], "เปิดฝา มองจากด้านบน (จากวิดีโอ RRS)") + '<div>' + steps(("ก่อนใช้ระบบไฟในกล่อง ให้เปิดสวิตช์ตัดไฟหลัก ❷", "Before using the box circuits, switch on main isolator ❷."),
-           ("เปิดเฉพาะสวิตช์ ❶ ที่ต้องใช้ และปิดทุกตัวหลังใช้งาน", "Switch on only the switches ❶ you need and switch them all off after use."),
-           ("จอดนาน ให้ปิดสวิตช์ตัดไฟหลัก ❷ กันแบตเตอรี่หมด", "When parked for long, switch off isolator ❷.")) + '</div></div>' +
-     warn(("ปิดสวิตช์ตัดไฟหลัก ❷ ก่อนเปลี่ยนฟิวส์ (ใช้ขนาดเดิม) และห้ามวางของทับแผงสวิตช์และขั้วแบตเตอรี่", "Switch off isolator ❷ before changing a fuse (same rating only); keep items off the switch panel and battery terminals.")))
+     M.view("p_toolbox_open", [("n", (230, 120, 202), 1, 60, 120), ("n", (155, 140, 212), 2, -80, 110), ("n", (410, 350, 230), 3, -60, -110), ("n", (655, 338, 220), 4, 0, -120), ("n", (580, 338, 100), 5, 40, 110), ("n", (930, 200, 12), 6, 0, -100)], "เปิดฝา มองจากด้านหน้า (จากวิดีโอ RRS)", "xs") +
+     table(["#", "อุปกรณ์ (Item)", "การใช้งาน / ข้อควรรู้ (Use)"], [
+         ['<span class="numdot">1</span>', "แบตเตอรี่ 12 V (Amaron GO) ขั้วบวกมีฝาครอบสีแดง" + en("12 V battery, red cover on the + terminal"), "จ่ายไฟให้ระบบในกล่องและเบรกฉุกเฉิน ชาร์จจากรถผ่านสายขดสีเขียว (2.3)" + en("Powers the box and breakaway brakes; charged via the green lead (2.3)")],
+         ['<span class="numdot">2</span>', "ตัวรัดแบตเตอรี่ (เหล็กฉากพร้อมสลักเกลียว)" + en("Battery hold-down bar and J-bolt"), "ยึดแบตเตอรี่ไม่ให้ขยับขณะลาก ตรวจความแน่นเป็นประจำ" + en("Keeps the battery still when towing; check it is tight")],
+         ['<span class="numdot">3</span>', "กล่องเบรกฉุกเฉิน Break-Away Systems บนผนังหลัง" + en("Break-Away Systems unit on the back wall"), "ปุ่มสวิตช์ไฟในตู้ · ปุ่ม TEST · ไฟสถานะแบตเตอรี่ (3.2)" + en("Interior-lamp switch · TEST button · battery lamps (3.2)")],
+         ['<span class="numdot">4</span>', "กล่องควบคุมสีดำ (มีครีบระบายความร้อน)" + en("Black control box with cooling fins"), f"ชุดควบคุมระบบเบรกหางลาก {B} ห้ามเปิดหรือปรับเอง" + en("Trailer brake control module – do not open or adjust")],
+         ['<span class="numdot">5</span>', "ชุดสายไฟและขั้วต่อ" + en("Wiring harness and connectors"), "ห้ามดึง ถอด หรือวางของทับ" + en("Do not pull, unplug or load anything on it")],
+         ['<span class="numdot">6</span>', "พื้นที่เก็บของด้านขวา" + en("Storage space on the right"), "เก็บลิ่มหนุนล้อ สายรัด และอุปกรณ์ลากจูง" + en("For wheel chocks, straps and towing gear")]], [7, 40, 53], "plist care"))
+
+page("5. ประตูตู้ (Box doors)", band("5. ประตูตู้และกล่องเครื่องมือ", "Box doors and tool box") + h3("5.4 ระบบภายในกล่องเครื่องมือ (ต่อ)", "Inside the tool box (continued)") +
+     '<div class="side2">' + M.view("p_tb_bat", [("n", (220, 150, 202), 1, 120, 40), ("n", (155, 140, 212), 2, -40, 160), ("n", (410, 350, 230), 3, -160, -40)], "❶ แบตเตอรี่ · ❷ ตัวรัด · ❸ กล่องเบรกฉุกเฉิน") + '<div>' +
+     h4("ตรวจก่อนลากทุกครั้ง", "Check before every tow") +
+     steps(("ตรวจว่าขั้วแบตเตอรี่แน่น ไม่มีขี้เกลือ และฝาครอบขั้วบวกสีแดงปิดอยู่", "Check the battery terminals are tight and clean and the red + cover is on."),
+           ("กดปุ่ม TEST ที่กล่อง ❸ และอ่านไฟสถานะ (3.2)", "Press TEST on unit ❸ and read the lamps (3.2)."),
+           ("วางของเฉพาะในพื้นที่ ❻ และยึดไม่ให้ไถลไปกระแทก ❶–❺", "Stow items only in space ❻ and secure them so they cannot hit ❶–❺.")) + '</div></div>' +
+     h4("จอดเก็บหางลากนาน", "Long-term parking") +
+     bullets(("ต่อสายขดสีเขียวกับรถเป็นระยะ หรือให้ RRS ชาร์จแบตเตอรี่ อย่าปล่อยให้ไฟสถานะขึ้น Recharge!", "Connect the green lead to the car from time to time or have RRS charge the battery; never let the lamp reach Recharge!."),
+             ("ตรวจว่าสลักเบรกฉุกเฉินเสียบอยู่ และปุ่มสวิตช์ไฟในตู้ปิด เพื่อไม่ให้แบตเตอรี่หมด", "Make sure the breakaway pin is in and the interior lamps are off so the battery does not drain.")) +
+     warn(("ห้ามวางโลหะพาดขั้วแบตเตอรี่หรือทำให้เกิดประกายไฟใกล้แบตเตอรี่ · งานซ่อมระบบไฟและเปลี่ยนแบตเตอรี่ให้ RRS ทำ (ถอดขั้วลบก่อนเสมอ)", "No metal across the terminals, no sparks near the battery · electrical work by RRS only.")) +
+     remark(("จากวิดีโอ RRS 1000008495, 1000008498, 1000008501 · หน้าที่กล่อง ❹ และขนาดแบตเตอรี่ให้ RRS ระบุ", "From RRS videos 1000008495, 1000008498, 1000008501 · function of box ❹ and battery size to be stated by RRS.")))
 
 # ---------------------------------------------------------------- 6 loading
 page("6. การบรรทุก (Loading)", band("6. การบรรทุก", "Loading") +

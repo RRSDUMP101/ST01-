@@ -117,10 +117,17 @@ def toolbox(open_=True):
     lid = box(0, -6, H, L, D + 12, 14, 3)
     if open_:
         lid = rot(lid, (0, D + 6, H), (1, 0, 0), 105)
-    lock = cyl((110, -4, 280), (0, -1, 0), 22, 10)                          # key lock (red ring)
-    latch = [box(L - 150, -10, 230, 40, 10, 80, 3), box(L - 145, -14, 200, 30, 6, 34, 2)]   # draw latch + handle
+    # red mushroom "Brake lock valve" button with its yellow plate, left end of the front face (video 1000008501)
+    valve = [cyl((110, 0, 250), (0, -1, 0), 14, 22), cyl((110, -22, 250), (0, -1, 0), 30, 14), sph((110, -30, 250), 26)]
+    valve = [cut(comp(valve[1:]), box(60, -2, 200, 100, 20, 100))] + valve[:1]
+    plate = box(165, -3, 225, 120, 3, 55, 2)
+    latch = []
+    for x in (480, L - 260):                                                   # two over-centre draw latches on the lid edge
+        latch += [box(x, -10, H - 70, 40, 10, 60, 3), box(x + 8, -16, H - 120, 24, 6, 60, 2)]
+        if not open_:
+            latch.append(box(x + 4, -12, H + 2, 32, 8, 10, 2))                    # keeper on the lid
     lamp = box(-24, 150, 190, 22, 90, 90, 6)                                 # LED work lamp on the end wall
-    parts = [shell, lid, lock, lamp] + latch
+    parts = [shell, lid, plate, lamp] + valve + latch
     if open_:
         parts += [box(20, 40, 12, 250, 170, 190, 6), box(40, 50, 202, 60, 40, 16, 3), box(190, 50, 202, 60, 40, 16, 3),   # battery + terminals
                   box(10, 120, 140, 290, 20, 12, 2),                                                                     # hold-down strap

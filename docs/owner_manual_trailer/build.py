@@ -80,12 +80,12 @@ TOC = [
     ("2", "การพ่วงและปลดพ่วง", "Coupling and uncoupling", 10), ("2.1", "การพ่วง", "Coupling", 10),
     ("2.2", "โซ่นิรภัยและสายเบรกฉุกเฉิน", "Safety chains and breakaway cable", 11), ("2.3", "ปลั๊กไฟ 12 ขา", "12-pin plug", 12),
     ("2.4", "การปลดพ่วง", "Uncoupling", 13),
-    ("3", "เบรกหางลาก", "Trailer brakes", 14), ("3.1", "ตัวควบคุมเบรก", "Brake controller", 14), ("3.2", "ระบบเบรกฉุกเฉิน (Breakaway)", "Breakaway system", 14),
-    ("4", "ไฟและกล้องมองหลัง", "Lamps and rear camera", 16),
-    ("5", "ประตูตู้", "Box doors", 17), ("5.1", "ประตูข้าง", "Side doors", 17), ("5.2", "ประตูท้ายและประตูหน้า", "Rear and front doors", 18), ("5.3", "กล่องเครื่องมือหน้า", "Front tool box", 19), ("5.4", "ระบบภายในกล่องเครื่องมือ", "Inside the tool box", 20),
-    ("6", "การบรรทุก", "Loading", 21), ("7", "การขับขี่ขณะลากจูง", "Driving with the trailer", 22),
-    ("8", "การดูแลรักษา", "Care and maintenance", 23), ("9", "แก้ปัญหาเบื้องต้น", "Troubleshooting", 24),
-    ("10", "ข้อมูลทางเทคนิค", "Technical data", 25),
+    ("3", "เบรกหางลาก", "Trailer brakes", 14), ("3.1", "ตัวควบคุมเบรก", "Brake controller", 14), ("3.2", "ระบบเบรกฉุกเฉิน (Breakaway)", "Breakaway system", 14), ("3.3", "วาล์วล็อกเบรก", "Brake lock valve", 16),
+    ("4", "ไฟและกล้องมองหลัง", "Lamps and rear camera", 17),
+    ("5", "ประตูตู้", "Box doors", 18), ("5.1", "ประตูข้าง", "Side doors", 18), ("5.2", "ประตูท้ายและประตูหน้า", "Rear and front doors", 19), ("5.3", "กล่องเครื่องมือหน้า", "Front tool box", 20), ("5.4", "ระบบภายในกล่องเครื่องมือ", "Inside the tool box", 21),
+    ("6", "การบรรทุก", "Loading", 22), ("7", "การขับขี่ขณะลากจูง", "Driving with the trailer", 23),
+    ("8", "การดูแลรักษา", "Care and maintenance", 24), ("9", "แก้ปัญหาเบื้องต้น", "Troubleshooting", 25),
+    ("10", "ข้อมูลทางเทคนิค", "Technical data", 26),
 ]
 rows = "".join(f'<tr class="{"grp" if "." not in n else ""}"><td class="n">{n}</td><td>{t} <span class="en">({e})</span></td><td class="pg">{p}</td></tr>' for n, t, e, p in TOC)
 page("สารบัญ (Index)", band("สารบัญ", "Index") + f'<table class="toc"><colgroup><col style="width:9%"><col style="width:81%"><col style="width:10%"></colgroup><tbody>{rows}</tbody></table>')
@@ -140,7 +140,7 @@ page("เพื่อการลากจูงอย่างปลอดภ�
          ['<span class="numdot">1</span>', "หัวต่อพ่วงล็อกบนลูกบอล ใส่สลักนิรภัยแล้ว" + en("Coupling locked on the ball, safety pin fitted"), "2.1"],
          ['<span class="numdot">2</span>', "โซ่นิรภัยคล้องไขว้ และสายเบรกฉุกเฉินต่อกับรถ" + en("Chains crossed, breakaway cable attached"), "2.2"],
          ['<span class="numdot">3</span>', "ปลั๊ก 12 ขาเสียบแน่น ไฟทุกดวงทำงาน" + en("12-pin plug in, all lamps work"), "2.3 · 4"],
-         ['<span class="numdot">4</span>', "ตัวควบคุมเบรกตั้งค่าแล้ว ทดสอบเบรกที่ความเร็วต่ำ" + en("Brake controller set, brakes tested at low speed"), "3"],
+         ['<span class="numdot">4</span>', "ตัวควบคุมเบรกตั้งค่าแล้ว ปลดวาล์วล็อกเบรก ทดสอบเบรกที่ความเร็วต่ำ" + en("Brake controller set, brake lock valve released, brakes tested at low speed"), "3"],
          ['<span class="numdot">5</span>', "ขาตั้งหน้ายกขึ้นสุดและล็อก เก็บลิ่มหนุนล้อ" + en("Jockey wheel fully up and locked, chocks stowed"), "2.1"],
          ['<span class="numdot">6</span>', "ลมยางและน็อตล้อ" + en("Tyre pressures and wheel nuts"), "8"],
          ['<span class="numdot">7</span>', "ประตูทุกบานปิดและล็อก สินค้ารัดแน่น" + en("All doors closed and locked, load secured"), "5 · 6"]], [8, 80, 12], "plist"))
@@ -192,10 +192,10 @@ page("2. การพ่วงและปลดพ่วง (Coupling and uncou
            ("ต่อโซ่นิรภัย สายเบรกฉุกเฉิน (2.2) และปลั๊ก 12 ขา (2.3) แล้วเก็บลิ่มหนุนล้อ", "Attach the safety chains and breakaway cable (2.2) and the 12-pin plug (2.3), then stow the chocks.")))
 
 page("2. การพ่วงและปลดพ่วง (Coupling and uncoupling)", band("2. การพ่วงและปลดพ่วง", "Coupling and uncoupling") + h3("2.2 โซ่นิรภัยและสายเบรกฉุกเฉิน", "Safety chains and breakaway cable") +
-     M.view("p_chains", [("n", (180, 0, -60), 1, 0, 70), ("n", (300, 40, 30), 2, 60, -60)], "❶ โซ่นิรภัยคล้องไขว้ใต้หัวต่อ · ❷ สายเบรกฉุกเฉินคล้องจุดยึดบนชุดลากของรถ แยกจากโซ่") +
+     M.view("p_chains", [("n", (180, 0, -60), 1, 0, 70), ("n", (300, 40, 30), 2, 40, 150), ("n", (550, 80, 102), 3, 80, 40)], "❶ โซ่นิรภัยคล้องไขว้ใต้หัวต่อ · ❷ สายเบรกฉุกเฉิน (สายขดสีแดง) · ❸ สวิตช์เบรกฉุกเฉินบนคานลาก") +
      steps(("คล้องโซ่นิรภัยทั้งสองเส้นกับจุดคล้องโซ่ของชุดลาก Ford แบบไขว้กันใต้หัวต่อ เพื่อรองรับหัวต่อถ้าหลุดจากลูกบอล", "Hook both safety chains to the Ford towbar chain points, crossed under the coupling so they catch it if it leaves the ball."),
            ("ปรับความยาวให้โซ่หย่อนพอเลี้ยวได้สุด แต่ไม่ลากพื้น", "Adjust so the chains allow full turns but do not drag on the road."),
-           ("คล้องสายเบรกฉุกเฉิน (สายขดสีน้ำเงิน) กับจุดยึดบนรถที่แยกจากจุดคล้องโซ่ ห้ามคล้องกับโซ่หรือลูกบอล", "Attach the breakaway cable (blue coiled cable) to a fixed point on the car separate from the chains – never to a chain or the ball.")) +
+           ("ตรวจว่าสลักห่วงเสียบสุดในสวิตช์ ❸ (กล่องดำข้างคานลากหลังหัวต่อ) แล้วเกี่ยวตะขอปลายสายขดสีแดง ❷ กับจุดยึดบนชุดลากของรถที่แยกจากจุดคล้องโซ่ ห้ามคล้องกับโซ่หรือลูกบอล", "Check the ring pin is fully home in switch ❸ (black box on the drawbar behind the coupling), then clip the hook of red coiled cable ❷ to a fixed point on the car's towbar separate from the chains – never to a chain or the ball.")) +
      warn(("สายเบรกฉุกเฉินต้องหย่อนพอเลี้ยวได้ แต่สั้นกว่าโซ่ เพื่อให้ดึงสลักก่อนที่โซ่จะตึง", "The breakaway cable must be slack enough for turns but shorter than the chains, so it pulls the pin before the chains go tight.")))
 
 page("2. การพ่วงและปลดพ่วง (Coupling and uncoupling)", band("2. การพ่วงและปลดพ่วง", "Coupling and uncoupling") + h3("2.3 ปลั๊กไฟ 12 ขา", "12-pin plug") +
@@ -204,17 +204,17 @@ page("2. การพ่วงและปลดพ่วง (Coupling and uncou
          ["1", "เหลือง", "ไฟเลี้ยวซ้าย (LH turn)"], ["2", "ดำ", "ไฟถอย (Reversing)"], ["3", "ขาว", "กราวด์ (Earth)"], ["4", "เขียว", "ไฟเลี้ยวขวา (RH turn)"],
          ["5", "น้ำเงิน", "ไปวงจรรีเลย์เบรก – ยืนยันตามแบบ (Brake relay – confirm)"], ["6", "แดง", "ไฟเบรก (Stop)"], ["7", "น้ำตาล", "ไฟหรี่ (Tail)"], ["8–12", "ส้ม ชมพู ขาว เทา ม่วง", f"ตามแบบสายของรถคันนี้ {B}"]], [10, 28, 62], "plist care") + '</div>' +
      steps(("ตรวจหน้าสัมผัสปลั๊กทั้งสองฝั่งให้สะอาดและแห้ง", "Check both plug faces are clean and dry."),
-           ("เสียบปลั๊กไฟ (สายขดสีดำ) จนสุดและล็อกฝาปิด จัดสายให้หย่อนพอเลี้ยวได้ ไม่ลากพื้น", "Push the lighting plug (black coiled cable) fully home and latch the cover; leave enough slack for turns without dragging."),
-           ("เสียบปลั๊ก Anderson สีเทา (สายชาร์จแบตเตอรี่หางลาก) จนล็อก", "Plug in the grey Anderson charging lead until it locks."),
+           ("เสียบปลั๊กไฟสัญญาณ (สายขดสีดำ) เข้าเต้ารับกลมบนชุดลากของรถจนสุด และล็อกฝาปิด", "Push the lighting plug (black coiled cable) fully into the round socket on the car's towbar and latch the cover."),
+           ("เสียบปลั๊กสายขดสีเขียว (สายไฟชาร์จแบตเตอรี่หางลาก) เข้าเต้ารับเหลี่ยมบนชุดลากจนล็อก จัดสายทั้งหมดให้หย่อนพอเลี้ยวได้ ไม่พันโซ่และไม่ลากพื้น", "Plug the green coiled cable (trailer battery charging lead) into the square socket on the towbar until it locks; leave all cables slack enough for turns, clear of the chains and the road."),
            ("ให้ผู้ช่วยตรวจไฟหรี่ ไฟเบรก ไฟเลี้ยว และไฟถอยทุกดวง (หัวข้อ 4)", "Have a helper check the tail, stop, turn and reversing lamps (section 4).")) +
      remark(("หน้าที่ขา 1–7 จาก WI-PD-63 · ขา 8–12 ให้ RRS ยืนยันตามแบบสาย", "Pins 1–7 from WI-PD-63 · pins 8–12 to be confirmed by RRS from the wiring drawing."),
-            ("ในวิดีโอหางลากของ RRS เต้ารับฝั่งรถเป็นแบบกลม ให้ RRS ยืนยันชนิดปลั๊ก (12 ขาแบน หรือ 7 ขากลม) และหน้าที่ปลั๊ก Anderson ของรุ่นนี้", "In the RRS trailer video the car socket is round: RRS to confirm the plug type (12-pin flat or 7-pin round) and the Anderson lead for this model.")))
+            ("วิดีโอ RRS: สายขดดำเข้าเต้ารับกลม · สายขดเขียวเข้าเต้ารับเหลี่ยม · RRS ยืนยันชนิดปลั๊กและหน้าที่สาย", "RRS videos 1000008500–8501: black coiled cable to the round socket · green coiled cable to the square socket · RRS to confirm the plug types and what each lead carries.")))
 
 page("2. การพ่วงและปลดพ่วง (Coupling and uncoupling)", band("2. การพ่วงและปลดพ่วง", "Coupling and uncoupling") + h3("2.4 การปลดพ่วง", "Uncoupling") +
      steps(("จอดบนพื้นเรียบและแข็ง เข้าเกียร์ P และดึงเบรกมือรถลาก", "Park on firm, level ground, select P and apply the car's parking brake."),
            ("หนุนล้อหางลากทั้งสองข้าง หน้าและหลัง", "Chock the trailer wheels on both sides, front and rear."),
            ("ลดขาตั้งหน้าลงจนแตะพื้นและรับน้ำหนัก", "Lower the jockey wheel until it takes the weight."),
-           ("ถอดปลั๊กไฟและปลั๊ก Anderson เก็บใส่ที่เก็บ ปลดสายเบรกฉุกเฉินและโซ่นิรภัย", "Unplug and stow the lighting plug and the Anderson lead; unhook the breakaway cable and the chains."),
+           ("ถอดปลั๊กสายขดสีดำและสีเขียว เก็บใส่ที่เก็บ ปลดตะขอสายขดสีแดงและโซ่นิรภัย", "Unplug and stow the black and green coiled leads; unhook the red breakaway cable and the chains."),
            ("ถอดสลักนิรภัย ยกคันล็อก แล้วหมุนขาตั้งยกหัวต่อพ้นลูกบอล", "Remove the safety pin, lift the lever and wind the coupling clear of the ball."),
            ("เคลื่อนรถออกช้า ๆ ตรวจว่าหางลากอยู่นิ่ง และใส่ฝาครอบลูกบอล", "Drive the car away slowly, check the trailer stays put and refit the ball cover.")) +
      M.row(M.view("p_jockey_down", [("n", (0, 102, 360), 1, 70, 0), ("n", (110, 0, 620), 2, 70, -20)], "ขาตั้งลง: ❶ ลูกบิดแดง · ❷ มือหมุน (Down)", "t"),
@@ -247,6 +247,16 @@ page("3. เบรกหางลาก (Trailer brakes)", band("3. เบรก
           ("ถ้าสลักหลุดโดยไม่ตั้งใจ ให้เสียบกลับทันที เบรกจะค้างและแบตเตอรี่จะหมด", "If the pin is pulled by accident, refit it at once: the brakes stay on and the battery drains.")) +
      remark(("สีสายของกล่อง (สำหรับช่าง): ขาว = กราวด์ · น้ำเงิน = เบรก · ดำ = แบตเตอรี่", "Unit wire colours (for technicians): white = earth · blue = brakes · black = battery."),
             ("ข้อมูลจากกล่องเบรกฉุกเฉินที่ RRS ติดตั้ง (วิดีโอ 1000008383) · รุ่นและวิธีชาร์จให้ RRS ระบุ", "From the breakaway unit fitted by RRS (video 1000008383) · model and charging method to be stated by RRS.")))
+
+page("3. เบรกหางลาก (Trailer brakes)", band("3. เบรกหางลาก", "Trailer brakes") +
+     h3("3.3 วาล์วล็อกเบรก", "Brake lock valve") +
+     M.view("p_toolbox", [("c", (110, -40, 250), 45), ("n", (110, -40, 250), 1, -60, 60), ("t", (225, -3, 230), "Brake lock valve", 40, -45)], "❶ ปุ่มวาล์วล็อกเบรก ด้านหน้ากล่องเครื่องมือ", "m") +
+     para("ปุ่มสีแดง ❶ ด้านหน้ากล่องเครื่องมือ (ป้ายเหลือง Brake lock valve – วาล์วล็อคเบรค) ใช้ล็อกเบรกหางลากค้างไว้ขณะจอด กดปุ่มลงเพื่อล็อก หมุนตามลูกศรบนปุ่มให้ปุ่มเด้งขึ้นเพื่อปลด",
+          "Red button ❶ on the front of the tool box (yellow plate Brake lock valve) holds the trailer brakes on while parked: press it in to lock, turn it the way of the arrows so it pops out to release.") +
+     steps(("จอดและหนุนล้อแล้ว กดปุ่ม ❶ เพื่อล็อกเบรก", "Once parked and chocked, press button ❶ to lock the brakes."),
+           ("ก่อนออกรถ หมุนปลดให้ปุ่มเด้งขึ้น แล้วออกรถช้า ๆ ตรวจว่าล้อหางลากหมุนได้ไม่ฝืด", "Before moving off, turn it to release so it pops out, then pull away slowly and check the trailer wheels roll freely.")) +
+     warn(("ห้ามลากขณะวาล์วล็อกเบรกอยู่ เบรกและยางจะร้อนและเสียหาย · วาล์วล็อกเบรกไม่ใช่สิ่งทดแทนลิ่มหนุนล้อ", "Never tow with the valve locked: brakes and tyres overheat. The valve does not replace wheel chocks.")) +
+     remark(("วิธีใช้งานจากป้ายและปุ่มในวิดีโอ RRS (1000008501) · ให้ RRS ยืนยันการทำงานและระยะเวลาที่ล็อกได้", "Operation from the plate and button in RRS video 1000008501 · RRS to confirm how it works and how long it holds.")))
 
 # ---------------------------------------------------------------- 4 lamps and camera
 page("4. ไฟและกล้องมองหลัง (Lamps and rear camera)", band("4. ไฟและกล้องมองหลัง", "Lamps and rear camera") +
@@ -282,21 +292,20 @@ page("5. ประตูตู้ (Box doors)", band("5. ประตูตู�
             ("หล่อลื่นบานพับและกลอนทุกเดือน และทำความสะอาดซีลยางเพื่อกันน้ำรั่ว (หัวข้อ 8)", "Lubricate hinges and bolts monthly and clean the seals to keep water out (section 8).")))
 
 page("5. ประตูตู้ (Box doors)", band("5. ประตูตู้และกล่องเครื่องมือ", "Box doors and tool box") + h3("5.3 กล่องเครื่องมือหน้า", "Front tool box") +
-     para("กล่องเครื่องมืออะลูมิเนียมลายกันลื่นบนคานลาก สำหรับเก็บโซ่ สายรัด ลิ่มหนุนล้อ และอุปกรณ์ลากจูง ฝาเปิดขึ้นด้านบน ล็อกด้วยกุญแจ ❶ และมือจับสลักล็อก ❷",
-          "Tread-plate aluminium tool box on the drawbar for chains, straps, wheel chocks and towing gear. The lid lifts up and is secured by key lock ❶ and draw latch ❷.") +
-     M.view("p_toolbox", [("c", (110, -9, 280), 40), ("n", (110, -9, 280), 1, -60, 50), ("c", (970, -12, 230), 50), ("n", (970, -12, 230), 2, 60, 50)], "❶ กุญแจล็อก · ❷ มือจับสลักล็อก · ฝาเปิดขึ้น", "h2") +
-     steps(("ไขกุญแจ ❶ เพื่อปลดล็อก", "Unlock key lock ❶."),
-           ("ดึงมือจับสลัก ❷ ออก แล้วยกฝาขึ้น", "Pull out draw-latch handle ❷ and lift the lid."),
-           ("การปิด: ปิดฝาให้สนิท เกี่ยวสลัก ❷ แล้วกดมือจับจนล็อก และไขกุญแจ ❶", "To close: shut the lid, hook latch ❷, press its handle home and lock ❶.")) +
+     para("กล่องเครื่องมืออะลูมิเนียมลายกันลื่นบนคานลาก สำหรับเก็บโซ่ สายรัด ลิ่มหนุนล้อ และอุปกรณ์ลากจูง ฝาเปิดขึ้นด้านบน ยึดด้วยสลักล็อกแบบคันโยก 2 ตัว ❷ ด้านหน้ากล่องมีปุ่มแดงวาล์วล็อกเบรก ❶ (Brake lock valve) ดูหัวข้อ 3.3",
+          "Tread-plate aluminium tool box on the drawbar for chains, straps, wheel chocks and towing gear. The lid lifts up and is held by two draw latches ❷. Red Brake lock valve button ❶ is on the front (see 3.3).") +
+     M.view("p_toolbox", [("c", (110, -40, 250), 45), ("n", (110, -40, 250), 1, -60, 60), ("n", (500, -16, 280), 2, -40, 90), ("n", (860, -16, 280), 2, 50, 70)], "❶ ปุ่มวาล์วล็อกเบรก (ป้ายเหลือง) · ❷ สลักล็อกฝา 2 ตัว · ฝาเปิดขึ้น", "h2") +
+     steps(("ง้างคันโยกสลัก ❷ ทั้งสองตัวออก แล้วยกฝาขึ้น", "Pull out both draw-latch levers ❷ and lift the lid."),
+           ("การปิด: ปิดฝาให้สนิท เกี่ยวห่วงสลัก ❷ กับขอบฝา แล้วกดคันโยกลงจนล็อกทั้งสองตัว", "To close: shut the lid, hook both latches ❷ onto the lid and press the levers home.")) +
      warn(("ปิดและล็อกฝากล่องก่อนลากทุกครั้ง ของในกล่องที่หลุดออกมาอาจตกลงถนน", "Close and lock the lid before every tow; loose items could fall onto the road."),
           ("ห้ามนั่งหรือยืนบนกล่องเครื่องมือ", "Do not sit or stand on the tool box.")) +
-     remark(("ข้อมูลจากกล่องเครื่องมือที่ RRS ติดตั้ง (วิดีโอ 1000008385)", "From the tool box fitted by RRS (video 1000008385).")))
+     remark(("ข้อมูลจากกล่องเครื่องมือที่ RRS ติดตั้ง (วิดีโอ 1000008385, 1000008495, 1000008501)", "From the tool box fitted by RRS (videos 1000008385, 1000008495, 1000008501).")))
 
 page("5. ประตูตู้ (Box doors)", band("5. ประตูตู้และกล่องเครื่องมือ", "Box doors and tool box") + h3("5.4 ระบบภายในกล่องเครื่องมือ", "Inside the tool box") +
      table(["#", "อุปกรณ์ (Item)", "การใช้งาน (Use)"], [
          ['<span class="numdot">1</span>', "แผงสวิตช์ 4 ช่อง พร้อมฟิวส์" + en("4-way switch panel with fuses"), f"เปิด–ปิดวงจรไฟฟ้าตามป้ายที่สวิตช์ (RRS ระบุ) {B}" + en("Switches the trailer circuits as labelled")],
          ['<span class="numdot">2</span>', "สวิตช์ตัดไฟหลัก (กุญแจแดง)" + en("Main isolator (red key)"), "ตัดไฟจากแบตเตอรี่ทั้งหมด" + en("Disconnects the battery")],
-         ['<span class="numdot">3</span>', "แบตเตอรี่หางลาก ยึดด้วยตัวรัด" + en("Trailer battery with hold-down"), "จ่ายไฟให้ระบบในกล่อง ชาร์จจากรถผ่านปลั๊ก Anderson (2.3)" + en("Powers the box circuits; charged from the car via the Anderson lead (2.3)")],
+         ['<span class="numdot">3</span>', "แบตเตอรี่หางลาก ยึดด้วยตัวรัด" + en("Trailer battery with hold-down"), "จ่ายไฟให้ระบบในกล่อง ชาร์จจากรถผ่านสายขดสีเขียว (2.3)" + en("Powers the box circuits; charged from the car via the green coiled lead (2.3)")],
          ['<span class="numdot">4</span>', "ลิ่มหนุนล้อ 2 ตัว (แถบสะท้อนแสง)" + en("2 wheel chocks with reflectors"), "หนุนล้อทุกครั้งที่จอดหรือพ่วง / ปลดพ่วง (2.1 · 2.4)" + en("Chock the wheels when parked, coupling or uncoupling")],
          ['<span class="numdot">5</span>', "สายรัดก๊อกแก๊ก" + en("Ratchet straps"), "รัดสินค้า (หัวข้อ 6)" + en("Securing the load (section 6)")],
          ['<span class="numdot">6</span>', "ไฟส่องสว่าง LED ข้างกล่อง" + en("LED work lamp on the box"), "ส่องสว่างตอนพ่วงหรือขนของตอนกลางคืน" + en("Light for coupling or loading at night")]], [7, 40, 53], "plist care") +
@@ -330,11 +339,11 @@ page("7. การขับขี่ขณะลากจูง (Driving with th
 # ---------------------------------------------------------------- 8 care
 page("8. การดูแลรักษา (Care and maintenance)", band("8. การดูแลรักษา", "Care and maintenance") +
      table(["ระยะ (Interval)", "รายการ (Item)", "ผู้ทำ (By)"], [
-         ["ก่อนลากทุกครั้ง" + en("Before every tow"), ["หัวต่อ สลัก โซ่ สายเบรกฉุกเฉิน" + en("Coupling, pin, chains, breakaway"), "ไฟทุกดวง · ลมยางและสภาพยาง" + en("All lamps · tyre pressures"), "ประตูล็อก · ขาตั้งยกขึ้น" + en("Doors locked · jockey up")], "ผู้ใช้" + en("User")],
+         ["ก่อนลากทุกครั้ง" + en("Before every tow"), ["หัวต่อ สลัก โซ่ สายเบรกฉุกเฉิน · วาล์วล็อกเบรกปลดแล้ว" + en("Coupling, pin, chains, breakaway · brake lock valve released"), "ไฟทุกดวง · ลมยางและสภาพยาง" + en("All lamps · tyre pressures"), "ประตูล็อก · ขาตั้งยกขึ้น" + en("Doors locked · jockey up")], "ผู้ใช้" + en("User")],
          ["50 กม. แรก และทุกครั้งที่ถอดล้อ" + en("First 50 km and after wheel removal"), ["ขันน็อตล้อซ้ำตามแรงขัน " + B + " N·m" + en("Re-torque the wheel nuts")], "ผู้ใช้ / RRS"],
          ["ทุกเดือน" + en("Monthly"), ["หล่อลื่นหัวต่อ บานพับ กลอนประตู ขาตั้ง" + en("Lubricate coupling, hinges, door bolts, jockey"), "ทำความสะอาดซีลประตูและรางน้ำหลังคา" + en("Clean door seals and roof gutter"), "ชาร์จหรือตรวจแบตเตอรี่เบรกฉุกเฉิน" + en("Check / charge the breakaway battery")], "ผู้ใช้" + en("User")],
          ["1 เดือน / 1,000 กม. แรก" + en("First 1 month / 1,000 km"), ["น็อตล้อ ลูกปืนล้อ เบรก แหนบ หัวต่อ ไฟ ซีลประตู" + en("Wheel nuts, bearings, brakes, springs, coupling, lamps, seals")], "RRS"],
-         ["ทุก 6 เดือน / 10,000 กม." + en("Every 6 months / 10,000 km"), ["รอยร้าวที่คานลาก คานแชสซีส์ หูแหนบ เสามุม" + en("Cracks in drawbar, rails, spring hangers, corner posts"), "ปรับตั้งเบรก · ความหลวมลูกปืนล้อ · สายไฟ" + en("Brake adjustment · bearing play · wiring")], "RRS"],
+         ["ทุก 6 เดือน / 10,000 กม." + en("Every 6 months / 10,000 km"), ["รอยร้าวที่คานลาก คานแชสซีส์ หูแหนบ เสามุม" + en("Cracks in drawbar, rails, spring hangers, corner posts"), "ความแน่นโบลต์ยึดหัวต่อ (เกรด 8.8) และสวิตช์เบรกฉุกเฉิน" + en("Coupling bolts (grade 8.8) and breakaway switch tight"), "ปรับตั้งเบรก · ความหลวมลูกปืนล้อ · สายไฟ" + en("Brake adjustment · bearing play · wiring")], "RRS"],
          ["ทุก 12 เดือน / 20,000 กม." + en("Every 12 months / 20,000 km"), ["อัดจารบีลูกปืนล้อ เปลี่ยนซีลดุม ตรวจผ้าเบรก สลับยาง" + en("Repack bearings, renew hub seals, check linings, rotate tyres")], "RRS"],
          ["หลังลุยน้ำ ล้าง หรือขนวัสดุกัดกร่อน" + en("After water, washing, corrosive loads"), ["ล้างใต้หาง ตรวจลูกปืนล้อหลังล้อจมน้ำ ห้ามฉีดน้ำแรงดันสูงเข้าดุมล้อและซีล" + en("Rinse underneath; check bearings after immersion; no pressure washer on hubs and seals")], "ผู้ใช้" + en("User")]], [25, 57, 18], "care") +
      remark((f"แรงขันน็อตล้อ {B} N·m · ลมยาง {B} psi · จารบีลูกปืนล้อ ชนิด {B}", "Wheel-nut torque, tyre pressure and bearing grease: values to be stated by RRS.")))

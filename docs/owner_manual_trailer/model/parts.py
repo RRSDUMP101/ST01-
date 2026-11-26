@@ -3,9 +3,9 @@ receiver with hitch pin and clip, hand-lever ball coupling with lock indicator, 
 Not in the trailer CAD file; sizes are typical. Writes one BREP per state, rendered by render.py like the CAD views.
 Axes (mm): x along the drawbar (+ towards the trailer), y across, z up.  python3 parts.py <outdir>"""
 import math, sys
-from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox, BRepPrimAPI_MakeCylinder, BRepPrimAPI_MakeSphere, BRepPrimAPI_MakeTorus, BRepPrimAPI_MakeWedge
+from OCP.BRepPrimAPI import BRepPrimAPI_MakePrism, BRepPrimAPI_MakeBox, BRepPrimAPI_MakeCylinder, BRepPrimAPI_MakeSphere, BRepPrimAPI_MakeTorus, BRepPrimAPI_MakeWedge
 from OCP.BRepAlgoAPI import BRepAlgoAPI_Cut
-from OCP.BRepBuilderAPI import BRepBuilderAPI_Transform
+from OCP.BRepBuilderAPI import BRepBuilderAPI_Transform, BRepBuilderAPI_MakePolygon, BRepBuilderAPI_MakeFace
 from OCP.BRepFilletAPI import BRepFilletAPI_MakeFillet
 from OCP.TopExp import TopExp_Explorer
 from OCP.TopAbs import TopAbs_EDGE
@@ -111,33 +111,58 @@ def wedge(x0, y0, z0, dx, dy, dz):
     return BRepPrimAPI_MakeWedge(gp_Ax2(gp_Pnt(x0, y0, z0), gp_Dir(0, 0, 1), gp_Dir(1, 0, 0)), dx, dy, dz, 0).Shape()
 
 
+def prism(pts, x0, L):
+    """Profile pts [(y, z)] in the plane x = x0, extruded L along +x."""
+    poly = BRepBuilderAPI_MakePolygon()
+    for y, z in pts:
+        poly.Add(gp_Pnt(x0, y, z))
+    poly.Close()
+    return BRepPrimAPI_MakePrism(BRepBuilderAPI_MakeFace(poly.Wire()).Face(), gp_Vec(L, 0, 0)).Shape()
+
+
+# tool box at the front of the body, taken from the trailer CAD (trailer.igs): trapezoid side profile (front 150 high,
+# lid sloping up to 270 at the body wall) and end walls angled in plan along the A-frame (back 1662, front 1358, depth 293)
+TB_L, TB_D, TB_HF, TB_HB, TB_ANG = 1662, 293, 150, 270, math.degrees(math.atan(152 / 293))
+TB_PROF = [(0, 0), (0, TB_HF), (240, TB_HB), (TB_D, TB_HB), (TB_D, 0)]
+
+
+def tb_trim(s, off=0):
+    """Cut the ends of s along the A-frame angle; off moves both planes inwards."""
+    big = 3000
+    left = rot(box(-big + off, -1000, -500, big, 3000, 2000), (off, TB_D, 0), (0, 0, 1), TB_ANG)
+    right = rot(box(TB_L - off, -1000, -500, big, 3000, 2000), (TB_L - off, TB_D, 0), (0, 0, 1), -TB_ANG)
+    return cut(cut(s, left), right)
+
+
 def toolbox(open_=True):
-    L, D, H = 1100, 420, 380
-    shell = cut(box(0, 0, 0, L, D, H, 4), box(12, 12, 12, L - 24, D - 24, H))
-    lid = box(0, -6, H, L, D + 12, 14, 3)
+    L, D, HF, HB, t = TB_L, TB_D, TB_HF, TB_HB, 4
+    outer = tb_trim(prism(TB_PROF, -300, L + 600))
+    inner = tb_trim(prism([(t, t), (t, 2000), (D - t, 2000), (D - t, t)], -300, L + 600), t + 2)
+    shell = cut(cut(outer, inner), prism([(-50, HF), (240, HB), (-50, HB + 500)], -300, L + 600))   # open top under the lid
+    shell = cut(shell, prism([(-50, HB), (D + 50, HB), (D + 50, HB + 500), (-50, HB + 500)], -300, L + 600))
+    lid = tb_trim(prism([(-8, HF - 2), (-8, HF + 6), (238, HB + 8), (D + 4, HB + 8), (D + 4, HB), (240, HB), (0, HF - 2)], -300, L + 600), -6)
     if open_:
-        lid = rot(lid, (0, D + 6, H), (1, 0, 0), 105)
-    # red mushroom "Brake lock valve" button with its yellow plate, left end of the front face (video 1000008501)
-    valve = [cyl((110, 0, 250), (0, -1, 0), 14, 22), cyl((110, -22, 250), (0, -1, 0), 30, 14), sph((110, -30, 250), 26)]
-    valve = [cut(comp(valve[1:]), box(60, -2, 200, 100, 20, 100))] + valve[:1]
-    plate = box(165, -3, 225, 120, 3, 55, 2)
+        lid = rot(lid, (0, D, HB), (1, 0, 0), 100)
+    # red mushroom "Brake lock valve" button and its yellow plate, left end of the front face
+    valve = [cyl((260, 0, 80), (0, -1, 0), 12, 20), cut(comp([cyl((260, -20, 80), (0, -1, 0), 26, 12), sph((260, -26, 80), 22)]), box(220, -2, 40, 80, 20, 80))]
+    plate = box(305, -3, 55, 110, 3, 50)
     latch = []
-    for x in (480, L - 260):                                                   # two over-centre draw latches on the lid edge
-        latch += [box(x, -10, H - 70, 40, 10, 60, 3), box(x + 8, -16, H - 120, 24, 6, 60, 2)]
+    for x in (620, 1080):                                                      # two over-centre draw latches on the lid edge
+        latch += [box(x, -10, HF - 55, 40, 10, 45, 3), box(x + 8, -16, HF - 95, 24, 6, 50)]
         if not open_:
-            latch.append(box(x + 4, -12, H + 2, 32, 8, 10, 2))                    # keeper on the lid
+            latch.append(box(x + 4, -14, HF + 2, 32, 8, 10))                       # keeper on the lid
     parts = [shell, lid, plate] + valve + latch
-    if open_:   # layout seen in RRS videos 1000008495 / 1000008498 / 1000008501
-        W = D - 12                                                                                                       # inner face of the back wall
-        parts += [box(30, 70, 12, 250, 170, 190, 6)]                                                                     # battery (Amaron GO 12 V)
-        parts += [cyl((70, 200, 202), (0, 0, 1), 26, 34), cyl((70, 200, 236), (0, 0, 1), 18, 14)]                        # + terminal, red cover
-        parts += [cyl((240, 200, 202), (0, 0, 1), 14, 26)]                                                               # - terminal
-        parts += [cyl((155, 52, 12), (0, 0, 1), 6, 215), box(140, 52, 202, 30, 180, 10), cyl((155, 52, 150), (0, -1, 0), 16, 4)]  # J-bolt hold-down
-        parts += [box(310, W - 55, 140, 200, 55, 170, 8), box(322, W - 59, 152, 176, 4, 146),                        # Break-Away unit on the back wall
-                  cyl((350, W - 58, 270), (0, -1, 0), 12, 18), cyl((480, W - 58, 250), (0, -1, 0), 14, 6)]
-        parts += [box(540, W - 70, 150, 230, 70, 140, 6)] + [box(552 + 18 * k, W - 76, 160, 8, 6, 120) for k in range(12)]   # black control box (ribbed)
-        parts += [tor((400 + 90 * k, W - 70, 100), (1, 0, 0), 26, 7) for k in range(5)]                                   # wiring harness and plugs
-        parts += [box(330 + 120 * k, W - 95, 70, 40, 26, 30, 3) for k in range(4)]
+    if open_:   # layout seen on the RRS trailer (battery left, Break-Away unit and control box on the back wall, storage right)
+        W = D - t
+        parts += [box(300, 105, t, 230, 160, 175, 6)]                                                                   # battery (Amaron GO 12 V)
+        parts += [cyl((335, 235, 179), (0, 0, 1), 22, 28), cyl((335, 235, 207), (0, 0, 1), 15, 12)]                      # + terminal, red cover
+        parts += [cyl((495, 235, 179), (0, 0, 1), 12, 22)]                                                              # - terminal
+        parts += [cyl((415, 92, t), (0, 0, 1), 6, 195), box(400, 92, 179, 30, 170, 10), cyl((415, 92, 120), (0, -1, 0), 14, 4)]   # J-bolt hold-down
+        parts += [box(570, W - 50, 70, 190, 50, 170, 8), box(582, W - 54, 82, 166, 4, 140),                           # Break-Away unit on the back wall
+                  cyl((610, W - 54, 200), (0, -1, 0), 11, 16), cyl((730, W - 54, 180), (0, -1, 0), 13, 6)]
+        parts += [box(790, W - 65, 90, 220, 65, 140, 6)] + [box(802 + 17 * k, W - 71, 100, 8, 6, 120) for k in range(12)]   # black control box (ribbed)
+        parts += [tor((620 + 90 * k, W - 60, 40), (1, 0, 0), 24, 6) for k in range(5)]                                    # wiring harness and plugs
+        parts += [box(580 + 115 * k, W - 90, t, 40, 26, 30, 3) for k in range(4)]
     return parts
 
 

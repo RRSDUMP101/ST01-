@@ -250,7 +250,7 @@ page("3. เบรกหางลาก (Trailer brakes)", band("3. เบรก
 
 page("3. เบรกหางลาก (Trailer brakes)", band("3. เบรกหางลาก", "Trailer brakes") +
      h3("3.3 วาล์วล็อกเบรก", "Brake lock valve") +
-     M.view("p_toolbox", [("c", (110, -40, 250), 45), ("n", (110, -40, 250), 1, -60, 60), ("t", (225, -3, 230), "Brake lock valve", 40, -45)], "❶ ปุ่มวาล์วล็อกเบรก ด้านหน้ากล่องเครื่องมือ", "m") +
+     M.view("p_toolbox", [("c", (260, -26, 80), 40), ("n", (260, -26, 80), 1, -70, 40), ("t", (360, -3, 80), "Brake lock valve", 60, -70)], "❶ ปุ่มวาล์วล็อกเบรก ด้านหน้ากล่องเครื่องมือ", "m") +
      para("ปุ่มสีแดง ❶ ด้านหน้ากล่องเครื่องมือ (ป้ายเหลือง Brake lock valve – วาล์วล็อคเบรค) ใช้ล็อกเบรกหางลากค้างไว้ขณะจอด กดปุ่มลงเพื่อล็อก หมุนตามลูกศรบนปุ่มให้ปุ่มเด้งขึ้นเพื่อปลด",
           "Red button ❶ on the front of the tool box (yellow plate Brake lock valve) holds the trailer brakes on while parked: press it in to lock, turn it the way of the arrows so it pops out to release.") +
      steps(("จอดและหนุนล้อแล้ว กดปุ่ม ❶ เพื่อล็อกเบรก", "Once parked and chocked, press button ❶ to lock the brakes."),
@@ -292,16 +292,16 @@ page("5. ประตูตู้ (Box doors)", band("5. ประตูตู�
             ("หล่อลื่นบานพับและกลอนทุกเดือน และทำความสะอาดซีลยางเพื่อกันน้ำรั่ว (หัวข้อ 8)", "Lubricate hinges and bolts monthly and clean the seals to keep water out (section 8).")))
 
 page("5. ประตูตู้ (Box doors)", band("5. ประตูตู้และกล่องเครื่องมือ", "Box doors and tool box") + h3("5.3 กล่องเครื่องมือหน้า", "Front tool box") +
-     para("กล่องเครื่องมืออะลูมิเนียมลายกันลื่นบนคานลาก สำหรับเก็บโซ่ สายรัด ลิ่มหนุนล้อ และอุปกรณ์ลากจูง ฝาเปิดขึ้นด้านบน ยึดด้วยสลักล็อกแบบคันโยก 2 ตัว ❷ ด้านหน้ากล่องมีปุ่มแดงวาล์วล็อกเบรก ❶ (Brake lock valve) ดูหัวข้อ 3.3",
-          "Tread-plate aluminium tool box on the drawbar for chains, straps, wheel chocks and towing gear. The lid lifts up and is held by two draw latches ❷. Red Brake lock valve button ❶ is on the front (see 3.3).") +
-     M.view("p_toolbox", [("c", (110, -40, 250), 45), ("n", (110, -40, 250), 1, -60, 60), ("n", (500, -16, 280), 2, -40, 90), ("n", (860, -16, 280), 2, 50, 70)], "❶ ปุ่มวาล์วล็อกเบรก (ป้ายเหลือง) · ❷ สลักล็อกฝา 2 ตัว · ฝาเปิดขึ้น", "h2") +
+     para("กล่องเครื่องมืออะลูมิเนียมลายกันลื่นทรงคางหมูบนคานลากหน้าตู้ (ฝาลาดเอียงขึ้นหาผนังตู้ ปลายสองข้างเฉียงตามคานลาก) สำหรับเก็บโซ่ สายรัด ลิ่มหนุนล้อ และอุปกรณ์ลากจูง ฝาเปิดขึ้นด้านบน ยึดด้วยสลักล็อกแบบคันโยก 2 ตัว ❷ ด้านหน้ากล่องมีปุ่มแดงวาล์วล็อกเบรก ❶ (Brake lock valve) ดูหัวข้อ 3.3",
+          "Trapezoid tread-plate aluminium tool box on the drawbar in front of the body (lid sloping up to the body wall, ends angled along the A-frame) for chains, straps, wheel chocks and towing gear. The lid lifts up and is held by two draw latches ❷. Red Brake lock valve button ❶ is on the front (see 3.3).") +
+     M.view("p_toolbox", [("c", (260, -26, 80), 40), ("n", (260, -26, 80), 1, -70, 40), ("n", (640, -16, 110), 2, -30, 100), ("n", (1100, -16, 110), 2, 40, 100)], "❶ ปุ่มวาล์วล็อกเบรก (ป้ายเหลือง) · ❷ สลักล็อกฝา 2 ตัว · ฝาเปิดขึ้น", "s") +
      steps(("ง้างคันโยกสลัก ❷ ทั้งสองตัวออก แล้วยกฝาขึ้น", "Pull out both draw-latch levers ❷ and lift the lid."),
            ("การปิด: ปิดฝาให้สนิท เกี่ยวห่วงสลัก ❷ กับขอบฝา แล้วกดคันโยกลงจนล็อกทั้งสองตัว", "To close: shut the lid, hook both latches ❷ onto the lid and press the levers home.")) +
      warn(("ปิดและล็อกฝากล่องก่อนลากทุกครั้ง ของในกล่องที่หลุดออกมาอาจตกลงถนน", "Close and lock the lid before every tow; loose items could fall onto the road."),
           ("ห้ามนั่งหรือยืนบนกล่องเครื่องมือ", "Do not sit or stand on the tool box.")))
 
 page("5. ประตูตู้ (Box doors)", band("5. ประตูตู้และกล่องเครื่องมือ", "Box doors and tool box") + h3("5.4 ระบบภายในกล่องเครื่องมือ", "Inside the tool box") +
-     M.view("p_toolbox_open", [("n", (230, 120, 202), 1, 60, 120), ("n", (155, 140, 212), 2, -80, 110), ("n", (410, 350, 230), 3, -60, -110), ("n", (655, 338, 220), 4, 0, -120), ("n", (580, 338, 100), 5, 40, 110), ("n", (930, 200, 12), 6, 0, -100)], "เปิดฝา มองจากด้านหน้า", "xs") +
+     M.view("p_toolbox_open", [("n", (415, 185, 179), 1, -100, -40), ("n", (415, 92, 150), 2, -60, 90), ("n", (665, 235, 155), 3, -60, -100), ("n", (900, 224, 160), 4, 0, -110), ("n", (800, 229, 40), 5, 60, 90), ("n", (1250, 150, 4), 6, 40, 110)], "เปิดฝา มองจากด้านหน้า", "m") +
      table(["#", "อุปกรณ์ (Item)", "การใช้งาน / ข้อควรรู้ (Use)"], [
          ['<span class="numdot">1</span>', "แบตเตอรี่ 12 V (Amaron GO) ขั้วบวกมีฝาครอบสีแดง" + en("12 V battery, red cover on the + terminal"), "จ่ายไฟให้ระบบในกล่องและเบรกฉุกเฉิน ชาร์จจากรถผ่านสายขดสีเขียว (2.3)" + en("Powers the box and breakaway brakes; charged via the green lead (2.3)")],
          ['<span class="numdot">2</span>', "ตัวรัดแบตเตอรี่ (เหล็กฉากพร้อมสลักเกลียว)" + en("Battery hold-down bar and J-bolt"), "ยึดแบตเตอรี่ไม่ให้ขยับขณะลาก ตรวจความแน่นเป็นประจำ" + en("Keeps the battery still when towing; check it is tight")],
@@ -311,7 +311,7 @@ page("5. ประตูตู้ (Box doors)", band("5. ประตูตู�
          ['<span class="numdot">6</span>', "พื้นที่เก็บของด้านขวา" + en("Storage space on the right"), "เก็บลิ่มหนุนล้อ สายรัด และอุปกรณ์ลากจูง" + en("For wheel chocks, straps and towing gear")]], [7, 40, 53], "plist care"))
 
 page("5. ประตูตู้ (Box doors)", band("5. ประตูตู้และกล่องเครื่องมือ", "Box doors and tool box") + h3("5.4 ระบบภายในกล่องเครื่องมือ (ต่อ)", "Inside the tool box (continued)") +
-     '<div class="side2">' + M.view("p_tb_bat", [("n", (220, 150, 202), 1, 120, 40), ("n", (155, 140, 212), 2, -40, 160), ("n", (410, 350, 230), 3, -160, -40)], "❶ แบตเตอรี่ · ❷ ตัวรัด · ❸ กล่องเบรกฉุกเฉิน") + '<div>' +
+     '<div class="side2 w">' + M.view("p_tb_bat", [("n", (415, 185, 179), 1, -150, -60), ("n", (415, 92, 150), 2, -100, 150), ("n", (665, 235, 155), 3, -40, -150)], "❶ แบตเตอรี่ · ❷ ตัวรัด · ❸ กล่องเบรกฉุกเฉิน") + '<div>' +
      h4("ตรวจก่อนลากทุกครั้ง", "Check before every tow") +
      steps(("ตรวจว่าขั้วแบตเตอรี่แน่น ไม่มีขี้เกลือ และฝาครอบขั้วบวกสีแดงปิดอยู่", "Check the battery terminals are tight and clean and the red + cover is on."),
            ("กดปุ่ม TEST ที่กล่อง ❸ และอ่านไฟสถานะ (3.2)", "Press TEST on unit ❸ and read the lamps (3.2)."),

@@ -389,8 +389,9 @@ raw('''<div class="back"><img src="logo_white.png"><h2>บริษัท รุ
 <p>ที่อยู่ ______________________________________________<br>โทรศัพท์ ____________________ · LINE ____________________<br>อีเมล ____________________ · เว็บไซต์ rungruengdump101.com</p>
 <small>คู่มือการใช้งาน หางลากพ่วงตู้ทึบ RRS · Owner Manual – RRS Enclosed Box Trailer · P/N ____________</small></div>''', "nocrop")
 
-save("booklet.html", "RRS Owner Manual – Box Trailer", extra_css=M.CSS + '.tab{display:none}' + open(HERE / "style.css", encoding="utf-8").read() + '''
-.coverfig.tr{top:141mm;left:18mm;right:8mm}.coverfig.tr .mvin img{max-height:70mm}.coverfig.tr svg{width:100%;max-height:60mm}
+A5 = '@page{size:148mm 210mm;margin:0}.page{width:185mm;height:262.5mm}'   # design page at A5 ratio; pdf.js prints it at 80 % = 148 x 210 mm
+save("booklet.html", "RRS Owner Manual – Box Trailer", extra_css=M.CSS + A5 + '.tab{display:none}' + open(HERE / "style.css", encoding="utf-8").read() + '''
+.coverfig.tr{top:146mm;left:18mm;right:8mm}.coverfig.tr .mvin img{max-height:86mm}.coverfig.tr svg{width:100%;max-height:60mm}
 svg.diagram{width:100%;display:block}.figbox svg.diagram{max-height:60mm}.figbox.s svg.diagram{max-height:52mm}
 .two2{display:flex;gap:5mm;align-items:flex-start}.two2>.figbox{flex:0 0 40%}.two2>.mv{flex:0 0 32%}.two2>table{flex:1}
 .figbox svg.dwg{max-height:46mm}.figbox.s svg.dwg{max-height:34mm}.figbox.xs svg.dwg{max-height:24mm}

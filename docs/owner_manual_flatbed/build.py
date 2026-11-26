@@ -356,11 +356,11 @@ page("7. การดูแลรักษาและค่าแรงขั�
          ["หลังล้างรถ หรือบรรทุกวัสดุกัดกร่อน<br><span class=\"en\">After washing or corrosive loads</span>", ["ล้างคราบออก และหล่อลื่นบานพับซ้ำ<span class=\"en-line\">Rinse off and re-lubricate the hinges</span>"], "ผู้ใช้รถ<br><span class=\"en\">Driver</span>"]], [27, 55, 18], "care") +
      h3("ค่าแรงขันมาตรฐาน", "Installation torque") +
      table(["จุดขัน (Joint)", "สลัก (Bolt)", "แรงขัน (Torque)"], [
-         ["แท่นยึดกระบะกับแชสซีส์ (Body to chassis)", "M12 เกรด 10.9 ขึ้นไป", "95–125 N·m (Ford BEMM)"],
+         ["แท่นยึดกระบะกับแชสซีส์ (Body to chassis)", "M12 เกรด ≥ 10.9", "95–125 N·m"],
          ["บานพับฝาข้าง / ฝาท้าย (Gate hinges)", "M12×65 / M12×60", f"{B} N·m"],
          ["ตะแกรงกันหัว – เขาบน (Headboard top horns)", "M12×100", f"{B} N·m"],
          ["ตะแกรงกันหัว – แผงตะแกรง (Headboard panel)", "M8 / M6", f"{B} N·m"],
-         ["ขายึดบังโคลน (Mudguard bracket)", f"{B}", f"{B} N·m"], ["คอกเสริมกับขอบฝา (Add-on rack to gate rail)", "M12×1.25", f"{B} N·m"]], [46, 26, 28]))
+         ["ขายึดบังโคลน (Mudguard bracket)", f"{B}", f"{B} N·m"], ["คอกเสริมกับขอบฝา (Add-on rack to gate rail)", "M12×1.25", f"{B} N·m"]], [54, 22, 24]))
 
 # ---------------------------------------------------------------- 8 service data
 page("8. ข้อมูลสำหรับศูนย์บริการ (Service-centre data)", band("8. ข้อมูลสำหรับศูนย์บริการ", "Service-centre data") +
@@ -385,7 +385,8 @@ raw('''<div class="back"><img src="logo_white.png"><h2>บริษัท รุ
 <p>ที่อยู่ ______________________________________________<br>โทรศัพท์ ____________________ · LINE ____________________<br>อีเมล ____________________ · เว็บไซต์ rungruengdump101.com</p>
 <small>คู่มือการใช้งาน กระบะพื้นเรียบคาร์โก้ RRS · Owner Manual – RRS Cargo Flatbed · P/N ____________</small></div>''', "nocrop")
 
-save("booklet.html", "RRS Owner Manual – Cargo Flatbed", extra_css=M.CSS + '''
+A5 = '@page{size:148mm 210mm;margin:0}.page{width:185mm;height:262.5mm}'   # design page at A5 ratio; pdf.js prints it at 80 % = 148 x 210 mm
+save("booklet.html", "RRS Owner Manual – Cargo Flatbed", extra_css=M.CSS + A5 + '''
 .en{color:#5b6577;font-weight:normal;font-size:.82em}.en-line{display:block;color:#5b6577;font-size:.86em;margin-top:.3mm}
 .sband{background:#0B2A5B;color:#fff;padding:2.6mm 4mm;border-left:4mm solid #00B4F0;margin:0 0 2.5mm}.sband b{display:block;font-size:13pt;line-height:1.3}.sband span{display:block;font-size:9pt;color:#b9d2f5;margin-top:.5mm}
 p.for{font-size:9pt;color:#1257C8;margin:0 0 2.5mm}p.for b{color:#0B2A5B}
@@ -397,7 +398,7 @@ ol.sublist{list-style:none;padding-left:6mm;margin:0 0 3mm}ol.sublist li{margin-
 .remark{background:#EAF2FB;border-left:2.5pt solid #1257C8;padding:2mm 3.5mm;margin:2.5mm 0;font-size:9.6pt}.remark b{color:#0B2A5B}.remark p{margin:.6mm 0}
 .figbox{margin:1mm 0 2mm;text-align:center}.figbox svg.dwg{width:100%;max-height:52mm}.figbox.s svg.dwg{max-height:34mm}.figbox.m svg.dwg{max-height:44mm}table.care td{padding:1.1mm 2.2mm;font-size:9pt}table.care ul.vl li{margin-bottom:.4mm}.figbox svg.dwg.small{max-height:44mm}
 .figrow{display:flex;gap:5mm;align-items:flex-end}.figrow .figbox{flex:1}
-.coverfig{position:absolute;top:150mm;left:30mm;right:16mm}.coverfig svg{width:100%;max-height:64mm}
+.coverfig{position:absolute;top:150mm;left:30mm;right:16mm}.coverfig svg{width:100%;max-height:64mm}.coverfig .mvin img{max-height:84mm}
 .cover .ctitle h1{font-size:34pt}.cover .cabs{font-size:10pt;color:#5b6577;margin-top:3mm}
 table.toc td{padding:.75mm 2.2mm;font-size:9.2pt}table.toc tr.grp td{background:#EAF2FB!important;color:#0B2A5B;font-weight:bold}table.toc td.pg{text-align:right;color:#1257C8;font-weight:bold}table.toc td.n{color:#1257C8;font-weight:bold}
 table.plist td{padding:1.4mm 2.5mm}.numdot{display:inline-flex;width:6mm;height:6mm;border-radius:50%;background:#0B2A5B;color:#fff;font-weight:bold;align-items:center;justify-content:center;font-size:9pt}

@@ -208,7 +208,7 @@ page("2. การพ่วงและปลดพ่วง (Coupling and uncou
            ("เสียบปลั๊กสายขดสีเขียว (สายไฟชาร์จแบตเตอรี่หางลาก) เข้าเต้ารับเหลี่ยมบนชุดลากจนล็อก จัดสายทั้งหมดให้หย่อนพอเลี้ยวได้ ไม่พันโซ่และไม่ลากพื้น", "Plug the green coiled cable (trailer battery charging lead) into the square socket on the towbar until it locks; leave all cables slack enough for turns, clear of the chains and the road."),
            ("ให้ผู้ช่วยตรวจไฟหรี่ ไฟเบรก ไฟเลี้ยว และไฟถอยทุกดวง (หัวข้อ 4)", "Have a helper check the tail, stop, turn and reversing lamps (section 4).")) +
      remark(("หน้าที่ขา 1–7 จาก WI-PD-63 · ขา 8–12 ให้ RRS ยืนยันตามแบบสาย", "Pins 1–7 from WI-PD-63 · pins 8–12 to be confirmed by RRS from the wiring drawing."),
-            ("วิดีโอ RRS: สายขดดำเข้าเต้ารับกลม · สายขดเขียวเข้าเต้ารับเหลี่ยม · RRS ยืนยันชนิดปลั๊กและหน้าที่สาย", "RRS videos 1000008500–8501: black coiled cable to the round socket · green coiled cable to the square socket · RRS to confirm the plug types and what each lead carries.")))
+            ("สายขดดำเข้าเต้ารับกลม · สายขดเขียวเข้าเต้ารับเหลี่ยม · RRS ยืนยันชนิดปลั๊กและหน้าที่สาย", "Black coiled cable to the round socket · green coiled cable to the square socket · RRS to confirm the plug types and what each lead carries.")))
 
 page("2. การพ่วงและปลดพ่วง (Coupling and uncoupling)", band("2. การพ่วงและปลดพ่วง", "Coupling and uncoupling") + h3("2.4 การปลดพ่วง", "Uncoupling") +
      steps(("จอดบนพื้นเรียบและแข็ง เข้าเกียร์ P และดึงเบรกมือรถลาก", "Park on firm, level ground, select P and apply the car's parking brake."),
@@ -246,7 +246,7 @@ page("3. เบรกหางลาก (Trailer brakes)", band("3. เบรก
      warn(("ห้ามลากถ้าไฟแสดง Recharge! หรือไฟไม่ติดเมื่อกด TEST", "Do not tow if Recharge! shows or no lamp lights when TEST is pressed."),
           ("ถ้าสลักหลุดโดยไม่ตั้งใจ ให้เสียบกลับทันที เบรกจะค้างและแบตเตอรี่จะหมด", "If the pin is pulled by accident, refit it at once: the brakes stay on and the battery drains.")) +
      remark(("สีสายของกล่อง (สำหรับช่าง): ขาว = กราวด์ · น้ำเงิน = เบรก · ดำ = แบตเตอรี่", "Unit wire colours (for technicians): white = earth · blue = brakes · black = battery."),
-            ("ข้อมูลจากกล่องเบรกฉุกเฉินที่ RRS ติดตั้ง (วิดีโอ 1000008383) · รุ่นและวิธีชาร์จให้ RRS ระบุ", "From the breakaway unit fitted by RRS (video 1000008383) · model and charging method to be stated by RRS.")))
+            ("รุ่นกล่องเบรกฉุกเฉินและวิธีชาร์จให้ RRS ระบุ", "Breakaway unit model and charging method to be stated by RRS.")))
 
 page("3. เบรกหางลาก (Trailer brakes)", band("3. เบรกหางลาก", "Trailer brakes") +
      h3("3.3 วาล์วล็อกเบรก", "Brake lock valve") +
@@ -256,7 +256,7 @@ page("3. เบรกหางลาก (Trailer brakes)", band("3. เบรก
      steps(("จอดและหนุนล้อแล้ว กดปุ่ม ❶ เพื่อล็อกเบรก", "Once parked and chocked, press button ❶ to lock the brakes."),
            ("ก่อนออกรถ หมุนปลดให้ปุ่มเด้งขึ้น แล้วออกรถช้า ๆ ตรวจว่าล้อหางลากหมุนได้ไม่ฝืด", "Before moving off, turn it to release so it pops out, then pull away slowly and check the trailer wheels roll freely.")) +
      warn(("ห้ามลากขณะวาล์วล็อกเบรกอยู่ เบรกและยางจะร้อนและเสียหาย · วาล์วล็อกเบรกไม่ใช่สิ่งทดแทนลิ่มหนุนล้อ", "Never tow with the valve locked: brakes and tyres overheat. The valve does not replace wheel chocks.")) +
-     remark(("วิธีใช้งานจากป้ายและปุ่มในวิดีโอ RRS (1000008501) · ให้ RRS ยืนยันการทำงานและระยะเวลาที่ล็อกได้", "Operation from the plate and button in RRS video 1000008501 · RRS to confirm how it works and how long it holds.")))
+     remark(("ให้ RRS ยืนยันการทำงานและระยะเวลาที่ล็อกได้", "RRS to confirm how it works and how long it holds.")))
 
 # ---------------------------------------------------------------- 4 lamps and camera
 page("4. ไฟและกล้องมองหลัง (Lamps and rear camera)", band("4. ไฟและกล้องมองหลัง", "Lamps and rear camera") +
@@ -288,7 +288,7 @@ page("5. ประตูตู้ (Box doors)", band("5. ประตูตู�
            ("เปิดบานจนสุดและยึดไว้ ไม่ปล่อยให้บานแกว่งขณะขนของ", "Open each leaf fully and hold it; do not let it swing while loading."),
            ("การปิด: ปิดบานแรก หมุนคานล็อกให้ลูกเบี้ยวเข้าตัวรับ กดมือจับลงในตัวล็อก แล้วปิดบานที่สองแบบเดียวกัน ตรวจซีลยางว่าแนบสนิท", "To close: shut the first leaf, turn its bars so the cams engage, press the handles into their retainers, then do the same with the second leaf and check the seal sits tight.")) +
      para("ประตูหน้า (ด้านหัวลาก) ใช้สำหรับเข้าถึงด้านหน้าตู้ เปิดได้เมื่อหางลากจอดและปลดล็อกแล้วเท่านั้น", "The front door (drawbar end) gives access to the front of the box; open it only when the trailer is parked.") +
-     remark(("ประตูท้ายใช้คานล็อกแบบเดียวกับประตูข้าง (วิดีโอ 1000008381) · บานประตูท้ายยังไม่อยู่ในแบบ 3D", "The rear doors use the same locking bars as the side doors (video 1000008381) · rear door leaves are not yet in the 3D model."),
+     remark(("ประตูท้ายใช้คานล็อกแบบเดียวกับประตูข้าง · บานประตูท้ายยังไม่อยู่ในแบบ 3D", "The rear doors use the same locking bars as the side doors · rear door leaves are not yet in the 3D model."),
             ("หล่อลื่นบานพับและกลอนทุกเดือน และทำความสะอาดซีลยางเพื่อกันน้ำรั่ว (หัวข้อ 8)", "Lubricate hinges and bolts monthly and clean the seals to keep water out (section 8).")))
 
 page("5. ประตูตู้ (Box doors)", band("5. ประตูตู้และกล่องเครื่องมือ", "Box doors and tool box") + h3("5.3 กล่องเครื่องมือหน้า", "Front tool box") +
@@ -298,11 +298,10 @@ page("5. ประตูตู้ (Box doors)", band("5. ประตูตู�
      steps(("ง้างคันโยกสลัก ❷ ทั้งสองตัวออก แล้วยกฝาขึ้น", "Pull out both draw-latch levers ❷ and lift the lid."),
            ("การปิด: ปิดฝาให้สนิท เกี่ยวห่วงสลัก ❷ กับขอบฝา แล้วกดคันโยกลงจนล็อกทั้งสองตัว", "To close: shut the lid, hook both latches ❷ onto the lid and press the levers home.")) +
      warn(("ปิดและล็อกฝากล่องก่อนลากทุกครั้ง ของในกล่องที่หลุดออกมาอาจตกลงถนน", "Close and lock the lid before every tow; loose items could fall onto the road."),
-          ("ห้ามนั่งหรือยืนบนกล่องเครื่องมือ", "Do not sit or stand on the tool box.")) +
-     remark(("ข้อมูลจากกล่องเครื่องมือที่ RRS ติดตั้ง (วิดีโอ 1000008385, 1000008495, 1000008501)", "From the tool box fitted by RRS (videos 1000008385, 1000008495, 1000008501).")))
+          ("ห้ามนั่งหรือยืนบนกล่องเครื่องมือ", "Do not sit or stand on the tool box.")))
 
 page("5. ประตูตู้ (Box doors)", band("5. ประตูตู้และกล่องเครื่องมือ", "Box doors and tool box") + h3("5.4 ระบบภายในกล่องเครื่องมือ", "Inside the tool box") +
-     M.view("p_toolbox_open", [("n", (230, 120, 202), 1, 60, 120), ("n", (155, 140, 212), 2, -80, 110), ("n", (410, 350, 230), 3, -60, -110), ("n", (655, 338, 220), 4, 0, -120), ("n", (580, 338, 100), 5, 40, 110), ("n", (930, 200, 12), 6, 0, -100)], "เปิดฝา มองจากด้านหน้า (จากวิดีโอ RRS)", "xs") +
+     M.view("p_toolbox_open", [("n", (230, 120, 202), 1, 60, 120), ("n", (155, 140, 212), 2, -80, 110), ("n", (410, 350, 230), 3, -60, -110), ("n", (655, 338, 220), 4, 0, -120), ("n", (580, 338, 100), 5, 40, 110), ("n", (930, 200, 12), 6, 0, -100)], "เปิดฝา มองจากด้านหน้า", "xs") +
      table(["#", "อุปกรณ์ (Item)", "การใช้งาน / ข้อควรรู้ (Use)"], [
          ['<span class="numdot">1</span>', "แบตเตอรี่ 12 V (Amaron GO) ขั้วบวกมีฝาครอบสีแดง" + en("12 V battery, red cover on the + terminal"), "จ่ายไฟให้ระบบในกล่องและเบรกฉุกเฉิน ชาร์จจากรถผ่านสายขดสีเขียว (2.3)" + en("Powers the box and breakaway brakes; charged via the green lead (2.3)")],
          ['<span class="numdot">2</span>', "ตัวรัดแบตเตอรี่ (เหล็กฉากพร้อมสลักเกลียว)" + en("Battery hold-down bar and J-bolt"), "ยึดแบตเตอรี่ไม่ให้ขยับขณะลาก ตรวจความแน่นเป็นประจำ" + en("Keeps the battery still when towing; check it is tight")],
@@ -321,7 +320,7 @@ page("5. ประตูตู้ (Box doors)", band("5. ประตูตู�
      bullets(("ต่อสายขดสีเขียวกับรถเป็นระยะ หรือให้ RRS ชาร์จแบตเตอรี่ อย่าปล่อยให้ไฟสถานะขึ้น Recharge!", "Connect the green lead to the car from time to time or have RRS charge the battery; never let the lamp reach Recharge!."),
              ("ตรวจว่าสลักเบรกฉุกเฉินเสียบอยู่ และปุ่มสวิตช์ไฟในตู้ปิด เพื่อไม่ให้แบตเตอรี่หมด", "Make sure the breakaway pin is in and the interior lamps are off so the battery does not drain.")) +
      warn(("ห้ามวางโลหะพาดขั้วแบตเตอรี่หรือทำให้เกิดประกายไฟใกล้แบตเตอรี่ · งานซ่อมระบบไฟและเปลี่ยนแบตเตอรี่ให้ RRS ทำ (ถอดขั้วลบก่อนเสมอ)", "No metal across the terminals, no sparks near the battery · electrical work by RRS only.")) +
-     remark(("จากวิดีโอ RRS 1000008495, 1000008498, 1000008501 · หน้าที่กล่อง ❹ และขนาดแบตเตอรี่ให้ RRS ระบุ", "From RRS videos 1000008495, 1000008498, 1000008501 · function of box ❹ and battery size to be stated by RRS.")))
+     remark(("หน้าที่กล่อง ❹ และขนาดแบตเตอรี่ให้ RRS ระบุ", "Function of box ❹ and battery size to be stated by RRS.")))
 
 # ---------------------------------------------------------------- 6 loading
 page("6. การบรรทุก (Loading)", band("6. การบรรทุก", "Loading") +

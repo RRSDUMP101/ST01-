@@ -217,8 +217,8 @@ page("2. การพ่วงและปลดพ่วง (Coupling and uncou
            ("ถอดปลั๊กสายขดสีดำและสีเขียว เก็บใส่ที่เก็บ ปลดตะขอสายขดสีแดงและโซ่นิรภัย", "Unplug and stow the black and green coiled leads; unhook the red breakaway cable and the chains."),
            ("ถอดสลักนิรภัย ยกคันล็อก แล้วหมุนขาตั้งยกหัวต่อพ้นลูกบอล", "Remove the safety pin, lift the lever and wind the coupling clear of the ball."),
            ("เคลื่อนรถออกช้า ๆ ตรวจว่าหางลากอยู่นิ่ง และใส่ฝาครอบลูกบอล", "Drive the car away slowly, check the trailer stays put and refit the ball cover.")) +
-     M.row(M.view("p_jockey_down", [("n", (0, 102, 360), 1, 70, 0), ("n", (110, 0, 620), 2, 70, -20)], "ขาตั้งลง: ❶ ลูกบิดแดง · ❷ มือหมุน (Down)", "t"),
-           M.view("p_jockey_up", [("a", (150, 0, 300), (150, 0, 560))], "ยกขึ้นสุดก่อนลาก (Up before towing)", "t")) +
+     M.row(M.view("p_jockey_down", [("n", (0, 102, 360), 1, 90, 0), ("n", (110, 0, 620), 2, 90, -20)], "ขาตั้งลง: ❶ ลูกบิดแดง · ❷ มือหมุน (Down)", "m"),
+           M.view("p_jockey_up", [("a", (150, 0, 300), (150, 0, 560))], "ยกขึ้นสุดก่อนลาก (Up before towing)", "m")) +
      warn(("ห้ามดึงสลักสายเบรกฉุกเฉินออกขณะจอดเพื่อใช้เป็นเบรกมือ แบตเตอรี่เบรกฉุกเฉินจะหมด", "Do not pull the breakaway pin to hold a parked trailer: it drains the breakaway battery."),
           ("ห้ามปลดพ่วงบนทางลาด และห้ามทิ้งหางลากโดยไม่หนุนล้อ", "Never uncouple on a slope or leave the trailer without chocks.")))
 

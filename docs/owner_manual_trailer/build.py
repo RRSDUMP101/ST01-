@@ -283,12 +283,12 @@ page("5. ประตูตู้ (Box doors)", band("5. ประตูตู�
           ("ประตูไม่ใช่ผนังรับแรงสินค้า รัดหรือกั้นสินค้าไม่ให้พิงประตู", "Doors are not load-bearing walls: tie or brace the load so it does not lean on them.")))
 
 page("5. ประตูตู้ (Box doors)", band("5. ประตูตู้", "Box doors") + h3("5.2 ประตูท้ายและประตูหน้า", "Rear and front doors") +
-     M.view("tz_rear", [("c", (-905, 2880, 1900), 70), ("c", (905, 2880, 1900), 70)], "ประตูท้าย: บานพับสองฝั่ง (วงประ) – บานประตูยังไม่อยู่ในแบบ 3D", "t2") +
+     M.view("tz_rear", [("c", (-905, 2880, 1900), 70), ("c", (905, 2880, 1900), 70)], "ประตูท้าย: บานพับสองฝั่ง (วงประ)", "t2") +
      steps(("ยกมือจับคานล็อกออกจากตัวล็อกมือจับ แล้วหมุนคานล็อกให้ลูกเบี้ยวบน–ล่างหลุดจากตัวรับ เริ่มจากบานที่ปิดทับ", "Lift each locking-bar handle out of its retainer and turn the bar until the top and bottom cams leave their keepers, starting with the overlapping leaf."),
            ("เปิดบานจนสุดและยึดไว้ ไม่ปล่อยให้บานแกว่งขณะขนของ", "Open each leaf fully and hold it; do not let it swing while loading."),
            ("การปิด: ปิดบานแรก หมุนคานล็อกให้ลูกเบี้ยวเข้าตัวรับ กดมือจับลงในตัวล็อก แล้วปิดบานที่สองแบบเดียวกัน ตรวจซีลยางว่าแนบสนิท", "To close: shut the first leaf, turn its bars so the cams engage, press the handles into their retainers, then do the same with the second leaf and check the seal sits tight.")) +
      para("ประตูหน้า (ด้านหัวลาก) ใช้สำหรับเข้าถึงด้านหน้าตู้ เปิดได้เมื่อหางลากจอดและปลดล็อกแล้วเท่านั้น", "The front door (drawbar end) gives access to the front of the box; open it only when the trailer is parked.") +
-     remark(("ประตูท้ายใช้คานล็อกแบบเดียวกับประตูข้าง · บานประตูท้ายยังไม่อยู่ในแบบ 3D", "The rear doors use the same locking bars as the side doors · rear door leaves are not yet in the 3D model."),
+     remark(("ประตูท้ายใช้คานล็อกแบบเดียวกับประตูข้าง", "The rear doors use the same locking bars as the side doors."),
             ("หล่อลื่นบานพับและกลอนทุกเดือน และทำความสะอาดซีลยางเพื่อกันน้ำรั่ว (หัวข้อ 8)", "Lubricate hinges and bolts monthly and clean the seals to keep water out (section 8).")))
 
 page("5. ประตูตู้ (Box doors)", band("5. ประตูตู้และกล่องเครื่องมือ", "Box doors and tool box") + h3("5.3 กล่องเครื่องมือหน้า", "Front tool box") +

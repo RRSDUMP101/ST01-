@@ -64,3 +64,4 @@ python3 build.py && node pdf.js   # → RRS-Owner-Manual-Box-Trailer.pdf (รา
 - สั่งพิมพ์: สองหน้า พลิกด้านสั้น (flip on short edge) ขนาดจริง 100 % (ไม่ fit to page) → เรียงแผ่น พับครึ่ง เย็บลวดกลางสันพับ 2 จุด
 - ไม่มีระยะตัดตก (bleed) – ถ้าส่งโรงพิมพ์ที่ตัดขอบ ให้แจ้งเพื่อเพิ่ม 3 มม.
 - ส่งโรงพิมพ์: `BLEED=1 python3 build.py && BLEED=1 node pdf.js` → `*-bleed-raw.pdf` (A5 + ตัดตก 3 มม.) แล้ว `python3 ../cropmarks.py <raw> <*-A5-print-bleed.pdf>` → แผ่น 174 × 236 มม. มีเส้นตัด TrimBox/BleedBox (แถบสีปก ท้ายปก ยืดเข้าระยะตัดตก) จากนั้น build ปกติอีกครั้ง
+- spec.py: กรอบ IN ขยาย (y ≤ 3700, z ≤ 3800) เพราะแผ่นหลังคาท้ายและแผ่นผนังท้ายใน IGES มี bounding box ของผิวเกินกรอบเดิม ทำให้ถูกตัดออกจากภาพ → ภาพ t_rear/t_front/t_side/tz_rear มีหลังคาและผนังท้ายครบ

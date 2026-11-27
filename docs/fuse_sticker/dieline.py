@@ -47,8 +47,12 @@ def boxes(page):
     page.bleedbox = RectangleObject([0, 0, PW, PH])
 
 
-def ocg(w, name):
-    return w._add_object(DictionaryObject({NameObject("/Type"): NameObject("/OCG"), NameObject("/Name"): TextStringObject(name)}))
+def ocg(w, name, show=True):
+    d = DictionaryObject({NameObject("/Type"): NameObject("/OCG"), NameObject("/Name"): TextStringObject(name)})
+    if not show:   # never printed, never shown unless switched on; cutter software still reads the layer
+        st = lambda v: DictionaryObject({NameObject("/PrintState" if v == "p" else "/ViewState"): NameObject("/OFF")})
+        d[NameObject("/Usage")] = DictionaryObject({NameObject("/Print"): st("p"), NameObject("/View"): st("v")})
+    return w._add_object(d)
 
 
 def page_with(w, ops, res):
@@ -67,7 +71,7 @@ def main(src):
     # 1. layered: the artwork page itself (cloned with its fonts), its content wrapped in layer L0, the cut path in L1
     w = PdfWriter()
     pg = w.add_page(art)
-    l_art, l_cut = ocg(w, "Artwork"), ocg(w, "CutContour")
+    l_art, l_cut = ocg(w, "Artwork"), ocg(w, "CutContour", show=False)
     body = pg.get_contents().get_data()
     st = StreamObject(); st.set_data(b"/OC /L0 BDC q\n" + body + f"\nQ EMC /OC /L1 BDC q /CS0 CS 1 SCN 0.25 w {CUT} S Q EMC".encode())
     pg[NameObject("/Contents")] = w._add_object(st)
@@ -77,7 +81,8 @@ def main(src):
     boxes(pg)
     w._root_object[NameObject("/OCProperties")] = DictionaryObject({
         NameObject("/OCGs"): ArrayObject([l_art, l_cut]),
-        NameObject("/D"): DictionaryObject({NameObject("/Order"): ArrayObject([l_art, l_cut]), NameObject("/ON"): ArrayObject([l_art, l_cut]),
+        NameObject("/D"): DictionaryObject({NameObject("/Order"): ArrayObject([l_art, l_cut]), NameObject("/ON"): ArrayObject([l_art]),
+                                            NameObject("/OFF"): ArrayObject([l_cut]),           # cut line hidden on screen / print
                                             NameObject("/Name"): TextStringObject("Layers")})})
     w.add_metadata({"/Title": "RRS fuse/relay sticker 145x55 mm – Artwork + CutContour"})
     w.write("RRS-Fuse-Sticker-PRINT-layered.pdf")

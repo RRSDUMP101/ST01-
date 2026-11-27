@@ -15,7 +15,8 @@ add += [P.move(P.rot(x, (0, 0, 0), (0, 0, 1), 90), (115, -4250, 161)) for x in j
 import math
 for side in (1, -1):
     xo = 1120 * side; d = (side, 0, 0)
-    X = lambda v: xo - side * v                       # v mm in from the outer face
+    X = lambda v: xo + side * (50 - v)                # rim parts stand proud of the CAD tyre side (a solid disc)
+    T = lambda v: xo - side * v                       # v mm in from the tyre side face
     for yc in (-706, 244):
         zc = 346
         add.append(P.tor((X(14), yc, zc), d, 205, 8))                                         # rim lip
@@ -27,8 +28,8 @@ for side in (1, -1):
         add.append(P.cyl((X(30), yc, zc), d, 72, 14))                                         # hub face
         add.append(P.cyl((X(20), yc, zc), d, 46, 32))                                         # hub cap
         add += [P.cyl((X(20), yc + 88 * math.cos(math.radians(60 * k)), zc + 88 * math.sin(math.radians(60 * k))), d, 11, 16) for k in range(6)]   # wheel nuts
-        add.append(P.tor((X(4), yc, zc), d, 275, 5))                                          # sidewall bead line
-        add += [P.tor((X(v), yc, zc), d, 345, 5) for v in (45, 85, 115, 155)]                 # tread grooves
+        add.append(P.tor((T(-4), yc, zc), d, 280, 5))                                          # sidewall bead line
+        add += [P.tor((T(v), yc, zc), d, 345, 5) for v in (45, 85, 115, 155)]                 # tread grooves
 # roof: seam caps over the panel joins, drip rails along the eaves, end caps
 for yj in (-1710, -576, 557, 1693):
     add.append(P.box(-992, yj - 22, 3053, 1984, 44, 10))

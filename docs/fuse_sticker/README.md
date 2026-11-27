@@ -6,3 +6,11 @@
   (ตรงกับรูปกล่องจริง: ฟิวส์ใส 2 · แดง 3 · เขียว 2 · แดง 4)
 - `python3 make.py && node pdf.js` → `RRS-Trailer-Fuse-Relay-Sticker-145x55.pdf` (เวกเตอร์ ขนาดจริง) + `.png` (~600 dpi)
 - เส้นกรอบมุมมนคือแนวไดคัท ระยะขอบใน 0.6 มม.
+
+## ไฟล์ไดคัท (แยกเลเยอร์)
+`python3 make.py && node pdf.js && python3 dieline.py artwork-bleed-raw.pdf && rm artwork-bleed-raw.pdf`
+- `RRS-Fuse-Sticker-PRINT-layered.pdf` – หน้าเดียว 151 × 61 มม. มี 2 เลเยอร์ (PDF Layers/OCG): **Artwork** (ตัดตก 3 มม.) และ **CutContour**
+  (สีพิเศษ Spot "CutContour" = M100 เส้น 0.25 pt) · TrimBox 145 × 55 มม. · BleedBox 151 × 61 มม.
+- `RRS-Fuse-Sticker-Artwork-bleed.pdf` – งานพิมพ์อย่างเดียว · `RRS-Fuse-Sticker-CutContour.pdf` – เส้นไดคัทอย่างเดียว (ขนาด/ตำแหน่งเดียวกัน)
+- `RRS-Fuse-Sticker-CutContour.svg` – เส้นไดคัทหน่วย มม. สำหรับเครื่องตัด (Graphtec / Silhouette / Roland)
+- เส้นไดคัท: สี่เหลี่ยมมุมมน 145 × 55 มม. รัศมีมุม 3 มม. · กรอบสีน้ำเงินในงานอยู่ใน 1.1 มม. · ตัวหนังสือ/ภาพห่างเส้นตัด ≥ 2.5 มม.

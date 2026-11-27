@@ -48,7 +48,7 @@ body = (f'<div class="hd"><img src="logo.png"><b>ผังรีเลย์แ�
         + relay(5, x5, TOP, RH) + relay(6, x5, FY, FH) + fuses())
 css = f'''@page{{size:{W}mm {H}mm;margin:0}}*{{box-sizing:border-box}}html,body{{margin:0}}
 body{{width:{W}mm;height:{H}mm;position:relative;overflow:hidden;background:#fff;font-family:"Noto Sans Thai","Noto Sans",sans-serif;color:#0B2A5B}}
-.cut{{position:absolute;inset:.6mm;border:.35mm solid #0B2A5B;border-radius:2.5mm}}
+.frame{{position:absolute;inset:1.1mm;border:.35mm solid #0B2A5B;border-radius:2.2mm}}.sh{{position:absolute;width:{W}mm;height:{H}mm}}
 .hd{{position:absolute;left:{M}mm;right:{M}mm;top:{M - .6}mm;height:6mm;display:flex;align-items:center;gap:2mm;border-bottom:.3mm solid #1257C8}}
 .hd img{{height:4.2mm}}.hd b{{font-size:9pt}}.hd span{{font-size:6.2pt;color:#1257C8}}.hd em{{margin-left:auto;font-style:normal;font-size:5.8pt;color:#A8262E;font-weight:bold}}
 .rl{{position:absolute;background:#2B2F36;border-radius:1.6mm;color:#fff;display:flex;flex-direction:column;align-items:center;justify-content:center;line-height:1.15}}
@@ -59,5 +59,10 @@ body{{width:{W}mm;height:{H}mm;position:relative;overflow:hidden;background:#fff
 .br{{position:absolute;height:.9mm;border:.3mm solid #0B2A5B;border-top:0}}
 .fl{{position:absolute;text-align:center;line-height:1.05}}.fl .th{{display:block;font-size:6.3pt;font-weight:bold;white-space:nowrap}}.fl .en{{display:block;font-size:4.4pt;color:#5b6577;font-family:"Noto Sans";white-space:nowrap}}
 '''
-open("sticker.html", "w", encoding="utf-8").write(f'<!doctype html><html lang="th"><meta charset="utf-8"><style>{css}</style><body><div class="cut"></div>{body}</body></html>')
-print("sticker.html", W, "x", H, "mm")
+BL = 3                                             # print bleed, mm (white ground runs into it)
+for name, b in (("sticker.html", 0), ("sticker_bleed.html", BL)):
+    page = css.replace(f"@page{{size:{W}mm {H}mm", f"@page{{size:{W + 2 * b}mm {H + 2 * b}mm").replace(
+        f"body{{width:{W}mm;height:{H}mm", f"body{{width:{W + 2 * b}mm;height:{H + 2 * b}mm")
+    open(name, "w", encoding="utf-8").write(f'<!doctype html><html lang="th"><meta charset="utf-8"><style>{page}</style><body>'
+                                            f'<div class="sh" style="left:{b}mm;top:{b}mm"><div class="frame"></div>{body}</div></body></html>')
+print("sticker.html", W, "x", H, "mm · sticker_bleed.html +", BL, "mm bleed")

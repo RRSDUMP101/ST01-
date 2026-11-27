@@ -65,3 +65,4 @@ python3 build.py && node pdf.js   # → RRS-Owner-Manual-Box-Trailer.pdf (รา
 - ไม่มีระยะตัดตก (bleed) – ถ้าส่งโรงพิมพ์ที่ตัดขอบ ให้แจ้งเพื่อเพิ่ม 3 มม.
 - ส่งโรงพิมพ์: `BLEED=1 python3 build.py && BLEED=1 node pdf.js` → `*-bleed-raw.pdf` (A5 + ตัดตก 3 มม.) แล้ว `python3 ../cropmarks.py <raw> <*-A5-print-bleed.pdf>` → แผ่น 174 × 236 มม. มีเส้นตัด TrimBox/BleedBox (แถบสีปก ท้ายปก ยืดเข้าระยะตัดตก) จากนั้น build ปกติอีกครั้ง
 - spec.py: กรอบ IN ขยาย (y ≤ 3700, z ≤ 3800) เพราะแผ่นหลังคาท้ายและแผ่นผนังท้ายใน IGES มี bounding box ของผิวเกินกรอบเดิม ทำให้ถูกตัดออกจากภาพ → ภาพ t_rear/t_front/t_side/tz_rear มีหลังคาและผนังท้ายครบ
+- หน้าปก: `t_cover` มุมเดียวกับรูปถ่ายหางลากจริง (ด้านซ้าย-หน้า) dir (1, -0.55, 0.32) จาก `model/covermix.py` = trailer.brep + หัวต่อ (ล็อก) + ขาตั้ง (ยกขึ้น) จาก parts.py · กรอบ y ≥ -5200 ให้เห็นคานลากเต็ม

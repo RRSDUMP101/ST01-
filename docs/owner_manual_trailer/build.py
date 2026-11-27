@@ -69,7 +69,7 @@ raw('''<div class="cover"><div class="stripe"></div>
 <div class="ctitle"><small>OWNER MANUAL</small><h1>คู่มือการใช้งาน</h1>
 <p>หางลากพ่วงตู้ทึบ RRS<br><span style="color:#1257C8">RRS Enclosed Box Trailer</span></p>
 <p class="cabs">ลากด้วย Ford Ranger Super Duty</p></div>
-<div class="coverfig tr">''' + M.view("t_rear") + '''</div>
+<div class="coverfig tr">''' + M.view("t_cover") + '''</div>
 <div class="cfoot"><span>รหัสคู่มือ (P/N) ____________</span><span>เลขตัวถังหางลาก (VIN) ____________</span></div></div>''', "nocrop")
 
 # ---------------------------------------------------------------- contents
